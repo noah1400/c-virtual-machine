@@ -168,8 +168,10 @@ python3 assembler/assembler.py input.asm -o output.bin
 Here's a simple factorial program:
 
 ```assembly
-; Calculate factorial
-.text
+; Example assembly program for the VM
+; This program calculates the factorial of a number
+
+.text                   ; Code section
     ; Initialize registers
     LOAD R5, #5         ; Number to calculate factorial of
     LOAD R0, #1         ; Initialize result to 1
@@ -191,8 +193,7 @@ loop:
     
 done:
     ; Print the result
-    SYSCALL #1          ; Syscall 1 = print integer (R0 has the value)
-
+    PUSH R0             ; Save the result
     ; Print newline
     LOAD R0, #10        ; ASCII for newline
     SYSCALL #0          ; Syscall 0 = print character
@@ -201,10 +202,18 @@ done:
     LOAD R0, message    ; Load address of message
     SYSCALL #2          ; Syscall 2 = print string
 
+    ; Print the result
+    POP R0              ; Restore the result
+    SYSCALL #1          ; Syscall 1 = print integer (R0 has the value)
+
+    ; Print newline
+    LOAD R0, #10        ; ASCII for newline
+    SYSCALL #0          ; Syscall 0 = print character
+
     ; Exit program
     HALT
 
-.data
+.data                   ; Data section
 message:
     .asciiz "Factorial result: "  ; Null-terminated string
 ```

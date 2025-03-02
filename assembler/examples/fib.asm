@@ -23,8 +23,7 @@ loop:
     
 done:
     ; Print the result
-    SYSCALL #1          ; Syscall 1 = print integer (R0 has the value)
-
+    PUSH R0             ; Save the result
     ; Print newline
     LOAD R0, #10        ; ASCII for newline
     SYSCALL #0          ; Syscall 0 = print character
@@ -32,6 +31,14 @@ done:
     ; Print message
     LOAD R0, message    ; Load address of message
     SYSCALL #2          ; Syscall 2 = print string
+
+    ; Print the result
+    POP R0              ; Restore the result
+    SYSCALL #1          ; Syscall 1 = print integer (R0 has the value)
+
+    ; Print newline
+    LOAD R0, #10        ; ASCII for newline
+    SYSCALL #0          ; Syscall 0 = print character
 
     ; Exit program
     HALT
