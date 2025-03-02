@@ -41,6 +41,12 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
     uint8_t reg1 = (instruction >> 16) & 0x0F;
     uint8_t reg2 = (instruction >> 12) & 0x0F;
     uint16_t immediate = instruction & 0x0FFF;
+
+    // if mode is IMM_MODE, immediate value is reg2 combined with immediate
+    // So we can use reg2 as the high bits of the immediate value so we have a 16 bit immediate value
+    if (mode == IMM_MODE || mode == STK_MODE || mode == BAS_MODE || mode == MEM_MODE) {
+        immediate |= (reg2 << 12);
+    }
     
     // Get mnemonic
     const char *mnemonic = vm_opcode_to_mnemonic(opcode);
@@ -82,14 +88,14 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
         // Return with optional stack adjustment
         case RET_OP:
             if (immediate > 0) {
-                printf("0x%03X", immediate);
+                printf("0x%04X", immediate);
             }
             break;
             
         // Push immediate or register
         case PUSH_OP:
             if (mode == IMM_MODE) {
-                printf("0x%03X", immediate);
+                printf("0x%04X", immediate);
             } else {
                 print_register(reg1, 1);
             }
@@ -107,7 +113,7 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
         case JA_OP:
         case CALL_OP:
             if (mode == IMM_MODE) {
-                printf("0x%03X", immediate);
+                printf("0x%04X", immediate);
             } else if (mode == REG_MODE) {
                 print_register(reg1, 1);
             } else {
@@ -124,19 +130,19 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
         case ENTER_OP:
         case INT_OP:
         case SYSCALL_OP:
-            printf("0x%03X", immediate);
+            printf("0x%04X", immediate);
             break;
             
         // I/O operations
         case IN_OP:
             print_register(reg1, 1);
-            printf(", 0x%03X", immediate);
+            printf(", 0x%04X", immediate);
             break;
             
         case OUT_OP:
             printf("0x%03X, ", reg1);
             if (mode == IMM_MODE) {
-                printf("0x%03X", immediate);
+                printf("0x%04X", immediate);
             } else {
                 print_register(reg2, 1);
             }
@@ -145,7 +151,7 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
         // Loop instruction
         case LOOP_OP:
             print_register(reg1, 1);
-            printf(", 0x%03X", immediate);
+            printf(", 0x%04X", immediate);
             break;
             
         // Two-operand register-memory instructions
@@ -177,7 +183,7 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
             // Second operand depends on addressing mode
             switch (mode) {
                 case IMM_MODE:
-                    printf("0x%03X", immediate);
+                    printf("0x%04X", immediate);
                     break;
                     
                 case REG_MODE:
@@ -185,7 +191,7 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
                     break;
                     
                 case MEM_MODE:
-                    printf("[0x%03X]", immediate);
+                    printf("[0x%04X]", immediate);
                     break;
                     
                 case REGM_MODE:
@@ -204,11 +210,11 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
                     break;
                     
                 case STK_MODE:
-                    printf("[SP + 0x%03X]", immediate);
+                    printf("[SP + 0x%04X]", immediate);
                     break;
                     
                 case BAS_MODE:
-                    printf("[BP + 0x%03X]", immediate);
+                    printf("[BP + 0x%04X]", immediate);
                     break;
                     
                 default:
@@ -246,11 +252,11 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
                     break;
                     
                 case STK_MODE:
-                    printf("[SP + 0x%03X]", immediate);
+                    printf("[SP + 0x%04X]", immediate);
                     break;
                     
                 case BAS_MODE:
-                    printf("[BP + 0x%03X]", immediate);
+                    printf("[BP + 0x%04X]", immediate);
                     break;
                     
                 default:

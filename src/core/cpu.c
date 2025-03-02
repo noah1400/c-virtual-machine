@@ -210,6 +210,14 @@ int cpu_step(VM *vm) {
     
     // Execute instruction
     result = cpu_execute_instruction(vm, &instr);
+
+    if (result != VM_ERROR_NONE)
+    {
+        return result;
+    } else if (vm->last_error != VM_ERROR_NONE)
+    {
+        return vm->last_error;
+    }
     
     // Increment instruction count
     vm->instruction_count++;

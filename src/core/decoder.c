@@ -26,7 +26,8 @@ int vm_decode_instruction(VM *vm, uint16_t address, Instruction *instr) {
     instr->immediate = (uint16_t)(raw_instruction & 0x0FFF);
 
     // if mode is IMM_MODE, immediate value is reg2 combined with immediate
-    if (instr->mode == IMM_MODE) {
+    // So we can use reg2 as the high bits of the immediate value so we have a 16 bit immediate value
+    if (instr->mode == IMM_MODE || instr->mode == STK_MODE || instr->mode == BAS_MODE || instr->mode == MEM_MODE) {
         instr->immediate |= (instr->reg2 << 12);
     }
     

@@ -17,12 +17,14 @@ REGM_MODE = 0x3  # Register Indirect: [Reg]
 IDX_MODE = 0x4   # Indexed: [Reg + Offset]
 STK_MODE = 0x5   # Stack Relative: [SP + Offset]
 BAS_MODE = 0x6   # Base Relative: [BP + Offset]
+DEBUG_OP = 0xA9
 
 # Register definitions
 R0_ACC = 0   # Accumulator
 R5 = 5       # General purpose register
 R6 = 6       # General purpose register
 R7 = 7       # General purpose register
+R10 = 10     # General purpose register
 
 # Opcodes
 NOP_OP = 0x00      # No operation
@@ -186,6 +188,9 @@ def generate_syscall_test_program():
     program.append(encode_instruction(MOVE_OP, REG_MODE, R0_ACC, R7, 0))
     program.append(encode_instruction(SYSCALL_OP, IMM_MODE, 0, 0, 2))
     add_print_newline(program)
+
+    # Move r7 to r10
+    program.append(encode_instruction(MOVE_OP, REG_MODE, R10, R7, 0))
     
     # Test syscall 23: Memory information
     add_print_string(program, "  Syscall 23 (Memory info):")
@@ -263,6 +268,8 @@ def generate_syscall_test_program():
     
     # Test syscall 21: Free memory
     add_print_string(program, "Freeing allocated memory...")
+    # move r10 to r7
+    program.append(encode_instruction(MOVE_OP, REG_MODE, R7, R10, 0))
     program.append(encode_instruction(MOVE_OP, REG_MODE, R0_ACC, R7, 0))
     program.append(encode_instruction(SYSCALL_OP, IMM_MODE, 0, 0, 21))
     add_print_newline(program)
