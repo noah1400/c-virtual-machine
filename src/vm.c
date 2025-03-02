@@ -205,15 +205,15 @@ int vm_load_program_file(VM *vm, const char *filename) {
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
     
-    // Check if program fits in code segment
-    if (file_size > CODE_SEGMENT_SIZE) {
-        fclose(file);
-        vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Program size (%ld bytes) exceeds code segment size (%d bytes)",
-                 file_size, CODE_SEGMENT_SIZE);
-        return VM_ERROR_SEGMENTATION_FAULT;
-    }
+    // // Check if program fits in code segment
+    // if (file_size > CODE_SEGMENT_SIZE) {
+    //     fclose(file);
+    //     vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
+    //     snprintf(vm->error_message, sizeof(vm->error_message), 
+    //              "Program size (%ld bytes) exceeds code segment size (%d bytes)",
+    //              file_size, CODE_SEGMENT_SIZE);
+    //     return VM_ERROR_SEGMENTATION_FAULT;
+    // }
     
     // Read file into code segment
     size_t bytes_read = fread(vm->memory + CODE_SEGMENT_BASE, 1, file_size, file);
