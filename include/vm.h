@@ -31,6 +31,8 @@ void vm_stack_push(VM *vm, uint32_t value);
 uint32_t vm_stack_pop(VM *vm);
 void vm_create_stack_frame(VM *vm, uint16_t params_size, uint16_t locals_size);
 void vm_destroy_stack_frame(VM *vm);
+void vm_push_all_registers(VM *vm);
+void vm_pop_all_registers(VM *vm);
 
 // I/O operations
 int vm_io_read(VM *vm, uint16_t port);

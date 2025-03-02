@@ -20,6 +20,7 @@ R4_SR = 4    # Status register
 R5 = 5       # General purpose register
 R6 = 6       # General purpose register
 R7 = 7       # General purpose register
+R8 = 8       # General purpose register
 
 # Opcodes
 NOP_OP = 0x00      # No operation
@@ -33,6 +34,8 @@ STI_OP = 0xA3      # Set interrupt flag
 IRET_OP = 0xA4     # Return from interrupt
 HALT_OP = 0xA0     # Halt execution
 DEBUG_OP = 0xA9
+SHL_OP = 0x44
+OR_OP = 0x41
 
 # Constants
 VECTOR_TABLE_BASE = 0x0100
@@ -83,33 +86,27 @@ def generate_interrupt_test_program():
     # Enable interrupts
     add_print_string(main_program, "Enabling interrupts...")
     add_print_newline(main_program)
-    main_program.append(encode_instruction(DEBUG_OP, IMM_MODE, 0, 0, 0))
     main_program.append(encode_instruction(STI_OP, IMM_MODE, 0, 0, 0))
     
     # Set up vector table for interrupt 0x10
     add_print_string(main_program, "Setting up interrupt vector...")
     add_print_newline(main_program)
-    main_program.append(encode_instruction(DEBUG_OP, IMM_MODE, 0, 0, 0))
-    main_program.append(encode_instruction(LOAD_OP, IMM_MODE, R0_ACC, 0, INTERRUPT_HANDLER_BASE))
-    main_program.append(encode_instruction(DEBUG_OP, IMM_MODE, 0, 0, 0))
+    main_program.append(encode_instruction(LOAD_OP, IMM_MODE, R0_ACC, (INTERRUPT_HANDLER_BASE >> 12) & 0xF, INTERRUPT_HANDLER_BASE & 0xFFF))
     main_program.append(encode_instruction(STORE_OP, MEM_MODE, R0_ACC, 0, VECTOR_TABLE_BASE + (0x10 * 4)))
-    
     # Store some test values in registers
     add_print_string(main_program, "Storing values in registers...")
     add_print_newline(main_program)
-    main_program.append(encode_instruction(DEBUG_OP, IMM_MODE, 0, 0, 0))
     main_program.append(encode_instruction(LOAD_OP, IMM_MODE, R5, 0, 0x55))
     main_program.append(encode_instruction(LOAD_OP, IMM_MODE, R6, 0, 0x66))
     main_program.append(encode_instruction(LOAD_OP, IMM_MODE, R7, 0, 0x77))
-
     main_program.append(encode_instruction(DEBUG_OP, IMM_MODE, 0, 0, 0))
     
     # Generate software interrupt 0x10
     add_print_string(main_program, "Generating interrupt 0x10...")
     add_print_newline(main_program)
-    main_program.append(encode_instruction(DEBUG_OP, IMM_MODE, 0, 0, 0))
     main_program.append(encode_instruction(INT_OP, IMM_MODE, 0, 0, 0x10))
     
+    main_program.append(encode_instruction(DEBUG_OP, IMM_MODE, 0, 0, 0))
     # This code runs after returning from interrupt
     add_print_string(main_program, "Returned from interrupt handler!")
     add_print_newline(main_program)
@@ -161,6 +158,7 @@ def generate_interrupt_test_program():
     interrupt_handler.append(encode_instruction(LOAD_OP, IMM_MODE, R5, 0, 0xAA))
     interrupt_handler.append(encode_instruction(LOAD_OP, IMM_MODE, R6, 0, 0xBB))
     interrupt_handler.append(encode_instruction(LOAD_OP, IMM_MODE, R7, 0, 0xCC))
+    interrupt_handler.append(encode_instruction(DEBUG_OP, IMM_MODE, 0, 0, 0))
     
     # Return from interrupt
     add_print_string(interrupt_handler, "Returning from interrupt...")

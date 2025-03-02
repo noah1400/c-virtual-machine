@@ -24,6 +24,11 @@ int vm_decode_instruction(VM *vm, uint16_t address, Instruction *instr) {
     instr->reg1 = (uint8_t)((raw_instruction >> 16) & 0x0F);
     instr->reg2 = (uint8_t)((raw_instruction >> 12) & 0x0F);
     instr->immediate = (uint16_t)(raw_instruction & 0x0FFF);
+
+    // if mode is IMM_MODE, immediate value is reg2 combined with immediate
+    if (instr->mode == IMM_MODE) {
+        instr->immediate |= (instr->reg2 << 12);
+    }
     
     return VM_ERROR_NONE;
 }

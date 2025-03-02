@@ -588,9 +588,6 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
     uint32_t param3 = vm->registers[R6];     // Third parameter
     uint32_t param4 = vm->registers[R7];     // Fourth parameter
     
-    // Return value default (success)
-    vm->registers[R5] = 0;  // Error code (0 = success)
-    
     // Categorize syscalls by functional group
     if (syscall_num < 10) {
         // Group 0-9: Basic console I/O
@@ -634,7 +631,6 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                     
                     if (max_len == 0) {
                         vm->registers[R0_ACC] = 0; // No characters read
-                        vm->registers[R5] = 1;     // Error code
                         break;
                     }
                     
@@ -750,7 +746,6 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 break;
                 
             default:
-                vm->registers[R5] = 1; // Error code
                 break;
         }
     }
@@ -1238,8 +1233,7 @@ static int handle_system(VM *vm, Instruction *instr) {
             
         case INT_OP:
             {
-                uint8_t vector = instr->immediate & 0xFF;
-                // Call the interrupt handler
+                uint16_t vector = instr->immediate;
                 cpu_interrupt(vm, vector);
             }
             break;

@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "instruction_set.h"
 #include "decoder.h"
+#include "vm.h"
 
 // CPU initialization
 int cpu_init(VM *vm) {
@@ -331,38 +332,20 @@ void cpu_dump_registers(VM *vm) {
 }
 
 void cpu_interrupt(VM *vm, uint8_t vector) {
-    printf("here");
     if (!vm) {
         return;
     }
-
-    printf("here 1");
     
     // Check if interrupts are enabled
     if (!(vm->registers[R4_SR] & INT_FLAG)) {
         return;
     }
-
-    printf("here 2");
     
     // Save current interrupt vector
     vm->interrupt_vector = vector;
     
     // Save current execution context
-    
-    // 1. Save program counter (return address)
-    cpu_stack_push(vm, vm->registers[R3_PC]);
-    
-    // 2. Save CPU flags
-    cpu_stack_push(vm, vm->registers[R4_SR]);
-    
-    // 3. Save general purpose registers (R0, R5-R7)
-    cpu_stack_push(vm, vm->registers[R0_ACC]);
-    cpu_stack_push(vm, vm->registers[R5]);
-    cpu_stack_push(vm, vm->registers[R6]);
-    cpu_stack_push(vm, vm->registers[R7]);
-
-    printf("here 3");
+    vm_push_all_registers(vm);
     
     // Disable interrupts while in interrupt handler
     vm->registers[R4_SR] &= ~INT_FLAG;
@@ -372,16 +355,9 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
     // Each vector is separated by 4 bytes (32-bit address)
     uint16_t handler_addr_ptr = 0x0100 + (vector * 4);
 
-    // address output
-    printf("handler_addr_ptr: %08x\n", handler_addr_ptr);
     
     // Load handler address from vector table
     uint32_t handler_addr = memory_read_dword(vm, handler_addr_ptr);
-
-    printf("handler_addr: %08x\n", handler_addr);
-
-    printf("here 4");
-    
     // Check if the handler exists
     if (handler_addr == 0) {
         // No handler registered for this interrupt
@@ -390,11 +366,6 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
                 "Unhandled interrupt: %d", vector);
         return;
     }
-
-    printf("here 5");
-    
-    printf("Interrupt %d: Jumping to handler at 0x%08X\n", vector, handler_addr);
-    exit(1);
     // Jump to handler
     vm->registers[R3_PC] = handler_addr;
 }
@@ -404,20 +375,7 @@ void cpu_return_from_interrupt(VM *vm) {
     if (!vm) {
         return;
     }
-    
-    // Restore execution context in reverse order
-    
-    // 1. Restore general purpose registers (R7-R5, R0)
-    vm->registers[R7] = cpu_stack_pop(vm);
-    vm->registers[R6] = cpu_stack_pop(vm);
-    vm->registers[R5] = cpu_stack_pop(vm);
-    vm->registers[R0_ACC] = cpu_stack_pop(vm);
-    
-    // 2. Restore CPU flags (which may re-enable interrupts)
-    vm->registers[R4_SR] = cpu_stack_pop(vm);
-    
-    // 3. Restore program counter (return address)
-    vm->registers[R3_PC] = cpu_stack_pop(vm);
+    vm_pop_all_registers(vm);
     
     // Clear current interrupt vector
     vm->interrupt_vector = 0;
