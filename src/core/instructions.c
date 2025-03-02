@@ -587,6 +587,8 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
     uint32_t param2 = vm->registers[R5];     // Second parameter
     uint32_t param3 = vm->registers[R6];     // Third parameter
     uint32_t param4 = vm->registers[R7];     // Fourth parameter
+
+    vm->registers[R5] = 0;  // Clear error code
     
     // Categorize syscalls by functional group
     if (syscall_num < 10) {
@@ -631,6 +633,7 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                     
                     if (max_len == 0) {
                         vm->registers[R0_ACC] = 0; // No characters read
+                        vm->registers[R5] = 1;
                         break;
                     }
                     
@@ -746,6 +749,7 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 break;
                 
             default:
+                vm->registers[R5] = 1;  // Error - unimplemented
                 break;
         }
     }
