@@ -89,5 +89,6 @@ typedef struct {
 #define VM_ERROR_UNHANDLED_INTERRUPT  10 // Unhandled interrupt
 #define VM_ERROR_IO_ERROR             11 // I/O operation error
 #define VM_ERROR_PROTECTION_FAULT     12 // Memory protection fault
+#define VM_ERROR_NESTED_INTERRUPT     13 // Nested interrupt
 
 #endif // _VM_TYPES_H_

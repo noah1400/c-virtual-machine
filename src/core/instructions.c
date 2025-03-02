@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "cpu.h"
 #include "memory.h"
 #include "instruction_set.h"
@@ -569,6 +570,437 @@ static int handle_logical(VM *vm, Instruction *instr) {
     return VM_ERROR_NONE;
 }
 
+/**
+ * Handle system calls
+ * 
+ * Syscall conventions:
+ * - Syscall number is in immediate field of instruction
+ * - Parameters are passed in registers R0_ACC, R5, R6, R7
+ * - Return value is placed in R0_ACC
+ * - Error code is placed in R5 (0 = success)
+ * 
+ * Returns VM_ERROR_NONE on success or appropriate error code on failure
+ */
+static int handle_syscall(VM *vm, uint16_t syscall_num) {
+    // Input parameters
+    uint32_t param1 = vm->registers[R0_ACC]; // First parameter
+    uint32_t param2 = vm->registers[R5];     // Second parameter
+    uint32_t param3 = vm->registers[R6];     // Third parameter
+    uint32_t param4 = vm->registers[R7];     // Fourth parameter
+    
+    // Return value default (success)
+    vm->registers[R5] = 0;  // Error code (0 = success)
+    
+    // Categorize syscalls by functional group
+    if (syscall_num < 10) {
+        // Group 0-9: Basic console I/O
+        switch (syscall_num) {
+            case 0:  // Print character
+                printf("%c", (char)param1);
+                fflush(stdout);
+                break;
+                
+            case 1:  // Print integer (decimal)
+                printf("%d", (int)param1);
+                fflush(stdout);
+                break;
+                
+            case 2:  // Print string
+                {
+                    uint16_t addr = param1;
+                    char c;
+                    
+                    while ((c = memory_read_byte(vm, addr)) != 0) {
+                        printf("%c", c);
+                        addr++;
+                    }
+                    fflush(stdout);
+                }
+                break;
+                
+            case 3:  // Read character
+                {
+                    int c = getchar();
+                    vm->registers[R0_ACC] = (c == EOF) ? 0 : c;
+                }
+                break;
+                
+            case 4:  // Read string (up to param2 chars)
+                {
+                    uint16_t addr = param1;
+                    uint16_t max_len = param2;
+                    uint16_t i = 0;
+                    int c;
+                    
+                    if (max_len == 0) {
+                        vm->registers[R0_ACC] = 0; // No characters read
+                        vm->registers[R5] = 1;     // Error code
+                        break;
+                    }
+                    
+                    // Reserve space for null terminator
+                    max_len--;
+                    
+                    // Read input string
+                    while (i < max_len) {
+                        c = getchar();
+                        
+                        if (c == EOF || c == '\n') {
+                            break;
+                        }
+                        
+                        memory_write_byte(vm, addr + i, (uint8_t)c);
+                        i++;
+                    }
+                    
+                    // Add null terminator
+                    memory_write_byte(vm, addr + i, 0);
+                    
+                    // Return number of characters read
+                    vm->registers[R0_ACC] = i;
+                }
+                break;
+                
+            case 5:  // Print integer (hexadecimal)
+                printf("0x%x", (unsigned int)param1);
+                fflush(stdout);
+                break;
+                
+            case 6:  // Print formatted integer with base (param2 = base)
+                {
+                    unsigned int value = param1;
+                    unsigned int base = param2;
+                    
+                    // Validate base (2-36)
+                    if (base < 2 || base > 36) {
+                        base = 10;
+                    }
+                    
+                    // Simple base conversion (for a more complete implementation, 
+                    // you'd want to handle negative numbers specially)
+                    char buffer[33];  // Enough for 32-bit number in any base
+                    char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                    int pos = 0;
+                    
+                    // Special case for 0
+                    if (value == 0) {
+                        printf("0");
+                        break;
+                    }
+                    
+                    // Convert number to string in specified base
+                    while (value > 0 && pos < 32) {
+                        buffer[pos++] = digits[value % base];
+                        value /= base;
+                    }
+                    
+                    // Print in reverse order
+                    while (pos > 0) {
+                        putchar(buffer[--pos]);
+                    }
+                    fflush(stdout);
+                }
+                break;
+                
+            case 7:  // Print floating point (emulated using fixed-point)
+                {
+                    // Interpret param1 as fixed-point (16.16 format)
+                    int32_t fixed_val = (int32_t)param1;
+                    int32_t integer_part = fixed_val >> 16;
+                    uint32_t frac_part = fixed_val & 0xFFFF;
+                    
+                    // Convert fraction to decimal
+                    // (multiply by 10000 and divide by 2^16)
+                    uint32_t decimal = (frac_part * 10000) >> 16;
+                    
+                    printf("%d.%04u", integer_part, decimal);
+                    fflush(stdout);
+                }
+                break;
+                
+            case 8:  // Control console - clear screen
+                printf("\033[2J\033[H"); // ANSI escape sequence to clear screen and move cursor to home
+                fflush(stdout);
+                break;
+                
+            case 9:  // Control console - set color
+                {
+                    uint8_t fg = param1 & 0xFF;
+                    uint8_t bg = (param1 >> 8) & 0xFF;
+                    
+                    // Make sure everything is flushed before changing colors
+                    fflush(stdout);
+                    
+                    if (fg == 0xFF) {
+                        // Special case for reset - force to default colors
+                        // Use the most complete reset sequence possible
+                        printf("\033[0;39;49m");  // Reset all attributes and explicitly set default colors
+                    } else if (fg < 8) {
+                        // ANSI color codes (0-7 standard colors)
+                        if (bg < 8) {
+                            // Set both foreground and background
+                            printf("\033[0;%d;%dm", 30 + fg, 40 + bg);
+                        } else {
+                            // Set only foreground
+                            printf("\033[0;%dm", 30 + fg);
+                        }
+                    }
+                    fflush(stdout);
+                }
+                break;
+                
+            default:
+                vm->registers[R5] = 1; // Error code
+                break;
+        }
+    }
+    else if (syscall_num < 20) {
+        // Group 10-19: File operations (simplified)
+        switch (syscall_num) {
+            case 10:  // File open (param1=filename addr, param2=mode)
+                {
+                    // Extract filename
+                    uint16_t addr = param1;
+                    uint8_t mode = param2 & 0xFF;
+                    char filename[256] = {0};
+                    int i = 0;
+                    char c;
+                    
+                    // Copy filename from VM memory
+                    while (i < 255 && (c = memory_read_byte(vm, addr + i)) != 0) {
+                        filename[i++] = c;
+                    }
+                    filename[i] = 0;
+                    
+                    // Map mode to file open mode
+                    char file_mode[4] = {0};
+                    switch (mode) {
+                        case 0: strcpy(file_mode, "r"); break;   // Read
+                        case 1: strcpy(file_mode, "w"); break;   // Write
+                        case 2: strcpy(file_mode, "a"); break;   // Append
+                        case 3: strcpy(file_mode, "r+"); break;  // Read/Write
+                        default: strcpy(file_mode, "r"); break;  // Default to read
+                    }
+                    
+                    // We would need to maintain a file table in the VM for real file I/O
+                    // For now, just simulate by returning a dummy file handle
+                    vm->registers[R0_ACC] = 1;  // Dummy file handle
+                    vm->registers[R5] = 0;      // Success
+                }
+                break;
+                
+            case 11:  // File close (param1=file handle)
+                {
+                    // Here we would free resources associated with the file handle
+                    // For this simplified implementation, just return success
+                    vm->registers[R0_ACC] = 0;  // Success
+                    vm->registers[R5] = 0;
+                }
+                break;
+                
+            case 12:  // File read (param1=file handle, param2=buffer addr, param3=count)
+                {
+                    // Simplified implementation - always return some dummy data
+                    uint16_t buffer_addr = param2;
+                    uint16_t count = param3;
+                    
+                    // Make sure we don't exceed memory bounds
+                    if (buffer_addr + count > vm->memory_size) {
+                        count = vm->memory_size - buffer_addr;
+                    }
+                    
+                    // Fill buffer with sequential values
+                    for (uint16_t i = 0; i < count; i++) {
+                        memory_write_byte(vm, buffer_addr + i, i & 0xFF);
+                    }
+                    
+                    // Return number of bytes read
+                    vm->registers[R0_ACC] = count;
+                    vm->registers[R5] = 0;  // Success
+                }
+                break;
+                
+            case 13:  // File write (param1=file handle, param2=buffer addr, param3=count)
+                {
+                    // Simplified implementation - just pretend we wrote the data
+                    uint16_t count = param3;
+                    
+                    // Return number of bytes written
+                    vm->registers[R0_ACC] = count;
+                    vm->registers[R5] = 0;  // Success
+                }
+                break;
+                
+            default:
+                vm->registers[R5] = 1;  // Error - unimplemented
+                break;
+        }
+    }
+    else if (syscall_num < 30) {
+        // Group 20-29: Memory operations
+        switch (syscall_num) {
+            case 20:  // Allocate memory (param1=size)
+                {
+                    uint16_t size = param1;
+                    uint16_t addr = memory_allocate(vm, size);
+                    
+                    vm->registers[R0_ACC] = addr;  // Return address
+                    vm->registers[R5] = (addr == 0) ? 1 : 0;  // Error if allocation failed
+                }
+                break;
+                
+            case 21:  // Free memory (param1=address)
+                {
+                    uint16_t addr = param1;
+                    int result = memory_free(vm, addr);
+                    
+                    vm->registers[R0_ACC] = result;
+                    vm->registers[R5] = (result == VM_ERROR_NONE) ? 0 : 1;
+                }
+                break;
+                
+            case 22:  // Copy memory (param1=dest, param2=src, param3=count)
+                {
+                    uint16_t dest = param1;
+                    uint16_t src = param2;
+                    uint16_t count = param3;
+                    
+                    int result = memory_copy(vm, dest, src, count);
+                    
+                    vm->registers[R0_ACC] = count;  // Return bytes copied
+                    vm->registers[R5] = (result == VM_ERROR_NONE) ? 0 : 1;
+                }
+                break;
+                
+            case 23:  // Memory information
+                {
+                    // Return total memory size
+                    vm->registers[R0_ACC] = vm->memory_size;
+                    
+                    // Return segment boundaries and sizes
+                    vm->registers[R5] = (CODE_SEGMENT_BASE << 16) | CODE_SEGMENT_SIZE;
+                    vm->registers[R6] = (DATA_SEGMENT_BASE << 16) | DATA_SEGMENT_SIZE;
+                    vm->registers[R7] = (STACK_SEGMENT_BASE << 16) | STACK_SEGMENT_SIZE;
+                    
+                    vm->registers[R5] = 0;  // Success
+                }
+                break;
+                
+            default:
+                vm->registers[R5] = 1;  // Error - unimplemented
+                break;
+        }
+    }
+    else if (syscall_num < 40) {
+        // Group 30-39: Process control
+        switch (syscall_num) {
+            case 30:  // Exit program with return code (param1=code)
+                {
+                    // Set return code (for potential host program)
+                    vm->registers[R0_ACC] = param1;
+                    
+                    // Halt the VM
+                    vm->halted = 1;
+                }
+                break;
+                
+            case 31:  // Sleep (param1=milliseconds)
+                {
+                    // Use platform-specific sleep
+                    #ifdef _WIN32
+                    // Windows
+                    Sleep(param1);  // Windows Sleep takes milliseconds
+                    #else
+                    // Unix/Linux/macOS
+                    struct timespec ts;
+                    ts.tv_sec = param1 / 1000;
+                    ts.tv_nsec = (param1 % 1000) * 1000000;
+                    nanosleep(&ts, NULL);
+                    #endif
+                    
+                    // Still update instruction count for consistency
+                    uint32_t dummy_cycles = param1 / 10;
+                    if (dummy_cycles > 0) {
+                        vm->instruction_count += dummy_cycles;
+                    } else {
+                        vm->instruction_count++;
+                    }
+                }
+                break;
+                
+            case 32:  // Get system time (milliseconds since VM start)
+                {
+                    // Simulate a system time based on instruction count
+                    // In a real implementation, you'd use the host system's clock
+                    vm->registers[R0_ACC] = vm->instruction_count * 10;  // Rough estimate
+                    vm->registers[R5] = 0;  // Success
+                }
+                break;
+                
+            case 33:  // Get performance counter (high resolution)
+                {
+                    // Just return exact instruction count
+                    vm->registers[R0_ACC] = vm->instruction_count;
+                    vm->registers[R5] = 0;  // Success
+                }
+                break;
+                
+            default:
+                vm->registers[R5] = 1;  // Error - unimplemented
+                break;
+        }
+    }
+    else if (syscall_num < 50) {
+        // Group 40-49: Random number generation and misc
+        switch (syscall_num) {
+            case 40:  // Get random number (param1=max value)
+                {
+                    uint32_t max_val = param1;
+                    
+                    if (max_val == 0) {
+                        max_val = 0xFFFFFFFF;  // Full 32-bit range
+                    }
+                    
+                    // Simple pseudo-random number generation
+                    // In a real implementation, you'd use a better PRNG
+                    static uint32_t seed = 0x12345678;
+                    seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF;
+                    
+                    // Return random number in range [0, max_val]
+                    vm->registers[R0_ACC] = (uint32_t)((uint64_t)seed * max_val / 0x7FFFFFFF);
+                    vm->registers[R5] = 0;  // Success
+                }
+                break;
+                
+            case 41:  // Seed random number generator (param1=seed)
+                {
+                    // Set the seed for the PRNG
+                    uint32_t seed_val = param1;
+                    
+                    // In a real implementation, this would set the PRNG seed
+                    // For this simplified version, just store and return success
+                    static uint32_t seed = 0x12345678;
+                    seed = seed_val;
+                    
+                    vm->registers[R0_ACC] = 0;  // Success
+                    vm->registers[R5] = 0;
+                }
+                break;
+                
+            default:
+                vm->registers[R5] = 1;  // Error - unimplemented
+                break;
+        }
+    }
+    else {
+        // Unknown syscall group
+        vm->registers[R5] = 1;  // Error code
+        return VM_ERROR_INVALID_SYSCALL;
+    }
+    
+    return VM_ERROR_NONE;
+}
+
 // Handle jump and control flow instructions
 static int handle_jump(VM *vm, Instruction *instr) {
     uint8_t opcode = instr->opcode;
@@ -676,43 +1108,15 @@ static int handle_jump(VM *vm, Instruction *instr) {
             
         case SYSCALL_OP:
             // System call
-            // TODO
             {
                 uint16_t syscall_num = instr->immediate;
-                
-                switch (syscall_num) {
-                    case 0:  // Print character
-                        printf("%c", (char)vm->registers[R0_ACC]);
-                        break;
-                        
-                    case 1:  // Print integer
-                        printf("%d", vm->registers[R0_ACC]);
-                        break;
-                        
-                    case 2:  // Print string
-                        {
-                            uint16_t addr = vm->registers[R0_ACC];
-                            char c;
-                            
-                            while ((c = memory_read_byte(vm, addr)) != 0) {
-                                printf("%c", c);
-                                addr++;
-                            }
-                        }
-                        break;
-                        
-                    case 3:  // Read character
-                        {
-                            int c = getchar();
-                            vm->registers[R0_ACC] = (c == EOF) ? 0 : c;
-                        }
-                        break;
-                        
-                    default:
-                        vm->last_error = VM_ERROR_INVALID_SYSCALL;
-                        snprintf(vm->error_message, sizeof(vm->error_message), 
-                                 "Invalid system call: %d", syscall_num);
-                        return VM_ERROR_INVALID_SYSCALL;
+                int result = handle_syscall(vm, syscall_num);
+                         
+                if (result != VM_ERROR_NONE) {
+                        vm->last_error = result;
+                    snprintf(vm->error_message, sizeof(vm->error_message),
+                        "Invalid system call: %d", syscall_num);
+                    return result;
                 }
             }
             break;
@@ -833,38 +1237,25 @@ static int handle_system(VM *vm, Instruction *instr) {
             break;
             
         case INT_OP:
-            // Generate software interrupt
-            // TODO
             {
                 uint8_t vector = instr->immediate & 0xFF;
-                
-                // TODO: Implement interrupt handling
-                vm->last_error = VM_ERROR_UNHANDLED_INTERRUPT;
-                snprintf(vm->error_message, sizeof(vm->error_message), 
-                         "Unhandled interrupt: %d", vector);
-                return VM_ERROR_UNHANDLED_INTERRUPT;
+                // Call the interrupt handler
+                cpu_interrupt(vm, vector);
             }
             break;
             
         case CLI_OP:
             // Clear interrupt flag
-            cpu_set_flag(vm, INT_FLAG, 0);
+            cpu_disable_interrupts(vm);
             break;
             
         case STI_OP:
             // Set interrupt flag
-            cpu_set_flag(vm, INT_FLAG, 1);
+            cpu_enable_interrupts(vm);
             break;
             
         case IRET_OP:
-            // Return from interrupt
-            // TODO
-            
-            // Pop flags
-            vm->registers[R4_SR] = cpu_stack_pop(vm);
-            
-            // Pop return address
-            vm->registers[R3_PC] = cpu_stack_pop(vm);
+            cpu_return_from_interrupt(vm);
             break;
             
         case IN_OP:
@@ -904,10 +1295,108 @@ static int handle_system(VM *vm, Instruction *instr) {
             }
             break;
             
-        case CPUID_OP:
+            case CPUID_OP:
             // Get CPU information
-            // CPUID TODO
-            vm->registers[R0_ACC] = 0x00010001;  // Version 1.1
+            // CPUID works similar to x86 - function number in R0_ACC determines what information to return
+            {
+                uint32_t function = vm->registers[R0_ACC];
+                
+                switch (function) {
+                    case 0: // Basic vendor info and maximum supported function
+                        // Return maximum function number in R0_ACC
+                        vm->registers[R0_ACC] = 4;
+                        
+                        // Store vendor string in R5-R7 ("VM32CPU" in ASCII)
+                        vm->registers[R5] = 0x334D5632; // "2VM3"
+                        vm->registers[R6] = 0x55504332; // "2CPU"
+                        vm->registers[R7] = 0x00000000; // Null terminator
+                        break;
+                        
+                    case 1: // Version and feature information
+                        // R0_ACC: Version information
+                        // Format: [Major:8][Minor:8][Revision:8][Reserved:8]
+                        vm->registers[R0_ACC] = 0x00010001; // Version 1.1.0
+                        
+                        // R5: Feature flags 1
+                        vm->registers[R5] = 0x00000001 |  // Bit 0: Has FPU emulation  (not implemented yet)
+                                            0x00000002 |  // Bit 1: Has SIMD           (not implemented yet)
+                                            0x00000004 |  // Bit 2: Has I/O system
+                                            0x00000008 |  // Bit 3: Has memory protection (partially implemented)
+                                            0x00000010 |  // Bit 4: Has interrupts      (partially implemented)
+                                            0x00000020;   // Bit 5: Has syscalls
+                        
+                        // R6: Feature flags 2
+                        vm->registers[R6] = 0x00000001 |  // Bit 0: Has debug support
+                                            0x00000002;   // Bit 1: Has timer device
+                        
+                        // R7: Reserved for future use
+                        vm->registers[R7] = 0;
+                        break;
+                        
+                    case 2: // Memory information
+                        // R0_ACC: Total memory size in bytes
+                        vm->registers[R0_ACC] = vm->memory_size;
+                        
+                        // R5: Segment information (base addresses)
+                        vm->registers[R5] = (CODE_SEGMENT_BASE << 24) | 
+                                           (DATA_SEGMENT_BASE << 16) | 
+                                           (STACK_SEGMENT_BASE << 8) | 
+                                           (HEAP_SEGMENT_BASE);
+                        
+                        // R6: Segment information (sizes in KB)
+                        vm->registers[R6] = (CODE_SEGMENT_SIZE / 1024 << 24) | 
+                                           (DATA_SEGMENT_SIZE / 1024 << 16) | 
+                                           (STACK_SEGMENT_SIZE / 1024 << 8) | 
+                                           (HEAP_SEGMENT_SIZE / 1024);
+                        
+                        // R7: Reserved for future use
+                        vm->registers[R7] = 0;
+                        break;
+                        
+                    case 3: // Instruction set information
+                        // R0_ACC: Total number of defined opcodes
+                        vm->registers[R0_ACC] = 0xE0; // Approx 224 opcodes (up to 0xDF)
+                        
+                        // R5: Supported addressing modes bit mask (1 bit per mode)
+                        vm->registers[R5] = (1 << IMM_MODE) | 
+                                           (1 << REG_MODE) | 
+                                           (1 << MEM_MODE) | 
+                                           (1 << REGM_MODE) | 
+                                           (1 << IDX_MODE) | 
+                                           (1 << STK_MODE) | 
+                                           (1 << BAS_MODE);
+                        
+                        // R6: Implemented instruction groups (bit field)
+                        vm->registers[R6] = 0x0000007F; // All 7 instruction groups implemented
+                        
+                        // R7: Reserved for future extensions
+                        vm->registers[R7] = 0;
+                        break;
+                        
+                    case 4: // VM information and status
+                        // R0_ACC: Instruction count
+                        vm->registers[R0_ACC] = vm->instruction_count;
+                        
+                        // R5: VM state flags
+                        vm->registers[R5] = (vm->halted ? 0x01 : 0) |
+                                           (vm->debug_mode ? 0x02 : 0) |
+                                           (vm->interrupt_enabled ? 0x04 : 0);
+                        
+                        // R6: Last error code
+                        vm->registers[R6] = vm->last_error;
+                        
+                        // R7: Reserved
+                        vm->registers[R7] = 0;
+                        break;
+                        
+                    default: // Unsupported function, return zeros
+                        vm->registers[R0_ACC] = 0;
+                        vm->registers[R5] = 0;
+                        vm->registers[R6] = 0;
+                        vm->registers[R7] = 0;
+                        break;
+                }
+            }
             break;
             
         case RESET_OP:

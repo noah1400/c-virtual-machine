@@ -29,6 +29,8 @@ void cpu_leave_frame(VM *vm);
 // Interrupt handling
 void cpu_interrupt(VM *vm, uint8_t vector);
 void cpu_return_from_interrupt(VM *vm);
+void cpu_enable_interrupts(VM *vm);
+void cpu_disable_interrupts(VM *vm);
 
 // Debugging
 void cpu_dump_registers(VM *vm);

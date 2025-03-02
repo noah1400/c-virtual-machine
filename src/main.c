@@ -157,6 +157,7 @@ void debug_execution(VM *vm) {
     printf("  q        - Quit\n");
     printf("  m ADDR N - Dump N bytes of memory at ADDR\n");
     printf("  h        - Show this help\n");
+    printf("  b        - Run until breakpoint\n");
     
     while (!vm->halted) {
         // Show current state
@@ -223,6 +224,20 @@ void debug_execution(VM *vm) {
             } else {
                 printf("Error: Invalid memory dump command\n");
             }
+
+        } else if (cmd[0] == 'b' || cmd[0] == 'B') {
+            // set debug to 0
+            vm->debug_mode = 0;
+            // run til debug_mode is 1
+            while (!vm->halted && !vm->debug_mode) {
+                int result = vm_step(vm);
+                if (result != VM_ERROR_NONE) {
+                    printf("Error: %s\n", vm_get_error_message(vm));
+                    break;
+                }
+            }
+
+            cpu_dump_registers(vm);
             
         } else if (cmd[0] == 'h' || cmd[0] == 'H' || cmd[0] == '?') {
             // Help
@@ -232,6 +247,7 @@ void debug_execution(VM *vm) {
             printf("  q        - Quit\n");
             printf("  m ADDR N - Dump N bytes of memory at ADDR\n");
             printf("  h        - Show this help\n");
+            printf("  b        - Run until breakpoint\n");
             
         } else {
             // Unknown command
