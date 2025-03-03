@@ -96,13 +96,46 @@ int vm_run(VM *vm) {
     return VM_ERROR_NONE;
 }
 
-// Execute a single instruction
 int vm_step(VM *vm) {
     if (!vm) {
         return VM_ERROR_INVALID_ADDRESS;
     }
     
-    return cpu_step(vm);
+    // Check if VM is halted
+    if (vm->halted) {
+        return VM_ERROR_NONE;
+    }
+    
+    // Fetch and decode instruction
+    Instruction instr;
+    uint16_t current_pc = vm->registers[R3_PC];
+    
+    int result = vm_decode_instruction(vm, current_pc, &instr);
+    if (result != VM_ERROR_NONE) {
+        return result;
+    }
+    
+    // Save current instruction for debugging
+    vm->current_instr = instr;
+    
+    // IMPORTANT: Increment PC BEFORE executing the instruction
+    // This is because some instructions (like CALL) rely on PC pointing to the next instruction
+    vm->registers[R3_PC] += 4;
+    
+    // Execute instruction and get result
+    result = cpu_execute_instruction(vm, &instr);
+    
+    // Check for errors
+    if (result != VM_ERROR_NONE) {
+        return result;
+    } else if (vm->last_error != VM_ERROR_NONE) {
+        return vm->last_error;
+    }
+    
+    // Increment instruction count
+    vm->instruction_count++;
+    
+    return VM_ERROR_NONE;
 }
 
 // Execute the current instruction pointed to by PC

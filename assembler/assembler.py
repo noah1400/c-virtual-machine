@@ -220,6 +220,7 @@ class InstructionFormat:
             "FREE": (1, [AddressingMode.REG], "Free heap memory"),
             "MEMCPY": (3, [(AddressingMode.REG, AddressingMode.REG, AddressingMode.IMM)], "Copy memory block"),
             "MEMSET": (3, [(AddressingMode.REG, AddressingMode.REG, AddressingMode.IMM)], "Set memory block"),
+            "PROTECT": (2, [(AddressingMode.REG, [AddressingMode.REG, AddressingMode.IMM])], "Set memory protection"),
         }
     
     def validate(self, opcode, operands, addr_modes):

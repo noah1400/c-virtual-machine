@@ -842,6 +842,11 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 {
                     uint16_t size = param1;
                     uint16_t addr = memory_allocate(vm, size);
+
+                    if (vm->last_error != VM_ERROR_NONE)
+                    {
+                        return vm->last_error;
+                    }
                     
                     vm->registers[R0_ACC] = addr;  // Return address
                     vm->registers[R5] = (addr == 0) ? 1 : 0;  // Error if allocation failed
@@ -852,6 +857,11 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 {
                     uint16_t addr = param1;
                     int result = memory_free(vm, addr);
+
+                    if (vm->last_error != VM_ERROR_NONE)
+                    {
+                        return vm->last_error;
+                    }
                     
                     vm->registers[R0_ACC] = result;
                     vm->registers[R5] = (result == VM_ERROR_NONE) ? 0 : 1;
@@ -865,6 +875,11 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                     uint16_t count = param3;
                     
                     int result = memory_copy(vm, dest, src, count);
+
+                    if (vm->last_error != VM_ERROR_NONE)
+                    {
+                        return vm->last_error;
+                    }
                     
                     vm->registers[R0_ACC] = count;  // Return bytes copied
                     vm->registers[R5] = (result == VM_ERROR_NONE) ? 0 : 1;
@@ -1421,41 +1436,130 @@ static int handle_system(VM *vm, Instruction *instr) {
 // Handle memory management instructions
 static int handle_memory(VM *vm, Instruction *instr) {
     uint8_t opcode = instr->opcode;
-    uint8_t reg = instr->reg1;
+    uint8_t dest_reg = instr->reg1;
+    uint8_t src_reg = instr->reg2;
     uint16_t size, src, dst;
     uint8_t value;
+    int result;
     
     switch (opcode) {
         case ALLOC_OP:
             // Allocate heap memory
-            size = get_operand_value(vm, instr, 1);
-            vm->registers[reg] = memory_allocate(vm, size);
+            // Format: ALLOC Rdest, Rsize/IMM
+            
+            // Get size from second operand (register or immediate)
+            if (instr->mode == REG_MODE) {
+                size = vm->registers[src_reg];
+            } else {
+                size = instr->immediate;
+            }
+            
+            // Validate size
+            if (size > HEAP_SEGMENT_SIZE / 2) {
+                vm->last_error = VM_ERROR_MEMORY_ALLOCATION;
+                snprintf(vm->error_message, sizeof(vm->error_message), 
+                        "Allocation size too large: %d bytes", size);
+                return VM_ERROR_MEMORY_ALLOCATION;
+            }
+            
+            // Perform allocation
+            uint16_t addr = memory_allocate(vm, size);
+            
+            // Check for allocation error
+            if (addr == 0) {
+                // Error is already set in memory_allocate
+                return vm->last_error;
+            }
+            
+            // Store allocated address in destination register
+            vm->registers[dest_reg] = addr;
             break;
             
         case FREE_OP:
             // Free heap memory
-            memory_free(vm, vm->registers[reg]);
+            // Format: FREE Raddr
+            addr = vm->registers[dest_reg];
+            
+            // Perform free operation
+            result = memory_free(vm, addr);
+            if (result != VM_ERROR_NONE) {
+                // Error is already set in memory_free
+                return result;
+            }
             break;
             
         case MEMCPY_OP:
             // Copy memory block
-            dst = vm->registers[reg];
-            src = vm->registers[instr->reg2];
-            size = instr->immediate;
-            memory_copy(vm, dst, src, size);
+            // Format: MEMCPY Rdest, Rsrc, IMM (size)
+            dst = vm->registers[dest_reg]; // Destination address
+            src = vm->registers[src_reg];  // Source address
+            
+            // Size can be immediate or from a third register
+            if (instr->mode == REG_MODE) {
+                // If mode is REG, size should be in a third register
+                // But since we don't have proper three-operand support yet,
+                // we'll use the immediate field if available
+                size = instr->immediate;
+            } else {
+                size = instr->immediate;
+            }
+            
+            // Validate parameters
+            if (size == 0) {
+                vm->last_error = VM_ERROR_INVALID_ADDRESS;
+                snprintf(vm->error_message, sizeof(vm->error_message), 
+                        "Invalid memcpy size: 0 bytes");
+                return VM_ERROR_INVALID_ADDRESS;
+            }
+            
+            // Perform memory copy
+            result = memory_copy(vm, dst, src, size);
+            if (result != VM_ERROR_NONE) {
+                return result;
+            }
             break;
             
         case MEMSET_OP:
             // Set memory block to a value
-            dst = vm->registers[reg];
-            value = vm->registers[instr->reg2] & 0xFF;
+            // Format: MEMSET Rdest, Rvalue, IMM (size)
+            dst = vm->registers[dest_reg];  // Destination address
+            value = vm->registers[src_reg] & 0xFF;  // Value (only lowest byte)
+            
+            // Size will be immediate
             size = instr->immediate;
-            memory_set(vm, dst, value, size);
+            
+            // Validate parameters
+            if (size == 0) {
+                vm->last_error = VM_ERROR_INVALID_ADDRESS;
+                snprintf(vm->error_message, sizeof(vm->error_message), 
+                        "Invalid memset size: 0 bytes");
+                return VM_ERROR_INVALID_ADDRESS;
+            }
+            
+            // Perform memory set
+            result = memory_set(vm, dst, value, size);
+            if (result != VM_ERROR_NONE) {
+                return result;
+            }
             break;
             
         case PROTECT_OP:
             // Set memory protection flags
-            // To be implemented
+            // Format: PROTECT Raddr, IMM/Rflags
+            addr = vm->registers[dest_reg];
+            
+            // Get protection flags (second operand)
+            if (instr->mode == REG_MODE) {
+                value = vm->registers[src_reg] & 0xFF;
+            } else {
+                value = instr->immediate & 0xFF;
+            }
+                   
+            // Perform memory protection
+            result = memory_protect(vm, addr, value);
+            if (result != VM_ERROR_NONE) {
+                return result;
+            }
             break;
             
         default:

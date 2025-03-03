@@ -146,6 +146,92 @@ void debug_dump_memory(VM *vm, uint16_t addr, int count) {
     }
 }
 
+void debug_decode_instruction(VM *vm, uint16_t address) {
+    // Read the 32-bit instruction from memory
+    uint32_t instruction = memory_read_dword(vm, address);
+    
+    // Decode fields
+    uint8_t opcode = (instruction >> 24) & 0xFF;
+    uint8_t mode = (instruction >> 20) & 0x0F;
+    uint8_t reg1 = (instruction >> 16) & 0x0F;
+    uint8_t reg2 = (instruction >> 12) & 0x0F;
+    uint16_t immediate = instruction & 0xFFF;
+    
+    // If mode is immediate-related, combine reg2 and immediate
+    if (mode == IMM_MODE || mode == MEM_MODE || mode == STK_MODE || mode == BAS_MODE) {
+        immediate = (reg2 << 12) | immediate;
+    }
+    
+    // Get opcode name
+    const char* opcode_name = "UNKNOWN";
+    switch (opcode) {
+        case NOP_OP: opcode_name = "NOP"; break;
+        case LOAD_OP: opcode_name = "LOAD"; break;
+        case STORE_OP: opcode_name = "STORE"; break;
+        case MOVE_OP: opcode_name = "MOVE"; break;
+        case LOADB_OP: opcode_name = "LOADB"; break;
+        case STOREB_OP: opcode_name = "STOREB"; break;
+        case ADD_OP: opcode_name = "ADD"; break;
+        case SUB_OP: opcode_name = "SUB"; break;
+        case MUL_OP: opcode_name = "MUL"; break;
+        case DIV_OP: opcode_name = "DIV"; break;
+        case INC_OP: opcode_name = "INC"; break;
+        case DEC_OP: opcode_name = "DEC"; break;
+        case JMP_OP: opcode_name = "JMP"; break;
+        case JZ_OP: opcode_name = "JZ"; break;
+        case JNZ_OP: opcode_name = "JNZ"; break;
+        case SYSCALL_OP: opcode_name = "SYSCALL"; break;
+        case PUSH_OP: opcode_name = "PUSH"; break;
+        case POP_OP: opcode_name = "POP"; break;
+        case HALT_OP: opcode_name = "HALT"; break;
+        case ALLOC_OP: opcode_name = "ALLOC"; break;
+        case FREE_OP: opcode_name = "FREE"; break;
+        case MEMCPY_OP: opcode_name = "MEMCPY"; break;
+        case MEMSET_OP: opcode_name = "MEMSET"; break;
+        case PROTECT_OP: opcode_name = "PROTECT"; break;
+        default: opcode_name = "UNKNOWN"; break;
+    }
+    
+    // Get mode name
+    const char* mode_name = "UNKNOWN";
+    switch (mode) {
+        case IMM_MODE: mode_name = "IMM"; break;
+        case REG_MODE: mode_name = "REG"; break;
+        case MEM_MODE: mode_name = "MEM"; break;
+        case REGM_MODE: mode_name = "REGM"; break;
+        case IDX_MODE: mode_name = "IDX"; break;
+        case STK_MODE: mode_name = "STK"; break;
+        case BAS_MODE: mode_name = "BAS"; break;
+        default: mode_name = "UNKNOWN"; break;
+    }
+    
+    printf("INSTRUCTION 0x%08X at 0x%04X:\n", instruction, address);
+    printf("  Opcode: 0x%02X (%s)\n", opcode, opcode_name);
+    printf("  Mode: 0x%01X (%s)\n", mode, mode_name);
+    printf("  Reg1: %d (R%d)\n", reg1, reg1);
+    printf("  Reg2: %d (R%d)\n", reg2, reg2);
+    printf("  Immediate: 0x%04X (%d)\n", immediate, immediate);
+    
+    // Try to interpret the instruction
+    printf("  Interpretation: ");
+    
+    if (opcode == ALLOC_OP) {
+        if (mode == REG_MODE) {
+            printf("ALLOC R%d, R%d (Allocate memory with size from R%d, store address in R%d)\n",
+                  reg1, reg2, reg2, reg1);
+        } else if (mode == IMM_MODE) {
+            printf("ALLOC R%d, #%d (Allocate %d bytes, store address in R%d)\n",
+                  reg1, immediate, immediate, reg1);
+        } else {
+            printf("ALLOC with unknown mode\n");
+        }
+    } else if (opcode == FREE_OP) {
+        printf("FREE R%d (Free memory at address in R%d)\n", reg1, reg1);
+    } else {
+        printf("%s instruction\n", opcode_name);
+    }
+}
+
 // Debug mode: Step through execution with user input
 void debug_execution(VM *vm) {
     char cmd[32];
@@ -158,6 +244,7 @@ void debug_execution(VM *vm) {
     printf("  m ADDR N - Dump N bytes of memory at ADDR\n");
     printf("  h        - Show this help\n");
     printf("  b        - Run until breakpoint\n");
+    printf("  i        - Decode instruction at current PC\n");
     
     while (!vm->halted) {
         // Show current state
@@ -248,7 +335,15 @@ void debug_execution(VM *vm) {
             printf("  m ADDR N - Dump N bytes of memory at ADDR\n");
             printf("  h        - Show this help\n");
             printf("  b        - Run until breakpoint\n");
-            
+            printf("  i        - Decode instruction at current PC\n");
+
+        } else if (cmd[0] == 'i' || cmd[0] == 'I') {
+            // Decode instruction
+            unsigned int addr = vm->registers[R3_PC];
+            if (strlen(cmd) > 1) {
+                sscanf(cmd + 1, "%x", &addr);
+            }
+            debug_decode_instruction(vm, addr);
         } else {
             // Unknown command
             printf("Unknown command. Type 'h' for help.\n");
