@@ -613,6 +613,11 @@ class Assembler:
             # Add null terminator
             self.data.append(0)
             self.data_address += len(string) + 1
+
+            # Align to 4 bytes
+            while self.data_address % 4 != 0:
+                self.data.append(0)
+                self.data_address += 1
         
         elif directive == ".space" or directive == ".skip":
             if not args:
@@ -768,11 +773,21 @@ class Assembler:
                 operands.append((mode, reg1, reg2, imm))
                 operand_modes.append(mode)
                 
-                # Check if this might be a label reference
+                # Check if this might be a label reference in immediate mode
                 if mode == AddressingMode.IMM and re.match(r'^[A-Za-z_.][A-Za-z0-9_.]*$', raw_op.lstrip('#')):
                     symbol = raw_op.lstrip('#')
                     if symbol not in self.labels:
                         for_source[i] = symbol
+                
+                # Check if this might be a label reference in memory mode
+                elif mode == AddressingMode.MEM:
+                    # Extract the expression inside brackets
+                    bracket_match = re.match(r'\[(.*)\]', raw_op)
+                    if bracket_match:
+                        expr = bracket_match.group(1).strip()
+                        # Check if it's a label
+                        if re.match(r'^[A-Za-z_.][A-Za-z0-9_.]*$', expr) and expr not in self.labels:
+                            for_source[i] = expr
         
         # Validate instruction format
         valid, error = self.instruction_format.validate(opcode_str, operands, operand_modes)
@@ -847,6 +862,13 @@ class Assembler:
             if self.current_section == ".text":
                 self.labels[label] = self.address
             else:
+                # For data segment, ensure labels are aligned to 4-byte boundaries
+                if self.data_address % 4 != 0:
+                    # Add padding bytes
+                    pad_needed = 4 - (self.data_address % 4)
+                    for _ in range(pad_needed):
+                        self.data.append(0)
+                    self.data_address += pad_needed
                 self.labels[label] = self.data_address
             
             # Process remainder of line if any

@@ -135,15 +135,6 @@ void debug_dump_memory(VM *vm, uint16_t addr, int count) {
             printf("\n");
         }
     }
-    
-    // Check if this memory region might contain a string
-    if (memory_might_be_string(vm, addr)) {
-        char* str = memory_extract_string(vm, addr, 80);
-        if (str) {
-            printf("\nPossible string at 0x%04X: \"%s\"\n", addr, str);
-            free(str);
-        }
-    }
 }
 
 void debug_decode_instruction(VM *vm, uint16_t address) {
