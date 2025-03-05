@@ -189,7 +189,7 @@ static int handle_load(VM *vm, Instruction *instr) {
             if (instr->mode == IMM_MODE) {
                 value = instr->immediate & 0xFF;
             } else {
-                uint16_t addr = get_store_address(vm, instr, 0);
+                uint16_t addr = get_store_address(vm, instr, 1);
                 value = memory_read_byte(vm, addr);
             }
             vm->registers[dest_reg] = value;

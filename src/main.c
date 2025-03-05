@@ -401,6 +401,13 @@ int main(int argc, char *argv[]) {
         result = vm_run(&vm);
         if (result != VM_ERROR_NONE) {
             fprintf(stderr, "VM error: %s\n", vm_get_error_message(&vm));
+            fprintf(stderr, "Program terminated after %u instructions\n", vm.instruction_count);
+            // decode instruction
+            Instruction instr;
+            vm_decode_instruction(&vm, vm.registers[R3_PC]-4, &instr);
+            const char* mnemonic = vm_opcode_to_mnemonic(instr.opcode);
+            printf("Next: OP=0x%02X (%s) MODE=0x%01X R1=0x%01X R2=0x%01X IMM=0x%03X\n",
+                   instr.opcode, mnemonic, instr.mode, instr.reg1, instr.reg2, instr.immediate);
             vm_cleanup(&vm);
             return 1;
         }
