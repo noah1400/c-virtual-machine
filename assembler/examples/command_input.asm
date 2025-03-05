@@ -28,6 +28,11 @@ command_loop:
     LOAD R0, #104         ; ASCII 'h'
     CMP R1, R0
     JZ show_help
+
+    ; Check for 'o' output command
+    LOAD R0, #111
+    CMP R1, R0
+    JZ output_string
     
     ; Unknown command
     LOAD R0, unknown_cmd
@@ -45,16 +50,22 @@ exit_program:
     SYSCALL #2
     HALT
 
+output_string:
+    LOAD R0, #input_buffer
+    INC R0
+    SYSCALL #2
+    JMP command_loop
+
 .data
 welcome_msg:
     .asciiz "Welcome to Command Processor\n"
 prompt_msg:
     .asciiz "\n> "
 help_text:
-    .asciiz "Available commands:\n  h - Show help\n  q - Quit\n"
+    .asciiz "Available commands:\n  h - Show help\n  q - Quit\n  o - Output the input string\n"
 unknown_cmd:
     .asciiz "Unknown command. Type 'h' for help.\n"
 goodbye_msg:
     .asciiz "Goodbye!\n"
 input_buffer:
-    .space 100  ; First 8 bytes of buffer
+    .space 100

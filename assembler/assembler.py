@@ -547,6 +547,7 @@ class Assembler:
             
             # Process escape sequences
             i = 0
+            actual_bytes = 0  # Track actual bytes added to memory
             while i < len(string):
                 if string[i] == '\\' and i + 1 < len(string):
                     if string[i + 1] == 'n':
@@ -563,12 +564,14 @@ class Assembler:
                         self.data.append(ord('"'))
                     else:
                         self.data.append(ord(string[i + 1]))
-                    i += 2
+                    i += 2  # Skip both backslash and the escape character
+                    actual_bytes += 1  # But only one byte is added to memory
                 else:
                     self.data.append(ord(string[i]))
                     i += 1
+                    actual_bytes += 1
             
-            self.data_address += len(string)
+            self.data_address += actual_bytes
         
         elif directive == ".asciiz":
             if not args:
@@ -589,6 +592,7 @@ class Assembler:
             
             # Process escape sequences (same as .ascii)
             i = 0
+            actual_bytes = 0  # Track actual bytes added to memory
             while i < len(string):
                 if string[i] == '\\' and i + 1 < len(string):
                     if string[i + 1] == 'n':
@@ -605,19 +609,16 @@ class Assembler:
                         self.data.append(ord('"'))
                     else:
                         self.data.append(ord(string[i + 1]))
-                    i += 2
+                    i += 2  # Skip both backslash and the escape character
+                    actual_bytes += 1  # But only one byte is added to memory
                 else:
                     self.data.append(ord(string[i]))
                     i += 1
+                    actual_bytes += 1
             
             # Add null terminator
             self.data.append(0)
-            self.data_address += len(string) + 1
-
-            # Align to 4 bytes
-            while self.data_address % 4 != 0:
-                self.data.append(0)
-                self.data_address += 1
+            self.data_address += actual_bytes + 1
         
         elif directive == ".space" or directive == ".skip":
             if not args:
