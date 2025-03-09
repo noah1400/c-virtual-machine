@@ -12,6 +12,10 @@ void disassemble_instruction(uint32_t address, uint32_t instruction);
 // Disassemble a section of memory
 void disassemble_memory(uint8_t *memory, uint32_t start_addr, uint32_t length);
 
+void disassemble_data(uint8_t *memory, uint32_t start_addr, uint32_t length);
+
+void disassemble_dump_memory(uint8_t *memory, uint32_t addr, uint32_t count);
+
 // Load a binary file for disassembly
 uint8_t* load_binary_file(const char *filename, uint32_t *size);
 

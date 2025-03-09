@@ -325,6 +325,64 @@ void disassemble_memory(uint8_t *memory, uint32_t start_addr, uint32_t length) {
     }
 }
 
+void disassemble_data(uint8_t *memory, uint32_t start_addr, uint32_t length) {
+
+    if(!length) {
+        return;
+    }
+
+    printf("Disassembly of VM data segment:\n");
+    printf("Address  Data\n");
+    printf("-------- ----\n");
+    
+    uint32_t addr = start_addr;
+    uint32_t end_addr = start_addr + length;
+    
+    while (addr < end_addr) {
+        // Read the data byte from memory
+        disassemble_dump_memory(memory, addr, 16);
+
+        // Move to next line
+        addr += 16;
+    }
+}
+
+void disassemble_dump_memory(uint8_t *memory, uint32_t addr, uint32_t count) {
+    
+    // Display memory in hex format
+    for (int i = 0; i < count; i++) {
+        if (i % 16 == 0) {
+            printf("0x%04X: ", addr + i);
+        }
+        
+        printf("%02X ", memory[addr + i]);
+        
+        if (i % 16 == 15 || i == count - 1) {
+            // If at end of line, print ASCII representation
+            int padding = 16 - (i % 16 + 1);
+            for (int p = 0; p < padding; p++) {
+                printf("   ");
+            }
+            
+            printf(" | ");
+            
+            // Print ASCII representation
+            int start = i - (i % 16);
+            int end = (i % 16 == 15) ? i : i;
+            for (int j = start; j <= end; j++) {
+                char c = memory[addr + j];
+                if (c >= 32 && c <= 126) {
+                    printf("%c", c);
+                } else {
+                    printf(".");
+                }
+            }
+            
+            printf("\n");
+        }
+    }
+}
+
 // Load a binary file for disassembly
 uint8_t* load_binary_file(const char *filename, uint32_t *size) {
     FILE *file = fopen(filename, "rb");
@@ -372,6 +430,9 @@ int disassemble_file(const char *filename) {
     
     // Disassemble the binary
     disassemble_memory(buffer, 0, file_size);
+
+    // Disassemble the data segment
+    disassemble_data(buffer, CODE_SEGMENT_SIZE, file_size - CODE_SEGMENT_SIZE);
     
     // Free the buffer
     free(buffer);
