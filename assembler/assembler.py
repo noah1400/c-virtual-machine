@@ -918,7 +918,7 @@ class Assembler:
         self.address += 4
     
     def process_line(self, line):
-        """Process a single line of assembly code."""
+        """Process a single line of assembly code with enhanced debug tracking."""
         # Remove comments
         line = re.sub(r';.*$', '', line).strip()
         if not line:
@@ -941,6 +941,11 @@ class Assembler:
                         self.data.append(0)
                     self.data_address += pad_needed
                 self.labels[label] = self.data_address
+            
+            # Store label line number and source file for debugging
+            if not hasattr(self, 'label_lines'):
+                self.label_lines = {}
+            self.label_lines[label] = (self.current_line, self.current_file)
             
             # Process remainder of line if any
             remainder = remainder.strip()
@@ -968,12 +973,25 @@ class Assembler:
         opcode = parts[0].upper()
         operands = parts[1] if len(parts) > 1 else ""
         
+        # Store original address for debug line info
+        orig_address = self.address
+        
         self.process_instruction(opcode, operands)
+        
+        # Update debug info after adding the instruction
+        if hasattr(self, 'source_lines') and self.address > orig_address:
+            for addr in range(orig_address, self.address, 4):
+                self.source_lines[addr] = (self.current_line, line.strip())
     
     def include_file(self, filename):
-        """Process an included file."""
+        """Process an included file with source tracking."""
+        # Save previous source file and line
+        prev_file = self.current_file
+        prev_line = self.current_line
+        prev_section = self.current_section
+        
         # Resolve filename relative to the current file's directory
-        if self.current_file and not os.path.isabs(filename):
+        if not os.path.isabs(filename):
             base_dir = os.path.dirname(os.path.abspath(self.current_file))
             filename = os.path.join(base_dir, filename)
         
@@ -986,15 +1004,10 @@ class Assembler:
         # Mark file as included
         self.included_files.add(abs_path)
         
-        # Save current file/line
-        prev_file = self.current_file
-        prev_line = self.current_line
-        prev_section = self.current_section
-        
         try:
             # Process the included file
             with open(filename, 'r') as f:
-                self.current_file = filename
+                self.current_file = abs_path  # Use absolute path for debug info
                 for line_num, line in enumerate(f, 1):
                     self.current_line = line_num
                     self.process_line(line)
@@ -1003,7 +1016,7 @@ class Assembler:
         except Exception as e:
             self.error(f"Error processing include file: {str(e)}")
         
-        # Restore file/line
+        # Restore previous state
         self.current_file = prev_file
         self.current_line = prev_line
         self.current_section = prev_section
@@ -1033,8 +1046,8 @@ class Assembler:
             else:
                 self.error(f"Unresolved symbol: {symbol}")
     
-    def assemble(self, source_code, filename="<input>"):
-        """Assemble the source code into binary."""
+    def assemble(self, source_code, filename="<input>", include_debug=True):
+        """Assemble the source code into binary with new optimized format and enhanced debug info."""
         # Reset state
         self.labels = {}
         self.instructions = []
@@ -1047,11 +1060,32 @@ class Assembler:
         self.current_file = filename
         self.included_files = set([os.path.abspath(filename)])
         
+        # For enhanced debug info
+        self.source_lines = {}  # Maps address -> (line_num, source_line, source_file)
+        self.label_lines = {}   # Maps label -> (line_num, source_file)
+        
         # Process each line
-        for line_num, line in enumerate(source_code.splitlines(), 1):
-            self.current_line = line_num
+        lines = source_code.splitlines()
+        for i, line in enumerate(lines, 1):
+            self.current_line = i
             try:
+                # Save original address before processing
+                orig_address = self.address
+                orig_data_address = self.data_address
+                
+                # Process the line
                 self.process_line(line)
+                
+                # If we added instructions, store debug info
+                if self.address > orig_address:
+                    for addr in range(orig_address, self.address, 4):
+                        self.source_lines[addr] = (i, line.strip(), self.current_file)
+                
+                # If we added data, store debug info
+                if self.data_address > orig_data_address:
+                    for addr in range(orig_data_address, self.data_address):
+                        data_addr = DATA_SEGMENT_BASE + (addr - DATA_SEGMENT_BASE)
+                        self.source_lines[data_addr] = (i, line.strip(), self.current_file)
             except Exception as e:
                 self.error(f"Exception: {str(e)}")
         
@@ -1064,24 +1098,119 @@ class Assembler:
                 print(f"Error: {error}", file=sys.stderr)
             return None
         
-        # Build the binary output
+        # Build the binary output with new format
         binary = bytearray()
+        
+        # Magic number "VM32" to identify our format
+        binary.extend(b"VM32")
+        
+        # Format version (1.0)
+        binary.extend(struct.pack("<H", 1))
+        binary.extend(struct.pack("<H", 0))
+        
+        # Save position for header size (will fill later)
+        header_size_pos = len(binary)
+        binary.extend(struct.pack("<I", 0))  # Placeholder
+        
+        # Code segment info
+        code_size = len(self.instructions) * 4
+        binary.extend(struct.pack("<I", CODE_SEGMENT_BASE))  # Code segment address
+        binary.extend(struct.pack("<I", code_size))         # Code segment size
+        
+        # Data segment info
+        data_size = len(self.data)
+        binary.extend(struct.pack("<I", DATA_SEGMENT_BASE))  # Data segment address
+        binary.extend(struct.pack("<I", data_size))         # Data segment size
+        
+        # Symbol table info - save position for size (will fill later)
+        symbol_table_pos = len(binary)
+        binary.extend(struct.pack("<I", 0))  # Placeholder for symbol table size
+        
+        # Mark end of header
+        header_size = len(binary)
+        
+        # Update header size field
+        binary[header_size_pos:header_size_pos+4] = struct.pack("<I", header_size)
         
         # Add code segment
         for instruction in self.instructions:
             binary.extend(struct.pack("<I", instruction))
         
-        # Pad to data segment if needed
-        if self.data:
-            code_size = len(binary)
-            if code_size < DATA_SEGMENT_BASE:
-                padding_size = DATA_SEGMENT_BASE - code_size
-                binary.extend(bytes(padding_size))
-            
-            # Add data segment
-            binary.extend(bytes(self.data))
+        # Add data segment (no padding needed)
+        binary.extend(bytes(self.data))
+        
+        # Add symbol table if debug info is requested
+        symbol_table_start = len(binary)
+        if include_debug:
+            symbol_table = self.generate_symbol_table()
+            binary.extend(symbol_table)
+        
+        # Update symbol table size in header
+        symbol_table_size = len(binary) - symbol_table_start
+        binary[symbol_table_pos:symbol_table_pos+4] = struct.pack("<I", symbol_table_size)
         
         return binary
+
+    def generate_symbol_table(self):
+        """Generate a symbol table for debugging information with enhanced source tracking."""
+        symbol_table = bytearray()
+        
+        # Number of labels
+        num_labels = len(self.labels)
+        symbol_table.extend(struct.pack("<I", num_labels))
+        
+        # Add each label
+        for name, addr in self.labels.items():
+            # Label name
+            name_bytes = name.encode('utf-8')
+            symbol_table.extend(struct.pack("<H", len(name_bytes)))
+            symbol_table.extend(name_bytes)
+            
+            # Label address
+            symbol_table.extend(struct.pack("<I", addr))
+            
+            # Label type (0=code, 1=data)
+            is_data = addr >= DATA_SEGMENT_BASE
+            symbol_table.extend(struct.pack("<B", 1 if is_data else 0))
+            
+            # Line number
+            line_num = 0
+            source_file = b''
+            
+            if name in self.label_lines:
+                line_num, label_file = self.label_lines[name]
+                if label_file:
+                    source_file = label_file.encode('utf-8')
+            
+            symbol_table.extend(struct.pack("<I", line_num))
+            
+            # Add source file for the label
+            symbol_table.extend(struct.pack("<H", len(source_file)))
+            if source_file:
+                symbol_table.extend(source_file)
+        
+        # Add source line information
+        # Count entries
+        line_entries = len(self.source_lines)
+        symbol_table.extend(struct.pack("<I", line_entries))
+        
+        # Add each entry
+        for addr, (line_num, source, source_file) in self.source_lines.items():
+            symbol_table.extend(struct.pack("<I", addr))      # Address
+            symbol_table.extend(struct.pack("<I", line_num))  # Line number
+            
+            # Source line text
+            source_bytes = source.encode('utf-8')
+            symbol_table.extend(struct.pack("<H", min(len(source_bytes), 255)))
+            symbol_table.extend(source_bytes[:255])  # Limit to 255 bytes
+            
+            # Source file path
+            source_file_bytes = source_file.encode('utf-8') if source_file else b''
+            symbol_table.extend(struct.pack("<H", len(source_file_bytes)))
+            if source_file_bytes:
+                symbol_table.extend(source_file_bytes)
+        
+        return symbol_table
     
     def assemble_file(self, input_file, output_file=None):
         """Assemble an input file to binary."""

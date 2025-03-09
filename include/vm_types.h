@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 // Register definitions
 #define R0_ACC  0  // Accumulator
@@ -36,6 +37,44 @@
 #define FRAME_PREV_BP_OFFSET    0
 #define FRAME_RET_ADDR_OFFSET   4
 #define FRAME_FIRST_LOCAL       8
+
+// Symbol represents a labeled address in the program
+typedef struct {
+    char *name;          // Symbol name
+    uint32_t address;    // Symbol address
+    uint8_t type;        // Symbol type (0=code, 1=data)
+    uint32_t line_num;   // Source line number
+    char *source_file;   // Source file path
+} Symbol;
+
+// SourceLine represents a line from the source code
+typedef struct {
+    uint32_t address;     // Program address
+    uint32_t line_num;    // Source line number
+    char *source;         // Source line text
+    char *source_file;    // Source file path
+} SourceLine;
+
+// DebugInfo holds all debugging information
+typedef struct {
+    // Symbol table
+    Symbol *symbols;
+    uint32_t symbol_count;
+    
+    // Source line information
+    SourceLine *source_lines;
+    uint32_t source_line_count;
+} DebugInfo;
+
+#define MAX_BREAKPOINTS 32
+
+typedef struct {
+    uint32_t address;
+    char *name;          // Optional name (could be a symbol)
+    bool enabled;
+} Breakpoint;
+
+
 
 // Instruction structure that represents a decoded instruction
 typedef struct {
@@ -74,6 +113,8 @@ typedef struct {
     // Error handling
     int last_error;          // Last error code
     char error_message[256]; // Error message
+
+    DebugInfo *debug_info;  // Debug information (NULL if not loaded)
 } VM;
 
 // Error codes

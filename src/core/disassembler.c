@@ -5,6 +5,7 @@
 #include "instruction_set.h"
 #include "decoder.h"
 #include "memory.h"
+#include "disassembler.h"
 
 // Print register name with optional suffix
 void print_register(uint8_t reg, int with_suffix) {
@@ -292,7 +293,7 @@ void disassemble_instruction(uint32_t address, uint32_t instruction) {
 }
 
 // Disassemble a section of memory
-void disassemble_memory(uint8_t *memory, uint32_t start_addr, uint32_t length) {
+void disassemble_memory(uint8_t *memory, uint32_t start_addr, uint32_t length, SymbolTable *symbols) {
     printf("Disassembly of VM binary:\n");
     printf("Address  Raw Instr.  Assembly\n");
     printf("-------- ----------  --------\n");
@@ -300,15 +301,18 @@ void disassemble_memory(uint8_t *memory, uint32_t start_addr, uint32_t length) {
     uint32_t addr = start_addr;
     uint32_t end_addr = start_addr + length;
     
-    // Only disassemble code segment
-    if (end_addr > CODE_SEGMENT_SIZE) {
-        end_addr = CODE_SEGMENT_SIZE;
-    }
-    
     while (addr < end_addr) {
         // Each instruction is 4 bytes (32 bits)
         if (addr + 4 > end_addr) {
             break;
+        }
+        
+        // Check if this address has a symbol
+        if (symbols) {
+            const char* symbol = disassemble_find_symbol_for_address(symbols, addr);
+            if (symbol) {
+                printf("\n%s:\n", symbol);
+            }
         }
         
         // Read the instruction from memory (little endian)
@@ -396,7 +400,13 @@ uint8_t* load_binary_file(const char *filename, uint32_t *size) {
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
     
-    // Allocate memory for file contents
+    if (file_size <= 0) {
+        fprintf(stderr, "Error: Empty or invalid file '%s'\n", filename);
+        fclose(file);
+        return NULL;
+    }
+    
+    // Allocate memory for entire file
     uint8_t *buffer = (uint8_t*)malloc(file_size);
     if (!buffer) {
         fprintf(stderr, "Error: Failed to allocate memory for file\n");
@@ -415,6 +425,14 @@ uint8_t* load_binary_file(const char *filename, uint32_t *size) {
         return NULL;
     }
     
+    // Check for VM32 format
+    if (file_size < 28 || buffer[0] != 'V' || buffer[1] != 'M' || 
+        buffer[2] != '3' || buffer[3] != '2') {
+        fprintf(stderr, "Error: Not a valid VM32 format binary file\n");
+        free(buffer);
+        return NULL;
+    }
+    
     *size = (uint32_t)file_size;
     return buffer;
 }
@@ -428,14 +446,183 @@ int disassemble_file(const char *filename) {
         return 1;
     }
     
-    // Disassemble the binary
-    disassemble_memory(buffer, 0, file_size);
-
-    // Disassemble the data segment
-    disassemble_data(buffer, CODE_SEGMENT_SIZE, file_size - CODE_SEGMENT_SIZE);
+    // Check for VM32 format
+    if (file_size < 28 || buffer[0] != 'V' || buffer[1] != 'M' || 
+        buffer[2] != '3' || buffer[3] != '2') {
+        fprintf(stderr, "Error: Not a valid VM32 format binary file\n");
+        free(buffer);
+        return 1;
+    }
     
-    // Free the buffer
+    // Parse header
+    uint16_t major_ver = *((uint16_t*)(buffer + 4));
+    uint16_t minor_ver = *((uint16_t*)(buffer + 6));
+    uint32_t header_size = *((uint32_t*)(buffer + 8));
+    uint32_t code_base = *((uint32_t*)(buffer + 12));
+    uint32_t code_size = *((uint32_t*)(buffer + 16));
+    uint32_t data_base = *((uint32_t*)(buffer + 20));
+    uint32_t data_size = *((uint32_t*)(buffer + 24));
+    uint32_t symbol_size = *((uint32_t*)(buffer + 28));
+    
+    // Calculate file offsets
+    uint32_t code_offset = header_size;
+    uint32_t data_offset = code_offset + code_size;
+    uint32_t symbol_offset = data_offset + data_size;
+    
+    printf("VM32 Binary Format v%d.%d\n", major_ver, minor_ver);
+    printf("  Code segment: 0x%04X, %d bytes\n", code_base, code_size);
+    printf("  Data segment: 0x%04X, %d bytes\n", data_base, data_size);
+    printf("  Symbol table: %d bytes\n", symbol_size);
+    printf("\n");
+    
+    // Load and process symbol table if available
+    SymbolTable symbols = {0};
+    if (symbol_size > 0) {
+        parse_symbol_table(buffer + symbol_offset, symbol_size, &symbols);
+    }
+    
+    // Disassemble code segment
+    if (code_size > 0) {
+        printf("Disassembly of code segment:\n");
+        printf("Address  Raw Instr.  Assembly\n");
+        printf("-------- ----------  --------\n");
+        
+        for (uint32_t offset = 0; offset < code_size; offset += 4) {
+            if (offset + 4 > code_size) {
+                break;
+            }
+            
+            uint32_t address = code_base + offset;
+            
+            // Read the instruction
+            uint32_t instruction = 
+                  ((uint32_t)buffer[code_offset + offset]) |
+                  ((uint32_t)buffer[code_offset + offset + 1] << 8) |
+                  ((uint32_t)buffer[code_offset + offset + 2] << 16) |
+                  ((uint32_t)buffer[code_offset + offset + 3] << 24);
+            
+            // Check if this address has a label
+            const char* label = disassemble_find_symbol_for_address(&symbols, address);
+            if (label) {
+                printf("\n%s:\n", label);
+            }
+            
+            // Disassemble the instruction
+            disassemble_instruction(address, instruction);
+        }
+    }
+    
+    // Disassemble/dump data segment
+    if (data_size > 0) {
+        printf("\nDump of data segment:\n");
+        printf("Address  Data\n");
+        printf("-------- ----\n");
+        
+        for (uint32_t offset = 0; offset < data_size; offset += 16) {
+            uint32_t block_size = (offset + 16 <= data_size) ? 16 : data_size - offset;
+            disassemble_dump_memory(buffer + data_offset + offset, data_base + offset, block_size);
+        }
+    }
+    
+    // Free resources
+    free_symbol_table(&symbols);
     free(buffer);
-    
     return 0;
+}
+
+void parse_symbol_table(const uint8_t *data, uint32_t size, SymbolTable *table) {
+    if (!data || !table || size < 4) {
+        return;
+    }
+    
+    // Read symbol count
+    uint32_t symbol_count = *((uint32_t*)data);
+    data += 4;
+    
+    // Allocate arrays
+    table->names = (char**)malloc(symbol_count * sizeof(char*));
+    table->addresses = (uint32_t*)malloc(symbol_count * sizeof(uint32_t));
+    table->types = (uint8_t*)malloc(symbol_count * sizeof(uint8_t));
+    table->count = symbol_count;
+    
+    if (!table->names || !table->addresses || !table->types) {
+        fprintf(stderr, "Error: Failed to allocate memory for symbol table\n");
+        free(table->names);
+        free(table->addresses);
+        free(table->types);
+        table->count = 0;
+        return;
+    }
+    
+    // Parse symbols
+    uint32_t i;
+    for (i = 0; i < symbol_count; i++) {
+        // Check if we have enough data left
+        if (data - (const uint8_t*)data + 7 >= size) {
+            break;
+        }
+        
+        // Name length
+        uint16_t name_len = *((uint16_t*)data);
+        data += 2;
+        
+        // Check bounds
+        if (data - (const uint8_t*)data + name_len + 5 >= size) {
+            break;
+        }
+        
+        // Allocate and copy name
+        table->names[i] = (char*)malloc(name_len + 1);
+        if (!table->names[i]) {
+            continue;
+        }
+        
+        memcpy(table->names[i], data, name_len);
+        table->names[i][name_len] = '\0';
+        data += name_len;
+        
+        // Address and type
+        table->addresses[i] = *((uint32_t*)data);
+        data += 4;
+        table->types[i] = *data++;
+        
+        // Skip line number
+        data += 4;
+    }
+    
+    // Update actual count (in case of truncation)
+    table->count = i;
+    
+    printf("Loaded %d symbols from debug information\n", table->count);
+}
+
+void free_symbol_table(SymbolTable *table) {
+    if (!table) {
+        return;
+    }
+    
+    if (table->names) {
+        for (uint32_t i = 0; i < table->count; i++) {
+            free(table->names[i]);
+        }
+        free(table->names);
+    }
+    
+    free(table->addresses);
+    free(table->types);
+    table->count = 0;
+}
+
+const char* disassemble_find_symbol_for_address(SymbolTable *table, uint32_t address) {
+    if (!table || !table->names) {
+        return NULL;
+    }
+    
+    for (uint32_t i = 0; i < table->count; i++) {
+        if (table->addresses[i] == address) {
+            return table->names[i];
+        }
+    }
+    
+    return NULL;
 }
