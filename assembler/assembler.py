@@ -972,6 +972,11 @@ class Assembler:
     
     def include_file(self, filename):
         """Process an included file."""
+        # Resolve filename relative to the current file's directory
+        if self.current_file and not os.path.isabs(filename):
+            base_dir = os.path.dirname(os.path.abspath(self.current_file))
+            filename = os.path.join(base_dir, filename)
+        
         # Check for circular includes
         abs_path = os.path.abspath(filename)
         if abs_path in self.included_files:
@@ -984,6 +989,7 @@ class Assembler:
         # Save current file/line
         prev_file = self.current_file
         prev_line = self.current_line
+        prev_section = self.current_section
         
         try:
             # Process the included file
@@ -1000,6 +1006,7 @@ class Assembler:
         # Restore file/line
         self.current_file = prev_file
         self.current_line = prev_line
+        self.current_section = prev_section
         
         # Remove from included set to allow including again elsewhere
         self.included_files.remove(abs_path)
