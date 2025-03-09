@@ -1267,7 +1267,7 @@ def main():
     if success and args.verbose:
         # Print symbol table
         print("\nSymbol Table:")
-        for symbol, value in sorted(assembler.labels.items()):
+        for symbol, value in sorted(assembler.labels.items(), key=lambda x: x[1]):
             print(f"{symbol}: 0x{value:04X}")
     
     if success and args.disassemble:
