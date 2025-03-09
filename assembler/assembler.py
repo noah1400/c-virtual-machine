@@ -416,6 +416,7 @@ class Assembler:
             plus_match = re.match(r'(.*?)\s*\+\s*(.*)', expr)
             if plus_match:
                 base, offset = plus_match.group(1).strip(), plus_match.group(2).strip()
+                offset_sign = 1  # Positive
                 
                 # Base is a register
                 if base in self.registers or (base.startswith('R') and base[1:].isdigit()):
@@ -429,6 +430,73 @@ class Assembler:
                         return AddressingMode.BAS, 0, 0, imm
                     else:
                         return AddressingMode.IDX, reg, 0, imm
+                # Base is a symbol
+                else:
+                    # Use base as a symbol and parse offset
+                    if offset.isdigit() or (offset.startswith('0x') and all(c in '0123456789abcdefABCDEF' for c in offset[2:])):
+                        # Simple numeric offset
+                        imm_offset = self.parse_immediate(offset, allow_unresolved=False)
+                        
+                        # Get the base symbol's value
+                        if base in self.labels:
+                            base_value = self.labels[base]
+                        else:
+                            # Add to unresolved references
+                            self.unresolved_references.append((len(self.instructions), base, 'imm'))
+                            base_value = 0  # Placeholder
+                        
+                        # Combine base + offset
+                        value = base_value + imm_offset
+                        return AddressingMode.MEM, 0, 0, value
+                    else:
+                        # More complex expression - not fully supported
+                        self.error(f"Complex expressions not supported: {expr}")
+                        return AddressingMode.MEM, 0, 0, 0
+                        
+            # Register - offset: [R0-123], [SP-8], etc.
+            minus_match = re.match(r'(.*?)\s*\-\s*(.*)', expr)
+            if minus_match:
+                base, offset = minus_match.group(1).strip(), minus_match.group(2).strip()
+                offset_sign = -1  # Negative
+                
+                # Base is a register
+                if base in self.registers or (base.startswith('R') and base[1:].isdigit()):
+                    reg = self.parse_register(base)
+                    imm = self.parse_immediate(offset, allow_unresolved=True)
+                    
+                    # For negative offsets, we need to use 2's complement for 12-bit value
+                    # since the immediate field is treated as unsigned in instruction encoding
+                    neg_imm = (-imm) & 0xFFF  # Apply 2's complement in 12-bit space
+                    
+                    # Special case for SP and BP based addressing
+                    if reg == Register.R2_SP:
+                        return AddressingMode.STK, 0, 0, neg_imm
+                    elif reg == Register.R1_BP:
+                        return AddressingMode.BAS, 0, 0, neg_imm
+                    else:
+                        return AddressingMode.IDX, reg, 0, neg_imm
+                # Base is a symbol
+                else:
+                    # Use base as a symbol and parse offset
+                    if offset.isdigit() or (offset.startswith('0x') and all(c in '0123456789abcdefABCDEF' for c in offset[2:])):
+                        # Simple numeric offset
+                        imm_offset = self.parse_immediate(offset, allow_unresolved=False)
+                        
+                        # Get the base symbol's value
+                        if base in self.labels:
+                            base_value = self.labels[base]
+                        else:
+                            # Add to unresolved references
+                            self.unresolved_references.append((len(self.instructions), base, 'imm'))
+                            base_value = 0  # Placeholder
+                        
+                        # Combine base - offset
+                        value = base_value - imm_offset
+                        return AddressingMode.MEM, 0, 0, value
+                    else:
+                        # More complex expression - not fully supported
+                        self.error(f"Complex expressions not supported: {expr}")
+                        return AddressingMode.MEM, 0, 0, 0
             
             # Direct memory address: [1234], [0xFF], [LABEL]
             value = self.parse_immediate(expr, allow_unresolved=True)
