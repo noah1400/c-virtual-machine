@@ -69,6 +69,7 @@ typedef struct {
     // Instruction cycle info for debugging
     uint32_t instruction_count; // Number of instructions executed
     Instruction current_instr;  // Currently executing instruction
+    uint16_t error_pc;         // Address of last error
     
     // Error handling
     int last_error;          // Last error code

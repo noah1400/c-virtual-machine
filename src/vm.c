@@ -30,6 +30,8 @@ int vm_init(VM *vm, uint32_t memory_size) {
     // Clear error state
     vm->last_error = VM_ERROR_NONE;
     memset(vm->error_message, 0, sizeof(vm->error_message));
+
+    vm->last_error = 0;
     
     return VM_ERROR_NONE;
 }
@@ -106,10 +108,12 @@ int vm_step(VM *vm) {
         return VM_ERROR_NONE;
     }
     
+    // Record the current PC (before execution)
+    uint16_t current_pc = vm->registers[R3_PC];
+    vm->error_pc = current_pc;
+    
     // Fetch and decode instruction
     Instruction instr;
-    uint16_t current_pc = vm->registers[R3_PC];
-    
     int result = vm_decode_instruction(vm, current_pc, &instr);
     if (result != VM_ERROR_NONE) {
         return result;

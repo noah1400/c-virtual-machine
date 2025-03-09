@@ -271,6 +271,25 @@ void debug_execution(VM *vm) {
                 int result = vm_step(vm);
                 if (result != VM_ERROR_NONE) {
                     printf("Error: %s\n", vm_get_error_message(vm));
+                    
+                    // Display the instruction that caused the error using the saved error_pc
+                    Instruction error_instr;
+                    if (vm_decode_instruction(vm, vm->error_pc, &error_instr) == VM_ERROR_NONE) {
+                        char disasm[256];
+                        vm_disassemble_instruction(vm, &error_instr, disasm, sizeof(disasm));
+                        printf("Error occurred at PC=0x%04X, instruction: %s\n", vm->error_pc, disasm);
+                        
+                        // Detailed register state at time of error
+                        printf("Register state at time of error:\n");
+                        cpu_dump_registers(vm);
+                        
+                        // Option to dump memory around instruction
+                        printf("Dump memory around instruction? (y/n): ");
+                        char resp[4];
+                        if (fgets(resp, sizeof(resp), stdin) != NULL && (resp[0] == 'y' || resp[0] == 'Y')) {
+                            debug_dump_memory(vm, vm->error_pc, 32);
+                        }
+                    }
                     break;
                 }
             }
@@ -283,6 +302,18 @@ void debug_execution(VM *vm) {
             int result = vm_run(vm);
             if (result != VM_ERROR_NONE) {
                 printf("Error: %s\n", vm_get_error_message(vm));
+                
+                // Display the instruction that caused the error using the saved error_pc
+                Instruction error_instr;
+                if (vm_decode_instruction(vm, vm->error_pc, &error_instr) == VM_ERROR_NONE) {
+                    char disasm[256];
+                    vm_disassemble_instruction(vm, &error_instr, disasm, sizeof(disasm));
+                    printf("Error occurred at PC=0x%04X, instruction: %s\n", vm->error_pc, disasm);
+                    
+                    // Detailed register state at time of error
+                    printf("Register state at time of error:\n");
+                    cpu_dump_registers(vm);
+                }
             }
             
             printf("VM halted after %u instructions\n", vm->instruction_count);
@@ -311,6 +342,14 @@ void debug_execution(VM *vm) {
                 int result = vm_step(vm);
                 if (result != VM_ERROR_NONE) {
                     printf("Error: %s\n", vm_get_error_message(vm));
+                    
+                    // Display the instruction that caused the error using the saved error_pc
+                    Instruction error_instr;
+                    if (vm_decode_instruction(vm, vm->error_pc, &error_instr) == VM_ERROR_NONE) {
+                        char disasm[256];
+                        vm_disassemble_instruction(vm, &error_instr, disasm, sizeof(disasm));
+                        printf("Error occurred at PC=0x%04X, instruction: %s\n", vm->error_pc, disasm);
+                    }
                     break;
                 }
             }
@@ -402,12 +441,18 @@ int main(int argc, char *argv[]) {
         if (result != VM_ERROR_NONE) {
             fprintf(stderr, "VM error: %s\n", vm_get_error_message(&vm));
             fprintf(stderr, "Program terminated after %u instructions\n", vm.instruction_count);
-            // decode instruction
+            
+            // Use the saved error PC
+            uint16_t error_pc = vm.error_pc;
+            
+            // Decode and display the instruction
             Instruction instr;
-            vm_decode_instruction(&vm, vm.registers[R3_PC]-4, &instr);
-            const char* mnemonic = vm_opcode_to_mnemonic(instr.opcode);
-            printf("OP=0x%02X (%s) MODE=0x%01X R1=0x%01X R2=0x%01X IMM=0x%03x | PC=%04x\n",
-                   instr.opcode, mnemonic, instr.mode, instr.reg1, instr.reg2, instr.immediate, vm.registers[R3_PC]-4);
+            if (vm_decode_instruction(&vm, error_pc, &instr) == VM_ERROR_NONE) {
+                char disasm[256];
+                vm_disassemble_instruction(&vm, &instr, disasm, sizeof(disasm));
+                fprintf(stderr, "Error occurred at PC=0x%04X, instruction: %s\n", error_pc, disasm);
+            }
+            
             vm_cleanup(&vm);
             return 1;
         }
