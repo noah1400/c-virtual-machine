@@ -686,12 +686,14 @@ class Assembler:
                 self.data_address += padding
         
         elif directive == ".equ" or directive == ".set":
-            parts = args.split(None, 1)
+            parts = args.split(',', 1)
             if len(parts) != 2:
                 self.error(f"Invalid format for {directive}: {args}")
                 return
             
             name, value_str = parts
+            name = name.strip()
+            value_str = value_str.strip()
             if not re.match(r'^[A-Za-z_.][A-Za-z0-9_.]*$', name):
                 self.error(f"Invalid symbol name: {name}")
                 return

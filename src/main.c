@@ -406,8 +406,8 @@ int main(int argc, char *argv[]) {
             Instruction instr;
             vm_decode_instruction(&vm, vm.registers[R3_PC]-4, &instr);
             const char* mnemonic = vm_opcode_to_mnemonic(instr.opcode);
-            printf("Next: OP=0x%02X (%s) MODE=0x%01X R1=0x%01X R2=0x%01X IMM=0x%03X\n",
-                   instr.opcode, mnemonic, instr.mode, instr.reg1, instr.reg2, instr.immediate);
+            printf("OP=0x%02X (%s) MODE=0x%01X R1=0x%01X R2=0x%01X IMM=0x%03x | PC=%04x\n",
+                   instr.opcode, mnemonic, instr.mode, instr.reg1, instr.reg2, instr.immediate, vm.registers[R3_PC]-4);
             vm_cleanup(&vm);
             return 1;
         }

@@ -352,6 +352,8 @@ static int handle_arithmetic(VM *vm, Instruction *instr) {
             
             // Set overflow flag for signed overflow
             cpu_set_flag(vm, OVER_FLAG, (operand1 == 0x80000000));
+            // 0 flag if result is zero
+            cpu_set_flag(vm, ZERO_FLAG, result == 0);
             
             vm->registers[dest_reg] = result;
             break;
