@@ -1,4 +1,5 @@
 #include <debug.h>
+#include <stdio.h>
 
 void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
     if (!vm || !data || size < 4) {
@@ -18,6 +19,8 @@ void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
     // Read symbol count
     uint32_t symbol_count = *((uint32_t*)ptr);
     ptr += 4;
+    
+    printf("Loading %u symbols...\n", symbol_count);
     
     // Allocate symbol array
     vm->debug_info->symbols = (Symbol*)malloc(symbol_count * sizeof(Symbol));
@@ -91,6 +94,8 @@ void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
     uint32_t line_count = *((uint32_t*)ptr);
     ptr += 4;
     
+    printf("Loading %u source lines...\n", line_count);
+    
     // Allocate source line array
     vm->debug_info->source_lines = (SourceLine*)malloc(line_count * sizeof(SourceLine));
     if (!vm->debug_info->source_lines) {
@@ -99,16 +104,26 @@ void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
     
     vm->debug_info->source_line_count = line_count;
     
-    // Read source lines
+    // Create a map of unique file paths to help correct cross-references
+    char *file_paths[100] = {NULL};  // Up to 100 unique source files
+    int file_count = 0;
+    
+    // First pass: collect unique source file paths and properly initialize all entries
     for (uint32_t i = 0; i < line_count && ptr < data + size; i++) {
+        SourceLine *line = &vm->debug_info->source_lines[i];
+        
+        // Initialize to NULL to prevent issues if we have to exit early
+        line->source = NULL;
+        line->source_file = NULL;
+        
         // Address
         if (ptr + 4 >= data + size) break;
-        vm->debug_info->source_lines[i].address = *((uint32_t*)ptr);
+        line->address = *((uint32_t*)ptr);
         ptr += 4;
         
         // Line number
         if (ptr + 4 >= data + size) break;
-        vm->debug_info->source_lines[i].line_num = *((uint32_t*)ptr);
+        line->line_num = *((uint32_t*)ptr);
         ptr += 4;
         
         // Source text length
@@ -121,13 +136,13 @@ void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
         }
         
         // Allocate and copy source text
-        vm->debug_info->source_lines[i].source = (char*)malloc(source_len + 1);
-        if (!vm->debug_info->source_lines[i].source) {
+        line->source = (char*)malloc(source_len + 1);
+        if (!line->source) {
             continue;  // Skip if allocation fails
         }
         
-        memcpy(vm->debug_info->source_lines[i].source, ptr, source_len);
-        vm->debug_info->source_lines[i].source[source_len] = '\0';
+        memcpy(line->source, ptr, source_len);
+        line->source[source_len] = '\0';
         ptr += source_len;
         
         // Source file path length
@@ -139,16 +154,83 @@ void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
         if (file_len > 0) {
             if (ptr + file_len >= data + size) break;
             
-            vm->debug_info->source_lines[i].source_file = (char*)malloc(file_len + 1);
-            if (vm->debug_info->source_lines[i].source_file) {
-                memcpy(vm->debug_info->source_lines[i].source_file, ptr, file_len);
-                vm->debug_info->source_lines[i].source_file[file_len] = '\0';
+            // Check if we've already seen this path
+            char temp_path[512] = {0};
+            memcpy(temp_path, ptr, file_len < 511 ? file_len : 511);
+            
+            // Look for basename within the path
+            char *basename = strrchr(temp_path, '/');
+            if (!basename) {
+                basename = strrchr(temp_path, '\\');
             }
+            if (basename) {
+                basename++;  // Skip the slash
+            } else {
+                basename = temp_path;  // Use the whole thing if no separator
+            }
+            
+            // See if we already have this file
+            int file_index = -1;
+            for (int j = 0; j < file_count; j++) {
+                char *existing_basename = strrchr(file_paths[j], '/');
+                if (!existing_basename) {
+                    existing_basename = strrchr(file_paths[j], '\\');
+                }
+                if (existing_basename) {
+                    existing_basename++;
+                } else {
+                    existing_basename = file_paths[j];
+                }
+                
+                // If we find a match by basename, use that
+                if (strcmp(basename, existing_basename) == 0) {
+                    file_index = j;
+                    break;
+                }
+            }
+            
+            // If we don't have this file already, add it
+            if (file_index == -1 && file_count < 100) {
+                file_paths[file_count] = strdup(temp_path);
+                file_index = file_count++;
+                printf("New source file %d: %s (basename: %s)\n", 
+                       file_index, file_paths[file_index], basename);
+            }
+            
+            // Now use the consistent path
+            if (file_index >= 0) {
+                line->source_file = strdup(file_paths[file_index]);
+            } else {
+                // Fallback: just use what we have
+                line->source_file = (char*)malloc(file_len + 1);
+                if (line->source_file) {
+                    memcpy(line->source_file, ptr, file_len);
+                    line->source_file[file_len] = '\0';
+                }
+            }
+            
             ptr += file_len;
         } else {
-            vm->debug_info->source_lines[i].source_file = NULL;
+            line->source_file = NULL;
+        }
+        
+        // Display debug info for every 100th line
+        if (i % 100 == 0) {
+            printf("Source line %d: addr=0x%04X file=%s line=%d src=%s\n", 
+                   i, line->address, 
+                   line->source_file ? line->source_file : "(none)",
+                   line->line_num,
+                   line->source ? (line->source[0] == '.' ? "<directive>" : line->source) : "(none)");
         }
     }
+    
+    // Clean up the file path array
+    for (int i = 0; i < file_count; i++) {
+        free(file_paths[i]);
+    }
+    
+    printf("Debug symbols loaded: %u symbols, %u source lines\n", 
+           vm->debug_info->symbol_count, vm->debug_info->source_line_count);
 }
 
 // Function to free debug info
@@ -208,53 +290,209 @@ Symbol* find_symbol_by_address(VM *vm, uint32_t address) {
     return closest;
 }
 
+void debug_print_source_info(VM *vm) {
+    if (!vm || !vm->debug_info) {
+        printf("No debug information available\n");
+        return;
+    }
+    
+    printf("\n--- Debug Source Files Info ---\n");
+    int unique_files = 0;
+    char *previous_file = NULL;
+    
+    for (uint32_t i = 0; i < vm->debug_info->source_line_count; i++) {
+        SourceLine *line = &vm->debug_info->source_lines[i];
+        
+        // Only print when we encounter a new filename to avoid flooding
+        if (line->source_file && (!previous_file || 
+            strcmp(line->source_file, previous_file) != 0)) {
+            
+            printf("Source file at addr 0x%04X: '%s'\n", 
+                   line->address, line->source_file);
+            
+            previous_file = line->source_file;
+            unique_files++;
+            
+            // Print the first line from this file
+            printf("  Sample line: %s\n", line->source ? line->source : "(empty)");
+        }
+    }
+    
+    printf("Found %d unique source files among %d source lines\n", 
+           unique_files, vm->debug_info->source_line_count);
+}
+
+void debug_dump_source_mapping(VM *vm) {
+    if (!vm || !vm->debug_info) {
+        printf("No debug information available\n");
+        return;
+    }
+    
+    printf("\n=== SOURCE MAPPING DUMP ===\n");
+    
+    // Count and display unique source files
+    printf("Source files in debug info:\n");
+    int unique_files = 0;
+    char **file_list = malloc(sizeof(char*) * vm->debug_info->source_line_count);
+    if (!file_list) {
+        printf("Memory allocation error\n");
+        return;
+    }
+    
+    for (uint32_t i = 0; i < vm->debug_info->source_line_count; i++) {
+        SourceLine *line = &vm->debug_info->source_lines[i];
+        
+        if (!line->source_file) continue;
+        
+        // Check if we've seen this file before
+        int found = 0;
+        for (int j = 0; j < unique_files; j++) {
+            if (strcmp(file_list[j], line->source_file) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        
+        if (!found) {
+            file_list[unique_files++] = line->source_file;
+            printf("  %d: %s\n", unique_files, line->source_file);
+        }
+    }
+    
+    printf("Total unique source files: %d\n\n", unique_files);
+    free(file_list);
+    
+    // Show some sample address to source mappings
+    printf("Sample address mappings:\n");
+    for (uint32_t i = 0; i < vm->debug_info->source_line_count && i < 20; i++) {
+        SourceLine *line = &vm->debug_info->source_lines[i];
+        printf("  0x%04X -> Line %4d in %-20s: %s\n", 
+               line->address, 
+               line->line_num,
+               line->source_file ? line->source_file : "(none)",
+               line->source ? line->source : "(none)");
+    }
+    
+    printf("... %d more mappings ...\n", vm->debug_info->source_line_count - 20);
+    printf("=== END SOURCE MAPPING ===\n\n");
+}
+
 // Function to find source line by address
 SourceLine* find_source_line_by_address(VM *vm, uint32_t address) {
     if (!vm || !vm->debug_info) {
         return NULL;
     }
     
-    // First, try to find an exact match for the address
-    SourceLine *exact_match = NULL;
+    if (vm->debug_mode > 1) {  // Extra verbose debugging
+        printf("\nLooking for source line at address: 0x%04X\n", address);
+    }
+    
+    // First, look for exact address match
+    SourceLine *best_match = NULL;
+    int best_score = -1;
+    
     for (uint32_t i = 0; i < vm->debug_info->source_line_count; i++) {
         SourceLine *line = &vm->debug_info->source_lines[i];
+        
         if (line->address == address) {
-            // For exact matches, prefer lines from included files over include directives
-            if (line->source && strstr(line->source, ".include") == NULL) {
-                return line; // Found an exact match that's not an include directive
+            // Skip invalid entries
+            if (!line->source) {
+                continue;
             }
-            exact_match = line; // Remember this, but keep looking for better matches
+            
+            // Skip .include directives
+            if (strstr(line->source, ".include") != NULL) {
+                continue;
+            }
+            
+            int score = 10;  // Base score for exact address match
+            
+            // Check if this is from an included file (not main.asm)
+            if (line->source_file) {
+                score += 5;  // Having a source file is good
+                
+                // Prefer included files over main.asm
+                char *filename = strrchr(line->source_file, '/');
+                if (!filename) {
+                    filename = strrchr(line->source_file, '\\');
+                }
+                filename = filename ? filename + 1 : line->source_file;
+                
+                // Included files are more specific and get higher priority
+                if (strcmp(filename, "main.asm") != 0) {
+                    score += 50;  // Much higher priority for included files
+                    
+                    if (vm->debug_mode > 1) {
+                        printf("Found included file match: %s (score %d)\n", filename, score);
+                    }
+                }
+            }
+            
+            // Keep the highest scoring match
+            if (score > best_score) {
+                best_match = line;
+                best_score = score;
+            }
         }
     }
     
-    if (exact_match) {
-        return exact_match; // Return the exact match if we found one
+    // If we found an exact address match, return it
+    if (best_match) {
+        if (vm->debug_mode > 1) {
+            printf("Best exact match: 0x%04X line %d in %s\n", 
+                best_match->address, best_match->line_num,
+                best_match->source_file ? best_match->source_file : "(none)");
+        }
+        return best_match;
     }
     
-    // If no exact match, find closest line before the address
-    // First, group by source file to find all candidates
-    SourceLine *best_candidates[64] = {NULL}; // Up to 64 different source files
-    uint32_t best_distances[64] = {0};
+    // If no exact match, find nearest line before this address
+    // Group by source file to find most relevant matches
+    typedef struct {
+        SourceLine *line;
+        uint32_t distance;
+        char *filename;  // Just the basename for comparison
+    } CandidateLine;
+    
+    CandidateLine candidates[50] = {0};  // Up to 50 different source files
     int candidate_count = 0;
     
+    // Find the closest line before address for each source file
     for (uint32_t i = 0; i < vm->debug_info->source_line_count; i++) {
         SourceLine *line = &vm->debug_info->source_lines[i];
+        
+        // Skip invalid entries
+        if (!line->source) {
+            continue;
+        }
+        
+        // Skip .include directives
+        if (strstr(line->source, ".include") != NULL) {
+            continue;
+        }
         
         // Line must be before the address
         if (line->address <= address) {
             uint32_t distance = address - line->address;
             
-            // Skip .include directives for closest-match searches too
-            if (line->source && strstr(line->source, ".include") != NULL) {
-                continue;
+            // Extract filename (basename)
+            char *filename = NULL;
+            if (line->source_file) {
+                filename = strrchr(line->source_file, '/');
+                if (!filename) {
+                    filename = strrchr(line->source_file, '\\');
+                }
+                filename = filename ? filename + 1 : line->source_file;
+            } else {
+                // If no source file, use a placeholder
+                filename = "unknown";
             }
             
-            // Check if we already have a candidate for this source file
+            // Check if we already have a candidate for this file
             int file_idx = -1;
             for (int j = 0; j < candidate_count; j++) {
-                if (best_candidates[j] && best_candidates[j]->source_file && 
-                    line->source_file && 
-                    strcmp(best_candidates[j]->source_file, line->source_file) == 0) {
+                if (candidates[j].filename && 
+                    strcmp(candidates[j].filename, filename) == 0) {
                     file_idx = j;
                     break;
                 }
@@ -262,28 +500,52 @@ SourceLine* find_source_line_by_address(VM *vm, uint32_t address) {
             
             if (file_idx >= 0) {
                 // Update if this line is closer
-                if (distance < best_distances[file_idx]) {
-                    best_candidates[file_idx] = line;
-                    best_distances[file_idx] = distance;
+                if (distance < candidates[file_idx].distance) {
+                    candidates[file_idx].line = line;
+                    candidates[file_idx].distance = distance;
                 }
-            } else if (candidate_count < 64) {
+            } else if (candidate_count < 50) {
                 // Add new source file candidate
-                best_candidates[candidate_count] = line;
-                best_distances[candidate_count] = distance;
+                candidates[candidate_count].line = line;
+                candidates[candidate_count].distance = distance;
+                candidates[candidate_count].filename = filename;
                 candidate_count++;
             }
         }
     }
     
-    // Find the closest candidate across all source files
+    // Find closest overall match, with preference to included files
     SourceLine *closest = NULL;
     uint32_t closest_distance = 0xFFFFFFFF;
+    int closest_score = -1;
     
     for (int i = 0; i < candidate_count; i++) {
-        if (best_candidates[i] && best_distances[i] < closest_distance) {
-            closest = best_candidates[i];
-            closest_distance = best_distances[i];
+        CandidateLine *candidate = &candidates[i];
+        
+        // Calculate score based on distance and filename
+        int score = 0;
+        
+        // Closer is better - use inverse of distance as part of score
+        // But max out at 10 to avoid overflow with very small distances
+        score += 10 - (candidate->distance > 1000 ? 10 : candidate->distance / 100);
+        
+        // Prefer included files over main
+        if (candidate->filename && strcmp(candidate->filename, "main.asm") != 0) {
+            score += 50;  // Much higher priority for included files
         }
+        
+        if (score > closest_score || 
+            (score == closest_score && candidate->distance < closest_distance)) {
+            closest = candidate->line;
+            closest_distance = candidate->distance;
+            closest_score = score;
+        }
+    }
+    
+    if (vm->debug_mode > 1 && closest) {
+        printf("Best closest match: 0x%04X (distance %u) line %d in %s\n", 
+            closest->address, closest_distance, closest->line_num,
+            closest->source_file ? closest->source_file : "(none)");
     }
     
     return closest;

@@ -19,6 +19,7 @@ void print_usage(const char *program_name) {
     printf("Options:\n");
     printf("  -m SIZE       Set memory size in KB (default: 64)\n");
     printf("  -d            Enable debug mode\n");
+    printf("  -dd           Enable extra verbose debug mode\n");
     printf("  -D            Disassemble program file instead of running it\n");
     printf("  -h            Show this help message\n");
     printf("\nExamples:\n");
@@ -62,6 +63,9 @@ int parse_arguments(int argc, char *argv[], int *memory_size, int *debug_mode,
                 case 'd':
                     // Debug mode
                     *debug_mode = 1;
+                    if (argv[i][2] == 'd') {
+                        *debug_mode = 2;
+                    }
                     break;
                     
                 case 'D':
@@ -254,6 +258,7 @@ void debug_print_current_context(VM *vm) {
         
         // Find source line
         SourceLine *line = find_source_line_by_address(vm, pc);
+        printf("line: %d %s %s", line->line_num, line->source, line->source_file);
         if (line) {
             // Extract filename from line's source_file
             char *filename = NULL;
@@ -364,11 +369,12 @@ void debug_list_symbols(VM *vm) {
     
     for (uint32_t i = 0; i < vm->debug_info->symbol_count; i++) {
         Symbol *sym = &vm->debug_info->symbols[i];
-        printf("%-20s %-6s 0x%04X   %d\n", 
+        printf("%-20s %-6s 0x%04X   %d %s\n", 
                sym->name, 
                sym->type == 0 ? "CODE" : "DATA", 
                sym->address, 
-               sym->line_num);
+               sym->line_num,
+               sym->source_file ? sym->source_file : "");
     }
 }
 
@@ -694,6 +700,8 @@ int main(int argc, char *argv[]) {
     // Load program
     printf("Loading program '%s'...\n", program_file);
     result = vm_load_program_file(&vm, program_file);
+    debug_print_source_info(&vm);
+    debug_dump_source_mapping(&vm);
     if (result != VM_ERROR_NONE) {
         fprintf(stderr, "Failed to load program: %s\n", vm_get_error_message(&vm));
         vm_cleanup(&vm);

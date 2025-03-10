@@ -13,4 +13,8 @@ Symbol* find_symbol_by_address(VM *vm, uint32_t address);
 
 SourceLine* find_source_line_by_address(VM *vm, uint32_t address);
 
+void debug_print_source_info(VM *vm);
+
+void debug_dump_source_mapping(VM *vm);
+
 #endif // _DEBUG_H_

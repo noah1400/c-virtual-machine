@@ -945,7 +945,9 @@ class Assembler:
             # Store label line number and source file for debugging
             if not hasattr(self, 'label_lines'):
                 self.label_lines = {}
+            # Save the CURRENT source file, not just "main.asm"
             self.label_lines[label] = (self.current_line, self.current_file)
+            print(f"Label {label} from file: {self.current_file}")  # Debug print
             
             # Process remainder of line if any
             remainder = remainder.strip()
@@ -979,12 +981,16 @@ class Assembler:
         self.process_instruction(opcode, operands)
         
         # Update debug info after adding the instruction
-        if hasattr(self, 'source_lines') and self.address > orig_address:
+        if not hasattr(self, 'source_lines'):
+            self.source_lines = {}
+
+        if self.address > orig_address:
             for addr in range(orig_address, self.address, 4):
+                print(f"Storing debug line at 0x{addr:04X}: file={self.current_file}, line={line}")
                 self.source_lines[addr] = (self.current_line, line.strip(), self.current_file)
     
     def include_file(self, filename):
-        """Process an included file with source tracking."""
+        """Process an included file with improved source tracking."""
         # Save previous source file and line
         prev_file = self.current_file
         prev_line = self.current_line
@@ -1005,11 +1011,14 @@ class Assembler:
         self.included_files.add(abs_path)
         
         try:
-            # Process the included file
+            # Process the included file - THIS IS KEY: set current_file to the included file
             with open(filename, 'r') as f:
                 self.current_file = abs_path  # Use absolute path for debug info
+                print(f"Including file: {filename} (as {self.current_file})")  # Debug print
+                
                 for line_num, line in enumerate(f, 1):
                     self.current_line = line_num
+                    # Process this line with source_file set to the included file
                     self.process_line(line)
         except FileNotFoundError:
             self.error(f"Include file not found: {filename}")
@@ -1079,13 +1088,15 @@ class Assembler:
                 # If we added instructions, store debug info
                 if self.address > orig_address:
                     for addr in range(orig_address, self.address, 4):
-                        self.source_lines[addr] = (i, line.strip(), self.current_file)
+                        file_name = os.path.basename(self.current_file)
+                        self.source_lines[addr] = (i, line.strip(), file_name)
                 
                 # If we added data, store debug info
                 if self.data_address > orig_data_address:
                     for addr in range(orig_data_address, self.data_address):
                         data_addr = DATA_SEGMENT_BASE + (addr - DATA_SEGMENT_BASE)
-                        self.source_lines[data_addr] = (i, line.strip(), self.current_file)
+                        file_name = os.path.basename(self.current_file)
+                        self.source_lines[data_addr] = (i, line.strip(), file_name)
             except Exception as e:
                 self.error(f"Exception: {str(e)}")
         
@@ -1178,9 +1189,12 @@ class Assembler:
             source_file = b''
             
             if name in self.label_lines:
-                line_num, label_file = self.label_lines[name]
-                if label_file:
-                    source_file = label_file.encode('utf-8')
+                line_num, source_file_path = self.label_lines[name]
+                if source_file_path:
+                    # Use basename to avoid path encoding issues
+                    basename = os.path.basename(source_file_path)
+                    source_file = basename.encode('utf-8')
+                    print(f"Symbol {name} at 0x{addr:04X} from file {basename}")
             
             symbol_table.extend(struct.pack("<I", line_num))
             
@@ -1194,8 +1208,11 @@ class Assembler:
         line_entries = len(self.source_lines)
         symbol_table.extend(struct.pack("<I", line_entries))
         
+        # Group and sort source lines by address
+        sorted_lines = sorted(self.source_lines.items(), key=lambda x: x[0])
+        
         # Add each entry
-        for addr, (line_num, source, source_file) in self.source_lines.items():
+        for addr, (line_num, source, source_file_path) in sorted_lines:
             symbol_table.extend(struct.pack("<I", addr))      # Address
             symbol_table.extend(struct.pack("<I", line_num))  # Line number
             
@@ -1204,11 +1221,28 @@ class Assembler:
             symbol_table.extend(struct.pack("<H", min(len(source_bytes), 255)))
             symbol_table.extend(source_bytes[:255])  # Limit to 255 bytes
             
-            # Source file path
-            source_file_bytes = source_file.encode('utf-8') if source_file else b''
+            # Source file path - Use basename instead of full path
+            if source_file_path:
+                basename = os.path.basename(source_file_path)
+                source_file_bytes = basename.encode('utf-8')
+                
+                # Debug print for source file
+                if addr % 64 == 0:  # Only print some entries to avoid flooding
+                    print(f"Line at 0x{addr:04X} from file: {basename}")
+            else:
+                source_file_bytes = b''
+            
             symbol_table.extend(struct.pack("<H", len(source_file_bytes)))
             if source_file_bytes:
                 symbol_table.extend(source_file_bytes)
+        
+        # Print some stats
+        code_lines = sum(1 for addr, _ in sorted_lines if addr < DATA_SEGMENT_BASE)
+        data_lines = len(sorted_lines) - code_lines
+        
+        print(f"Symbol table: {len(symbol_table)} bytes")
+        print(f"  - {num_labels} symbols")
+        print(f"  - {line_entries} source lines ({code_lines} code, {data_lines} data)")
         
         return symbol_table
     
