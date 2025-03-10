@@ -252,7 +252,7 @@ void debug_print_current_context(VM *vm) {
             }
         }
         
-        // Find source line - use our improved function
+        // Find source line
         SourceLine *line = find_source_line_by_address(vm, pc);
         if (line) {
             // Extract filename from line's source_file
