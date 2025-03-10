@@ -252,7 +252,7 @@ void debug_print_current_context(VM *vm) {
             }
         }
         
-        // Find source line
+        // Find source line - use our improved function
         SourceLine *line = find_source_line_by_address(vm, pc);
         if (line) {
             // Extract filename from line's source_file
@@ -282,34 +282,44 @@ void debug_print_current_context(VM *vm) {
             int context_lines = 2;  // Show 2 lines before and after
             printf("\nSource context:\n");
             
-            // Find lines before current
-            SourceLine *context_lines_array[5] = {NULL}; // Store pointers to context lines
-            int found_before = 0;
+            // Context lines array: [0,1] = before, [2] = current, [3,4] = after
+            SourceLine *context_array[5] = {NULL};
+            context_array[2] = line;  // Current line in the middle
             
-            // First, try to find lines in the same file
-            for (uint32_t j = 0; j < vm->debug_info->source_line_count; j++) {
-                SourceLine *curr_line = &vm->debug_info->source_lines[j];
-                
-                // Only consider lines from the same file
-                if (curr_line->source_file && line->source_file && 
-                    strcmp(curr_line->source_file, line->source_file) == 0) {
+            // Find lines from the same file with line numbers before and after
+            if (line->source_file) {
+                // Find context lines from the same file
+                for (uint32_t i = 0; i < vm->debug_info->source_line_count; i++) {
+                    SourceLine *curr = &vm->debug_info->source_lines[i];
                     
-                    // Look for lines before the current line
-                    if (curr_line->line_num < line->line_num && 
-                        curr_line->line_num >= line->line_num - context_lines) {
-                        int idx = line->line_num - curr_line->line_num - 1;
-                        if (idx >= 0 && idx < context_lines) {
-                            context_lines_array[idx] = curr_line;
-                            found_before++;
-                        }
+                    // Skip if from a different file
+                    if (!curr->source_file || strcmp(curr->source_file, line->source_file) != 0) {
+                        continue;
                     }
                     
-                    // Look for lines after the current line
-                    if (curr_line->line_num > line->line_num && 
-                        curr_line->line_num <= line->line_num + context_lines) {
-                        int idx = context_lines + (curr_line->line_num - line->line_num);
-                        if (idx > context_lines && idx < 5) {
-                            context_lines_array[idx] = curr_line;
+                    // Skip .include directives for context
+                    if (curr->source && strstr(curr->source, ".include") != NULL) {
+                        continue;
+                    }
+                    
+                    // Lines before current
+                    if (curr->line_num < line->line_num) {
+                        int slot = -1;
+                        if (line->line_num - curr->line_num == 1) slot = 1;  // Immediately before
+                        else if (line->line_num - curr->line_num == 2) slot = 0;  // Two lines before
+                        
+                        if (slot >= 0 && slot < context_lines) {
+                            context_array[slot] = curr;
+                        }
+                    }
+                    // Lines after current
+                    else if (curr->line_num > line->line_num) {
+                        int slot = -1;
+                        if (curr->line_num - line->line_num == 1) slot = 3;  // Immediately after
+                        else if (curr->line_num - line->line_num == 2) slot = 4;  // Two lines after
+                        
+                        if (slot >= context_lines + 1 && slot < 5) {
+                            context_array[slot] = curr;
                         }
                     }
                 }
@@ -317,9 +327,8 @@ void debug_print_current_context(VM *vm) {
             
             // Display context lines before current
             for (int i = 0; i < context_lines; i++) {
-                if (context_lines_array[i]) {
-                    printf("%4d: %s\n", context_lines_array[i]->line_num, 
-                           context_lines_array[i]->source);
+                if (context_array[i]) {
+                    printf("%4d: %s\n", context_array[i]->line_num, context_array[i]->source);
                 }
             }
             
@@ -332,9 +341,8 @@ void debug_print_current_context(VM *vm) {
             
             // Lines after current
             for (int i = context_lines + 1; i < 5; i++) {
-                if (context_lines_array[i]) {
-                    printf("%4d: %s\n", context_lines_array[i]->line_num, 
-                           context_lines_array[i]->source);
+                if (context_array[i]) {
+                    printf("%4d: %s\n", context_array[i]->line_num, context_array[i]->source);
                 }
             }
         }
