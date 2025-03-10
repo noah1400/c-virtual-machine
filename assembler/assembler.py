@@ -981,7 +981,7 @@ class Assembler:
         # Update debug info after adding the instruction
         if hasattr(self, 'source_lines') and self.address > orig_address:
             for addr in range(orig_address, self.address, 4):
-                self.source_lines[addr] = (self.current_line, line.strip())
+                self.source_lines[addr] = (self.current_line, line.strip(), self.current_file)
     
     def include_file(self, filename):
         """Process an included file with source tracking."""
