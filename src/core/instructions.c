@@ -724,16 +724,12 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 
             case 7:  // Print floating point (emulated using fixed-point)
                 {
-                    // Interpret param1 as fixed-point (16.16 format)
-                    int32_t fixed_val = (int32_t)param1;
-                    int32_t integer_part = fixed_val >> 16;
-                    uint32_t frac_part = fixed_val & 0xFFFF;
-                    
-                    // Convert fraction to decimal
-                    // (multiply by 10000 and divide by 2^16)
-                    uint32_t decimal = (frac_part * 10000) >> 16;
-                    
-                    printf("%d.%04u", integer_part, decimal);
+                    // Interpret param1 as signed 16.16 fixed-point
+                    int negative = (param1 & 0x80000000) != 0;
+                    uint32_t magnitude = negative ? 0u - param1 : param1;
+                    uint32_t decimal = ((magnitude & 0xFFFF) * 10000u) >> 16;
+
+                    printf("%s%u.%04u", negative ? "-" : "", magnitude >> 16, decimal);
                     fflush(stdout);
                 }
                 break;
