@@ -9,9 +9,6 @@ int vm_decode_instruction(VM *vm, uint16_t address, Instruction *instr);
 // Fetch and decode the instruction at the program counter
 uint32_t vm_fetch_instruction(VM *vm);
 
-// Encode an instruction structure back to binary format
-uint32_t vm_encode_instruction(Instruction *instr);
-
 // Disassemble an instruction into human-readable text (for debugging)
 void vm_disassemble_instruction(VM *vm, Instruction *instr, char *buffer, size_t buffer_size);
 

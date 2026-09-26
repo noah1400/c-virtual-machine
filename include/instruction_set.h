@@ -1,10 +1,12 @@
 #ifndef _INSTRUCTION_SET_H_
 #define _INSTRUCTION_SET_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 // Instruction format
 // [Opcode: 8 bits][Mode: 4 bits][Reg1: 4 bits][Reg2: 4 bits][Immediate/Offset: 12 bits]
+// IMM, MEM, STK and BAS modes use the Reg2 field as the top 4 bits of a 16-bit immediate.
 
 // Addressing modes
 #define IMM_MODE (uint8_t)0x0 // Immediate: Value in instruction
@@ -105,4 +107,52 @@
 #define DIR_FLAG    (uint8_t)0b00100000 // Direction flag
 #define SYS_FLAG    (uint8_t)0b01000000 // System mode flag
 #define TRAP_FLAG   (uint8_t)0b10000000 // Trap flag (debug)
+
+// Instruction structure that represents a decoded instruction
+typedef struct {
+    uint8_t opcode;          // 8-bit opcode
+    uint8_t mode;            // 4-bit addressing mode
+    uint8_t reg1;            // 4-bit register 1
+    uint8_t reg2;            // 4-bit register 2
+    uint16_t immediate;      // 12-bit offset or 16-bit immediate, see above
+} Instruction;
+
+// Addressing mode sets accepted by an instruction's variable operand
+#define MODE_BIT(mode)  (1u << (mode))
+#define MODES_IMM_REG   (MODE_BIT(IMM_MODE) | MODE_BIT(REG_MODE))
+#define MODES_ADDR      (MODE_BIT(MEM_MODE) | MODE_BIT(REGM_MODE) | MODE_BIT(IDX_MODE) | \
+                         MODE_BIT(STK_MODE) | MODE_BIT(BAS_MODE))
+#define MODES_SRC       (MODES_IMM_REG | MODES_ADDR)
+
+typedef enum {
+    FMT_NONE,           // HALT
+    FMT_REG,            // INC Rd
+    FMT_IMM,            // SYSCALL #n
+    FMT_OPT_IMM,        // RET [#n]
+    FMT_OPERAND,        // JMP target, PUSH value (operand register in reg1)
+    FMT_REG_OPERAND,    // LOAD Rd, source (operand register in reg2)
+    FMT_OPERAND_REG,    // OUT port, Rs (operand register in reg2)
+    FMT_REG_REG,        // MOVE Rd, Rs
+    FMT_REG_REG_SIZE    // MEMCPY Rd, Rs, #n | Rn (size register in the immediate field)
+} OperandFormat;
+
+typedef struct {
+    const char *mnemonic;
+    uint8_t opcode;
+    uint8_t format;
+    uint8_t modes;
+} InstructionInfo;
+
+const InstructionInfo *isa_by_opcode(uint8_t opcode);
+const InstructionInfo *isa_by_mnemonic(const char *mnemonic);
+const InstructionInfo *isa_table(size_t *count);
+
+int isa_register_index(const char *name);
+const char *isa_register_name(uint8_t reg);
+const char *isa_mode_name(uint8_t mode);
+
+int isa_mode_has_wide_immediate(uint8_t mode);
+uint32_t isa_encode(const Instruction *instr);
+void isa_decode(uint32_t word, Instruction *instr);
+
 #endif // _INSTRUCTION_SET_H_

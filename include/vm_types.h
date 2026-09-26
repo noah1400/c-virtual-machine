@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include "instruction_set.h"
 
 // Register definitions
 #define R0_ACC  0  // Accumulator
@@ -83,15 +84,6 @@ typedef struct {
 } Breakpoint;
 
 
-
-// Instruction structure that represents a decoded instruction
-typedef struct {
-    uint8_t opcode;          // 8-bit opcode
-    uint8_t mode;            // 4-bit addressing mode
-    uint8_t reg1;            // 4-bit register 1
-    uint8_t reg2;            // 4-bit register 2
-    uint16_t immediate;      // 12-bit immediate/offset
-} Instruction;
 
 // Virtual Machine state
 typedef struct {
