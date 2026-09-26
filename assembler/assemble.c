@@ -52,6 +52,19 @@ void asm_free(Assembler *as) {
     for (int i = 0; i < SECTION_COUNT; i++) {
         free(as->sections[i].bytes);
     }
+    for (size_t i = 0; i < as->macro_count; i++) {
+        Macro *macro = &as->macros[i];
+        for (int k = 0; k < macro->param_count; k++) {
+            free(macro->params[k]);
+        }
+        for (int k = 0; k < macro->body_count; k++) {
+            free(macro->body[k]);
+        }
+        free(macro->name);
+        free(macro->params);
+        free(macro->body);
+    }
+    free(as->macros);
     free(as->lines);
     free(as->files);
     free(as->results);
@@ -663,7 +676,7 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
     }
 }
 
-static void assemble_line(Assembler *as, size_t index) {
+static void assemble_line(Assembler *as, size_t index, int labels_only) {
     LineResult *result = &as->results[index];
     TokenList tokens;
     char error[128];
@@ -685,7 +698,9 @@ static void assemble_line(Assembler *as, size_t index) {
     result->section = -1;
 
     Token *t = &tokens.items[p.pos];
-    if (t->kind == TOK_IDENT && t->text[0] == '.') {
+    if (labels_only) {
+        // A macro invocation; its expansion follows as separate lines
+    } else if (t->kind == TOK_IDENT && t->text[0] == '.') {
         directive(as, &p);
     } else if (t->kind == TOK_IDENT) {
         instruction(as, &p, result);
@@ -721,8 +736,10 @@ static void run_pass(Assembler *as, int pass) {
                 // An included file does not change the section of the file that includes it
                 as->section = as->section_stack[--as->section_depth];
                 break;
+            case LINE_MACRO_DEFINITION:
+                break;
             default:
-                assemble_line(as, i);
+                assemble_line(as, i, as->line->kind == LINE_MACRO_CALL);
                 break;
         }
     }

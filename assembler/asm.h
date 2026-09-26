@@ -20,22 +20,39 @@ typedef struct {
     int64_t number;
     char *text;         // identifier or string bytes, NUL-terminated
     size_t length;      // string length, which may include embedded NULs
+    size_t start;       // offset of the token in the line
 } Token;
 
 typedef struct {
     Token *items;
     int count;
+    size_t end;         // offset where the statement ends, before any comment
     char *arena;        // storage for token text
 } TokenList;
 
-typedef enum { LINE_SOURCE, LINE_INCLUDE_BEGIN, LINE_INCLUDE_END } LineKind;
+typedef enum {
+    LINE_SOURCE,
+    LINE_INCLUDE_BEGIN,
+    LINE_INCLUDE_END,
+    LINE_MACRO_DEFINITION,  // shown in listings, otherwise ignored
+    LINE_MACRO_CALL,        // only its labels are assembled; the expansion follows
+} LineKind;
 
 typedef struct {
     LineKind kind;
     const char *file;
     int number;
     char *text;
+    int expanded;           // produced by a macro expansion
 } SourceLine;
+
+typedef struct {
+    char *name;
+    char **params;
+    int param_count;
+    char **body;
+    int body_count;
+} Macro;
 
 typedef enum { SYM_CODE = 0, SYM_DATA = 1, SYM_CONST = 2 } SymbolKind;
 
@@ -84,6 +101,9 @@ typedef struct {
     size_t line_capacity;
     char **files;
     size_t file_count;
+    Macro *macros;
+    size_t macro_count;
+    unsigned expansions;
 
     int pass;
     Section sections[SECTION_COUNT];

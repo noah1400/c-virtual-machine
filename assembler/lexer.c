@@ -117,6 +117,7 @@ int lex_line(const char *line, TokenList *out, char *error, size_t error_size) {
 
         Token *t = &out->items[out->count++];
         memset(t, 0, sizeof(*t));
+        t->start = (size_t)(p - line);
 
         if (is_ident_start((unsigned char)*p)) {
             t->kind = TOK_IDENT;
@@ -192,6 +193,8 @@ int lex_line(const char *line, TokenList *out, char *error, size_t error_size) {
     Token *end = &out->items[out->count];
     memset(end, 0, sizeof(*end));
     end->kind = TOK_END;
+    end->start = (size_t)(p - line);
+    out->end = end->start;
     return 1;
 }
 

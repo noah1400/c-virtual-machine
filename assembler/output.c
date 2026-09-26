@@ -151,15 +151,16 @@ int output_listing(Assembler *as, const char *path) {
         const LineResult *r = &as->results[i];
         char bytes[64] = "";
 
-        if (line->kind != LINE_SOURCE) {
+        if (line->kind == LINE_INCLUDE_BEGIN || line->kind == LINE_INCLUDE_END) {
             continue;
         }
         if (line->file != current_file) {
             fprintf(file, "%s%s:\n", current_file ? "\n" : "", line->file);
             current_file = line->file;
         }
+        char marker = line->expanded ? '+' : ' ';
         if (r->section < 0) {
-            fprintf(file, "%5d                              %s\n", line->number, line->text);
+            fprintf(file, "%5d%c                             %s\n", line->number, marker, line->text);
             continue;
         }
 
@@ -178,7 +179,7 @@ int output_listing(Assembler *as, const char *path) {
                 snprintf(bytes + used, sizeof(bytes) - used, "...");
             }
         }
-        fprintf(file, "%5d  %04X  %-20s  %s\n", line->number, r->address, bytes, line->text);
+        fprintf(file, "%5d%c %04X  %-20s  %s\n", line->number, marker, r->address, bytes, line->text);
     }
 
     int ok = fclose(file) == 0;

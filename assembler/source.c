@@ -1,7 +1,20 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "asm.h"
+
+#define MAX_EXPANSION_DEPTH 32
+#define MAX_MACRO_ARGUMENTS 16
+
+typedef struct {
+    const char *includes[ASM_MAX_INCLUDE_DEPTH];
+    int include_depth;
+    Macro *defining;            // macro whose body is being collected
+    int expansion_depth;
+} Loader;
+
+static int handle_line(Assembler *as, Loader *loader, const char *file, int number, char *text, int expanded);
 
 static char *copy_string(const char *text, size_t length) {
     char *copy = malloc(length + 1);
@@ -97,7 +110,7 @@ static char *resolve_include(Assembler *as, const char *includer, const char *na
     return NULL;
 }
 
-static int add_line(Assembler *as, LineKind kind, const char *file, int number, char *text) {
+static int add_line(Assembler *as, LineKind kind, const char *file, int number, char *text, int expanded) {
     if (as->line_count == as->line_capacity) {
         size_t capacity = as->line_capacity ? as->line_capacity * 2 : 256;
         SourceLine *lines = realloc(as->lines, capacity * sizeof(SourceLine));
@@ -108,7 +121,7 @@ static int add_line(Assembler *as, LineKind kind, const char *file, int number, 
         as->lines = lines;
         as->line_capacity = capacity;
     }
-    as->lines[as->line_count++] = (SourceLine){ kind, file, number, text };
+    as->lines[as->line_count++] = (SourceLine){ kind, file, number, text, expanded };
     return 1;
 }
 
@@ -123,31 +136,23 @@ static const char *add_file(Assembler *as, char *path) {
     return path;
 }
 
-// Finds the file named by an .include directive, skipping any labels in front of it
-static int include_target(const char *text, char *out, size_t size) {
-    TokenList tokens;
-    char error[64];
-    int found = 0;
-
-    if (!lex_line(text, &tokens, error, sizeof(error))) {
-        return 0;
-    }
-
-    int i = 0;
-    while (tokens.items[i].kind == TOK_IDENT && token_is_punct(&tokens.items[i + 1], ':')) {
-        i += 2;
-    }
-    if (tokens.items[i].kind == TOK_IDENT && name_equals(tokens.items[i].text, ".include") &&
-        tokens.items[i + 1].kind == TOK_STRING) {
-        snprintf(out, size, "%s", tokens.items[i + 1].text);
-        found = 1;
-    }
-
-    tokens_free(&tokens);
-    return found;
+// Reports an error at the most recently added line
+static void loader_error(Assembler *as, const char *message, const char *detail) {
+    as->line = &as->lines[as->line_count - 1];
+    asm_error(as, message, detail);
+    as->line = NULL;
 }
 
-static int load_file(Assembler *as, char *path, const char **stack, int depth) {
+static Macro *find_macro(Assembler *as, const char *name) {
+    for (size_t i = 0; i < as->macro_count; i++) {
+        if (name_equals(as->macros[i].name, name)) {
+            return &as->macros[i];
+        }
+    }
+    return NULL;
+}
+
+static int load_file(Assembler *as, Loader *loader, char *path) {
     char *text = read_text(path);
     if (!text) {
         asm_error(as, "cannot read %s", path);
@@ -160,53 +165,18 @@ static int load_file(Assembler *as, char *path, const char **stack, int depth) {
         free(text);
         return 0;
     }
-    stack[depth] = file;
+    loader->includes[loader->include_depth] = file;
 
     int ok = 1;
     int number = 0;
-    char *line = text;
-    while (ok && *line) {
+    for (char *line = text; ok && *line;) {
         char *end = strchr(line, '\n');
         size_t length = end ? (size_t)(end - line) : strlen(line);
-        if (length > 0 && line[length - 1] == '\r') {
-            length--;
-        }
+        size_t kept = length > 0 && line[length - 1] == '\r' ? length - 1 : length;
+        char *copy = copy_string(line, kept);
 
-        char *copy = copy_string(line, length);
         number++;
-        if (!copy || !add_line(as, LINE_SOURCE, file, number, copy)) {
-            ok = 0;
-            break;
-        }
-
-        char target[512];
-        if (include_target(copy, target, sizeof(target))) {
-            size_t index = as->line_count - 1;
-            char *resolved = resolve_include(as, file, target);
-
-            as->line = &as->lines[index];
-            if (!resolved) {
-                asm_error(as, "cannot find include file \"%s\"", target);
-            } else if (depth + 1 >= ASM_MAX_INCLUDE_DEPTH) {
-                asm_error(as, "includes are nested too deeply");
-                free(resolved);
-            } else {
-                int cycle = 0;
-                for (int i = 0; i <= depth; i++) {
-                    cycle |= strcmp(stack[i], resolved) == 0;
-                }
-                if (cycle) {
-                    asm_error(as, "\"%s\" includes itself", resolved);
-                    free(resolved);
-                } else {
-                    ok = add_line(as, LINE_INCLUDE_BEGIN, file, number, NULL) &&
-                         load_file(as, resolved, stack, depth + 1) &&
-                         add_line(as, LINE_INCLUDE_END, file, number, NULL);
-                }
-            }
-            as->line = NULL;
-        }
-
+        ok = copy && handle_line(as, loader, file, number, copy, 0);
         line = end ? end + 1 : line + length;
     }
 
@@ -214,8 +184,287 @@ static int load_file(Assembler *as, char *path, const char **stack, int depth) {
     return ok;
 }
 
+static int include_file(Assembler *as, Loader *loader, const char *file, int number, const char *name) {
+    char *resolved = resolve_include(as, file, name);
+
+    if (!resolved) {
+        loader_error(as, "cannot find include file \"%s\"", name);
+        return 1;
+    }
+    if (loader->include_depth + 1 >= ASM_MAX_INCLUDE_DEPTH) {
+        loader_error(as, "includes are nested too deeply%s", "");
+        free(resolved);
+        return 1;
+    }
+    for (int i = 0; i <= loader->include_depth; i++) {
+        if (strcmp(loader->includes[i], resolved) == 0) {
+            loader_error(as, "\"%s\" includes itself", resolved);
+            free(resolved);
+            return 1;
+        }
+    }
+
+    loader->include_depth++;
+    int ok = add_line(as, LINE_INCLUDE_BEGIN, file, number, NULL, 0) && load_file(as, loader, resolved) &&
+             add_line(as, LINE_INCLUDE_END, file, number, NULL, 0);
+    loader->include_depth--;
+    return ok;
+}
+
+static int define_macro(Assembler *as, Loader *loader, const TokenList *tokens, int first) {
+    const Token *name = &tokens->items[first + 1];
+
+    if (first > 0) {
+        loader_error(as, "a macro definition cannot have a label%s", "");
+        return 1;
+    }
+    if (name->kind != TOK_IDENT || name->text[0] == '.') {
+        loader_error(as, "expected a macro name%s", "");
+        return 1;
+    }
+    if (isa_by_mnemonic(name->text) || isa_register_index(name->text) >= 0 || find_macro(as, name->text)) {
+        loader_error(as, "'%s' is already an instruction, register or macro", name->text);
+        return 1;
+    }
+
+    Macro *macros = realloc(as->macros, (as->macro_count + 1) * sizeof(Macro));
+    if (!macros) {
+        return 0;
+    }
+    as->macros = macros;
+    Macro *macro = &as->macros[as->macro_count++];
+    memset(macro, 0, sizeof(*macro));
+    macro->name = copy_string(name->text, strlen(name->text));
+    loader->defining = macro;
+
+    for (int i = first + 2; tokens->items[i].kind != TOK_END; i++) {
+        const Token *param = &tokens->items[i];
+        if (param->kind != TOK_IDENT || (tokens->items[i + 1].kind != TOK_END && !token_is_punct(&tokens->items[i + 1], ','))) {
+            loader_error(as, "expected macro parameter names separated by commas%s", "");
+            return 1;
+        }
+        char **params = realloc(macro->params, (size_t)(macro->param_count + 1) * sizeof(char *));
+        if (!params) {
+            return 0;
+        }
+        macro->params = params;
+        macro->params[macro->param_count++] = copy_string(param->text, strlen(param->text));
+        if (tokens->items[i + 1].kind != TOK_END) {
+            i++;
+        }
+    }
+    return macro->name != NULL;
+}
+
+static int append_body_line(Macro *macro, const char *text) {
+    char **body = realloc(macro->body, (size_t)(macro->body_count + 1) * sizeof(char *));
+    if (!body) {
+        return 0;
+    }
+    macro->body = body;
+    macro->body[macro->body_count] = copy_string(text, strlen(text));
+    return macro->body[macro->body_count++] != NULL;
+}
+
+// Splits text at commas outside of quotes and brackets
+static int split_arguments(const char *text, char **arguments, int max) {
+    int count = 0, depth = 0;
+    char quote = 0;
+    const char *start = text;
+
+    while (*text == ' ' || *text == '\t') {
+        text++;
+    }
+    if (*text == '\0') {
+        return 0;
+    }
+    for (const char *p = start;; p++) {
+        if (quote) {
+            if (*p == '\\' && p[1]) {
+                p++;
+            } else if (*p == quote) {
+                quote = 0;
+            }
+        } else if (*p == '"' || *p == '\'') {
+            quote = *p;
+        } else if (*p == '[' || *p == '(') {
+            depth++;
+        } else if (*p == ']' || *p == ')') {
+            depth--;
+        }
+
+        if (*p == '\0' || (*p == ',' && depth == 0 && !quote)) {
+            if (count == max) {
+                return -1;
+            }
+            const char *a = start, *b = p;
+            while (a < b && isspace((unsigned char)*a)) {
+                a++;
+            }
+            while (b > a && isspace((unsigned char)b[-1])) {
+                b--;
+            }
+            arguments[count++] = copy_string(a, (size_t)(b - a));
+            if (*p == '\0') {
+                return count;
+            }
+            start = p + 1;
+        }
+    }
+}
+
+// Replaces \param with its argument and \@ with the expansion number, outside of quotes
+static char *substitute(const Macro *macro, char **arguments, const char *line, unsigned id) {
+    size_t capacity = strlen(line) + 64, length = 0;
+    char *out = malloc(capacity);
+    char quote = 0;
+
+    for (const char *p = line; out && *p;) {
+        char piece[32];
+        const char *insert = NULL;
+        size_t skip = 1;
+
+        if (quote) {
+            if (*p == '\\' && p[1]) {
+                skip = 2;
+            } else if (*p == quote) {
+                quote = 0;
+            }
+        } else if (*p == '"' || *p == '\'') {
+            quote = *p;
+        } else if (*p == '\\' && p[1] == '@') {
+            snprintf(piece, sizeof(piece), "%u", id);
+            insert = piece;
+            skip = 2;
+        } else if (*p == '\\') {
+            for (int i = 0; i < macro->param_count; i++) {
+                size_t n = strlen(macro->params[i]);
+                if (strncmp(p + 1, macro->params[i], n) == 0 && !isalnum((unsigned char)p[1 + n]) && p[1 + n] != '_') {
+                    insert = arguments[i];
+                    skip = n + 1;
+                    break;
+                }
+            }
+        }
+
+        size_t add = insert ? strlen(insert) : skip;
+        if (length + add + 1 > capacity) {
+            capacity = (length + add + 1) * 2;
+            char *grown = realloc(out, capacity);
+            if (!grown) {
+                free(out);
+                return NULL;
+            }
+            out = grown;
+        }
+        memcpy(out + length, insert ? insert : p, add);
+        length += add;
+        p += skip;
+    }
+
+    if (out) {
+        out[length] = '\0';
+    }
+    return out;
+}
+
+static int expand_macro(Assembler *as, Loader *loader, Macro *macro, const char *file, int number, const char *args) {
+    char *arguments[MAX_MACRO_ARGUMENTS];
+    int count = split_arguments(args, arguments, MAX_MACRO_ARGUMENTS);
+    int ok = 1;
+
+    if (count != macro->param_count) {
+        char detail[160];
+        snprintf(detail, sizeof(detail), "%s expects %d argument%s", macro->name, macro->param_count,
+                 macro->param_count == 1 ? "" : "s");
+        loader_error(as, "%s", detail);
+    } else if (loader->expansion_depth >= MAX_EXPANSION_DEPTH) {
+        loader_error(as, "macro %s is expanded too deeply", macro->name);
+    } else {
+        unsigned id = as->expansions++;
+        loader->expansion_depth++;
+        for (int i = 0; ok && i < macro->body_count; i++) {
+            char *text = substitute(macro, arguments, macro->body[i], id);
+            ok = text && handle_line(as, loader, file, number, text, 1);
+        }
+        loader->expansion_depth--;
+    }
+
+    for (int i = 0; i < count; i++) {
+        free(arguments[i]);
+    }
+    return ok;
+}
+
+// Adds a line to the program, collecting macro bodies and splicing in includes and expansions
+static int handle_line(Assembler *as, Loader *loader, const char *file, int number, char *text, int expanded) {
+    TokenList tokens;
+    char error[64];
+
+    if (!lex_line(text, &tokens, error, sizeof(error))) {
+        // Macro bodies only become valid once their parameters are substituted; elsewhere pass 1 reports it
+        if (loader->defining) {
+            return append_body_line(loader->defining, text) &&
+                   add_line(as, LINE_MACRO_DEFINITION, file, number, text, expanded);
+        }
+        return add_line(as, LINE_SOURCE, file, number, text, expanded);
+    }
+
+    int first = 0;
+    while (tokens.items[first].kind == TOK_IDENT && token_is_punct(&tokens.items[first + 1], ':')) {
+        first += 2;
+    }
+    const Token *keyword = &tokens.items[first];
+    const char *word = keyword->kind == TOK_IDENT ? keyword->text : "";
+    int ok = 1;
+
+    if (loader->defining) {
+        Macro *macro = loader->defining;
+        if (name_equals(word, ".endm")) {
+            loader->defining = NULL;
+        } else if (name_equals(word, ".macro")) {
+            ok = add_line(as, LINE_MACRO_DEFINITION, file, number, text, expanded);
+            loader_error(as, "macro definitions cannot be nested%s", "");
+            tokens_free(&tokens);
+            return ok;
+        } else {
+            ok = append_body_line(macro, text);
+        }
+        tokens_free(&tokens);
+        return ok && add_line(as, LINE_MACRO_DEFINITION, file, number, text, expanded);
+    }
+
+    if (name_equals(word, ".macro")) {
+        ok = add_line(as, LINE_MACRO_DEFINITION, file, number, text, expanded) &&
+             define_macro(as, loader, &tokens, first);
+    } else if (name_equals(word, ".endm")) {
+        ok = add_line(as, LINE_SOURCE, file, number, text, expanded);
+        loader_error(as, ".endm without .macro%s", "");
+    } else if (name_equals(word, ".include") && tokens.items[first + 1].kind == TOK_STRING) {
+        ok = add_line(as, LINE_SOURCE, file, number, text, expanded) &&
+             include_file(as, loader, file, number, tokens.items[first + 1].text);
+    } else if (keyword->kind == TOK_IDENT && find_macro(as, word)) {
+        Macro *macro = find_macro(as, word);
+        const char *args = text + (tokens.items[first + 1].kind == TOK_END ? tokens.end : tokens.items[first + 1].start);
+        char *copy = copy_string(args, tokens.end - (size_t)(args - text));
+        ok = copy && add_line(as, LINE_MACRO_CALL, file, number, text, expanded) &&
+             expand_macro(as, loader, macro, file, number, copy);
+        free(copy);
+    } else {
+        ok = add_line(as, LINE_SOURCE, file, number, text, expanded);
+    }
+
+    tokens_free(&tokens);
+    return ok;
+}
+
 int source_load(Assembler *as, const char *path) {
-    const char *stack[ASM_MAX_INCLUDE_DEPTH];
+    Loader loader = { 0 };
     char *copy = copy_string(path, strlen(path));
-    return copy && load_file(as, copy, stack, 0) && as->errors == 0;
+    int ok = copy && load_file(as, &loader, copy);
+
+    if (ok && loader.defining) {
+        loader_error(as, "macro %s is missing .endm", loader.defining->name);
+    }
+    return ok && as->errors == 0;
 }
