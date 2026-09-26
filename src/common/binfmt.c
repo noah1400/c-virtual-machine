@@ -58,7 +58,7 @@ uint8_t *read_binary_file(const char *path, uint32_t *size, const char **error) 
         return NULL;
     }
 
-    uint8_t *buffer = malloc(length > 0 ? (size_t)length : 1);
+    uint8_t *buffer = malloc((size_t)length + 1);
     if (!buffer) {
         fclose(file);
         *error = "Out of memory";
@@ -73,6 +73,7 @@ uint8_t *read_binary_file(const char *path, uint32_t *size, const char **error) 
         return NULL;
     }
 
+    buffer[length] = 0;
     *size = (uint32_t)length;
     return buffer;
 }

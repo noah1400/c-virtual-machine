@@ -49,7 +49,7 @@ int vm32_is_image(const uint8_t *image, uint32_t size);
 // Returns NULL on success, otherwise a description of the problem
 const char *vm32_parse(const uint8_t *image, uint32_t size, Vm32Image *out);
 
-// Reads a whole file; returns NULL and sets *error on failure
+// Reads a whole file followed by a NUL byte; returns NULL and sets *error on failure
 uint8_t *read_binary_file(const char *path, uint32_t *size, const char **error);
 
 #endif // _BINFMT_H_
