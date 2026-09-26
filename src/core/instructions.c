@@ -543,6 +543,10 @@ int cpu_execute_instruction(VM *vm, const Instruction *instr) {
             vm->registers[instr->reg1] = effective_address(vm, instr, instr->reg2);
             return vm->last_error;
 
+        case LOADHI_OP:
+            vm->registers[instr->reg1] = (vm->registers[instr->reg1] & 0xFFFF) | ((uint32_t)instr->immediate << 16);
+            return VM_ERROR_NONE;
+
         case MOVE_OP:
             vm->registers[instr->reg1] = vm->registers[instr->reg2];
             return VM_ERROR_NONE;

@@ -555,6 +555,15 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
     }
 }
 
+static void emit_instruction(Assembler *as, const Instruction *in) {
+    uint8_t bytes[4];
+    uint32_t word = isa_encode(in);
+    for (int i = 0; i < 4; i++) {
+        bytes[i] = (uint8_t)(word >> (8 * i));
+    }
+    emit(as, bytes, 4);
+}
+
 // Alternative names for conditional jumps
 static const InstructionInfo *find_instruction(const char *mnemonic) {
     static const char *const aliases[][2] = {
@@ -606,18 +615,36 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
         return;
     }
 
-    Instruction in;
-    if (!encode(as, info, ops, count, &in)) {
-        return;
+    result->is_code = 1;
+
+    // LOAD of a constant outside 0-65535 loads the low half and then sets the high half with LOADHI
+    if (info->opcode == LOAD_OP && count == 2 && ops[0].mode == REG_MODE && ops[1].mode == IMM_MODE) {
+        int64_t value = ops[1].value;
+        if (as->pass == 1 && !ops[1].unresolved && (value < 0 || value > 0xFFFF)) {
+            result->wide = 1;
+        }
+        if (result->wide) {
+            if (as->pass == 2 && (value < INT32_MIN || value > (int64_t)UINT32_MAX)) {
+                asm_error(as, "constant %lld does not fit in 32 bits", (long long)value);
+                return;
+            }
+            Instruction low = { LOAD_OP, IMM_MODE, ops[0].reg, 0, (uint16_t)value };
+            Instruction high = { LOADHI_OP, IMM_MODE, ops[0].reg, 0, (uint16_t)((uint64_t)value >> 16) };
+            emit_instruction(as, &low);
+            emit_instruction(as, &high);
+            return;
+        }
+        if (as->pass == 2 && (value < 0 || value > 0xFFFF)) {
+            asm_error(as, "constant %lld needs 32 bits but is defined after this LOAD; define it earlier",
+                      (long long)value);
+            return;
+        }
     }
 
-    uint8_t bytes[4];
-    uint32_t word = isa_encode(&in);
-    for (int i = 0; i < 4; i++) {
-        bytes[i] = (uint8_t)(word >> (8 * i));
+    Instruction in;
+    if (encode(as, info, ops, count, &in)) {
+        emit_instruction(as, &in);
     }
-    emit(as, bytes, 4);
-    result->is_code = 1;
 }
 
 static void assemble_line(Assembler *as, size_t index) {

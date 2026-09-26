@@ -28,6 +28,7 @@
 #define LOADW_OP    (uint8_t)0x06 // LOADW | Reg, Src | Load word (16-bit) into register | None
 #define STOREW_OP   (uint8_t)0x07 // STOREW | Src, Dest | Store word (16-bit) to memory | None
 #define LEA_OP      (uint8_t)0x08 // LEA | Reg, Src | Load effective address into register | None
+#define LOADHI_OP   (uint8_t)0x09 // LOADHI | Reg, Imm | Replace the upper 16 bits of a register | None
 
 // Arithmetic Instructions (0x20-0x3F)
 #define ADD_OP      (uint8_t)0x20 // ADD | Reg1, Reg2/Imm | Add to register | Z, N, C, O
