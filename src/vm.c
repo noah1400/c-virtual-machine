@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -209,12 +210,6 @@ void vm_io_write(VM *vm, uint16_t port, uint32_t value) {
     }
 }
 
-static int load_error(VM *vm, int code, const char *message) {
-    vm->last_error = code;
-    snprintf(vm->error_message, sizeof(vm->error_message), "%s", message);
-    return code;
-}
-
 static int segment_fits(uint32_t base, uint32_t size, uint32_t seg_base, uint32_t seg_size) {
     return base >= seg_base && (uint64_t)base + size <= (uint64_t)seg_base + seg_size;
 }
@@ -223,17 +218,17 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
     Vm32Image bin;
     const char *problem = vm32_parse(image, size, &bin);
     if (problem) {
-        return load_error(vm, VM_ERROR_IO_ERROR, problem);
+        return vm_raise(vm, VM_ERROR_IO_ERROR, "%s", problem);
     }
 
     uint32_t code_base = bin.code_base, code_size = bin.code_size;
     uint32_t data_base = bin.data_base, data_size = bin.data_size;
 
     if (!segment_fits(code_base, code_size, CODE_SEGMENT_BASE, CODE_SEGMENT_SIZE)) {
-        return load_error(vm, VM_ERROR_SEGMENTATION_FAULT, "Code segment does not fit the code segment range");
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Code segment does not fit the code segment range");
     }
     if (!segment_fits(data_base, data_size, DATA_SEGMENT_BASE, DATA_SEGMENT_SIZE)) {
-        return load_error(vm, VM_ERROR_SEGMENTATION_FAULT, "Data segment does not fit the data segment range");
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Data segment does not fit the data segment range");
     }
 
     printf("Loading optimized format binary (v%d.%d)\n", bin.version_major, bin.version_minor);
@@ -255,7 +250,7 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
 // Raw images without a header are loaded contiguously from address 0
 static int load_raw_image(VM *vm, const uint8_t *image, uint32_t size) {
     if (size > CODE_SEGMENT_SIZE + DATA_SEGMENT_SIZE) {
-        return load_error(vm, VM_ERROR_SEGMENTATION_FAULT, "Raw program image exceeds code and data segments");
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Raw program image exceeds code and data segments");
     }
 
     printf("Loading legacy format binary\n");
@@ -286,14 +281,29 @@ int vm_load_program_file(VM *vm, const char *filename) {
     const char *problem;
     uint8_t *buffer = read_binary_file(filename, &size, &problem);
     if (!buffer) {
-        vm->last_error = VM_ERROR_IO_ERROR;
-        snprintf(vm->error_message, sizeof(vm->error_message), "%s: %s", problem, filename);
-        return VM_ERROR_IO_ERROR;
+        return vm_raise(vm, VM_ERROR_IO_ERROR, "%s: %s", problem, filename);
     }
 
     int result = vm_load_program(vm, buffer, size);
     free(buffer);
     return result;
+}
+
+// Records a fault; the first fault since the error state was last cleared is kept
+int vm_raise(VM *vm, int code, const char *format, ...) {
+    if (vm->last_error == VM_ERROR_NONE) {
+        va_list args;
+        va_start(args, format);
+        vsnprintf(vm->error_message, sizeof(vm->error_message), format, args);
+        va_end(args);
+        vm->last_error = code;
+    }
+    return code;
+}
+
+void vm_clear_error(VM *vm) {
+    vm->last_error = VM_ERROR_NONE;
+    vm->error_message[0] = '\0';
 }
 
 // Get error message for error code

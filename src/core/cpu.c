@@ -100,9 +100,7 @@ void cpu_update_flags(VM *vm, uint32_t result, uint8_t flags_to_update) {
 // Push value onto stack
 static int stack_pointer_valid(VM *vm, uint32_t sp) {
     if (sp < STACK_SEGMENT_BASE || sp > STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE) {
-        vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-        snprintf(vm->error_message, sizeof(vm->error_message),
-                 "Stack pointer 0x%08X is outside the stack segment", sp);
+        vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Stack pointer 0x%08X is outside the stack segment", sp);
         return 0;
     }
     return 1;
@@ -118,8 +116,7 @@ void cpu_stack_push(VM *vm, uint32_t value) {
         return;
     }
     if (sp - STACK_SEGMENT_BASE < 4) {
-        vm->last_error = VM_ERROR_STACK_OVERFLOW;
-        snprintf(vm->error_message, sizeof(vm->error_message), "Stack overflow");
+        vm_raise(vm, VM_ERROR_STACK_OVERFLOW, "Stack overflow");
         return;
     }
 
@@ -137,8 +134,7 @@ uint32_t cpu_stack_pop(VM *vm) {
         return 0;
     }
     if (STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE - sp < 4) {
-        vm->last_error = VM_ERROR_STACK_UNDERFLOW;
-        snprintf(vm->error_message, sizeof(vm->error_message), "Stack underflow");
+        vm_raise(vm, VM_ERROR_STACK_UNDERFLOW, "Stack underflow");
         return 0;
     }
 
@@ -168,9 +164,7 @@ void cpu_enter_frame(VM *vm, uint16_t locals_size) {
         vm->registers[R1_BP] = memory_read_dword(vm, vm->registers[R2_SP]);
         vm->registers[R2_SP] += 4;
         
-        vm->last_error = VM_ERROR_STACK_OVERFLOW;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Stack overflow during frame creation");
+        vm_raise(vm, VM_ERROR_STACK_OVERFLOW, "Stack overflow during frame creation");
         return;
     }
 }
@@ -306,9 +300,7 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
     // The vector table holds one 32-bit handler address per vector
     uint32_t handler_addr = memory_read_dword(vm, INTERRUPT_VECTOR_TABLE + vector * 4);
     if (handler_addr == 0) {
-        vm->last_error = VM_ERROR_UNHANDLED_INTERRUPT;
-        snprintf(vm->error_message, sizeof(vm->error_message),
-                "Unhandled interrupt: %d", vector);
+        vm_raise(vm, VM_ERROR_UNHANDLED_INTERRUPT, "Unhandled interrupt: %d", vector);
         return;
     }
 

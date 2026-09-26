@@ -9,6 +9,7 @@
 #include "memory.h"
 #include "instruction_set.h"
 #include "vm_types.h"
+#include "vm.h"
 
 // Forward declarations of instruction handlers
 static int handle_nop(VM *vm, Instruction *instr);
@@ -579,8 +580,7 @@ static int handle_logical(VM *vm, Instruction *instr) {
 // Turns a fault raised while servicing a syscall into a status code in R5
 static void syscall_status(VM *vm) {
     vm->registers[R5] = vm->last_error;
-    vm->last_error = VM_ERROR_NONE;
-    vm->error_message[0] = '\0';
+    vm_clear_error(vm);
 }
 
 static int invalid_syscall(VM *vm, uint16_t syscall_num) {

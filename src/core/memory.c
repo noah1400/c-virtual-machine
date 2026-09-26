@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <string.h>
 #include "memory.h"
 #include "vm.h"
@@ -12,15 +11,6 @@
 #define HEAP_MIN_ALLOC    8u
 #define HEAP_END          (HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE)
 #define BLOCK_ALLOCATED   0x01
-
-static int memory_fault(VM *vm, int code, const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    vm->last_error = code;
-    vsnprintf(vm->error_message, sizeof(vm->error_message), format, args);
-    va_end(args);
-    return code;
-}
 
 static uint32_t block_size(const VM *vm, uint32_t block) {
     return vm->memory[block + 2] | (vm->memory[block + 3] << 8);
@@ -68,19 +58,13 @@ int memory_init(VM *vm, uint32_t size) {
 
     // The fixed segment layout spans the whole 16-bit address space
     if (size < VM_ADDRESS_SPACE_SIZE) {
-        vm->last_error = VM_ERROR_MEMORY_ALLOCATION;
-        snprintf(vm->error_message, sizeof(vm->error_message),
-                 "Memory size must be at least %u bytes", VM_ADDRESS_SPACE_SIZE);
-        return VM_ERROR_MEMORY_ALLOCATION;
+        return vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Memory size must be at least %u bytes", VM_ADDRESS_SPACE_SIZE);
     }
 
     // Allocate memory buffer
     vm->memory = (uint8_t*)malloc(size);
     if (!vm->memory) {
-        vm->last_error = VM_ERROR_MEMORY_ALLOCATION;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Failed to allocate %d bytes for VM memory", size);
-        return VM_ERROR_MEMORY_ALLOCATION;
+        return vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Failed to allocate %d bytes for VM memory", size);
     }
     
     // Initialize memory to zero
@@ -109,10 +93,7 @@ int memory_check_address(VM *vm, uint16_t address, uint16_t size) {
     }
     
     if (address + size > vm->memory_size) {
-        vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Memory access violation: address 0x%04X, size %d", address, size);
-        return VM_ERROR_SEGMENTATION_FAULT;
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Memory access violation: address 0x%04X, size %d", address, size);
     }
     
     return VM_ERROR_NONE;
@@ -232,7 +213,7 @@ uint16_t memory_allocate(VM *vm, uint32_t size) {
     }
 
     if (size > HEAP_SEGMENT_SIZE - HEAP_HEADER_SIZE) {
-        memory_fault(vm, VM_ERROR_MEMORY_ALLOCATION, "Allocation size too large: %u bytes", size);
+        vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Allocation size too large: %u bytes", size);
         return 0;
     }
 
@@ -240,7 +221,7 @@ uint16_t memory_allocate(VM *vm, uint32_t size) {
 
     for (uint32_t block = HEAP_SEGMENT_BASE; block < HEAP_END; block += block_size(vm, block)) {
         if (!block_valid(vm, block)) {
-            memory_fault(vm, VM_ERROR_MEMORY_ALLOCATION, "Corrupted heap at address 0x%04X", block);
+            vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Corrupted heap at address 0x%04X", block);
             return 0;
         }
 
@@ -259,7 +240,7 @@ uint16_t memory_allocate(VM *vm, uint32_t size) {
         return (uint16_t)(block + HEAP_HEADER_SIZE);
     }
 
-    memory_fault(vm, VM_ERROR_MEMORY_ALLOCATION, "Out of heap memory allocating %u bytes", size);
+    vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Out of heap memory allocating %u bytes", size);
     return 0;
 }
 
@@ -270,7 +251,7 @@ int memory_check_address_permissions(VM *vm, uint16_t address, uint16_t size, ui
 
     uint32_t end = (uint32_t)address + size;
     if (end > vm->memory_size) {
-        return memory_fault(vm, VM_ERROR_SEGMENTATION_FAULT,
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
                             "Memory access violation: address 0x%04X, size %d", address, size);
     }
 
@@ -279,17 +260,17 @@ int memory_check_address_permissions(VM *vm, uint16_t address, uint16_t size, ui
         uint32_t block = find_block(vm, address);
 
         if (!block || !block_allocated(vm, block)) {
-            return memory_fault(vm, VM_ERROR_SEGMENTATION_FAULT,
+            return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
                                 "Memory access to unallocated heap: address 0x%04X", address);
         }
         if (end > block + block_size(vm, block)) {
-            return memory_fault(vm, VM_ERROR_SEGMENTATION_FAULT,
+            return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
                                 "Memory access past end of heap block: address 0x%04X, size %d", address, size);
         }
 
         uint8_t protection = vm->memory[block + 5];
         if ((protection & required_perm) != required_perm) {
-            return memory_fault(vm, VM_ERROR_PROTECTION_FAULT,
+            return vm_raise(vm, VM_ERROR_PROTECTION_FAULT,
                                 "Memory protection violation: address 0x%04X, required permission 0x%02X, actual permission 0x%02X",
                                 address, required_perm, protection);
         }
@@ -326,15 +307,15 @@ int memory_free(VM *vm, uint16_t address) {
     }
 
     if (address < HEAP_SEGMENT_BASE + HEAP_HEADER_SIZE || address >= HEAP_END) {
-        return memory_fault(vm, VM_ERROR_INVALID_ADDRESS, "Invalid heap address for free: 0x%04X", address);
+        return vm_raise(vm, VM_ERROR_INVALID_ADDRESS, "Invalid heap address for free: 0x%04X", address);
     }
 
     uint32_t block = find_block(vm, address);
     if (block && !block_allocated(vm, block)) {
-        return memory_fault(vm, VM_ERROR_INVALID_ADDRESS, "Double free detected at 0x%04X", address);
+        return vm_raise(vm, VM_ERROR_INVALID_ADDRESS, "Double free detected at 0x%04X", address);
     }
     if (!block || block + HEAP_HEADER_SIZE != address) {
-        return memory_fault(vm, VM_ERROR_INVALID_ADDRESS,
+        return vm_raise(vm, VM_ERROR_INVALID_ADDRESS,
                             "Address 0x%04X is not the start of an allocated block", address);
     }
 
@@ -350,7 +331,7 @@ int memory_protect(VM *vm, uint16_t address, uint8_t flags) {
 
     uint32_t block = find_block(vm, address);
     if (!block || !block_allocated(vm, block) || block + HEAP_HEADER_SIZE != address) {
-        return memory_fault(vm, VM_ERROR_INVALID_ADDRESS,
+        return vm_raise(vm, VM_ERROR_INVALID_ADDRESS,
                             "Address 0x%04X is not the start of an allocated block", address);
     }
 
