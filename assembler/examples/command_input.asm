@@ -9,16 +9,21 @@ command_loop:
     LOAD R0, prompt_msg
     SYSCALL #2
     
-    ; Read command string (up to 100 chars)
+    ; Read command string (up to 100 chars), stopping at the end of input
     LOAD R0, input_buffer
     LOAD R5, #100
     SYSCALL #4            ; Read string
+    CMP R5, #0
+    JNZ end_of_input
 
     ; Parse and execute command
     LOAD R6, input_buffer
     CALL parse_command
     
     JMP command_loop
+
+end_of_input:
+    HALT
     
 ; Parse and execute the command in input_buffer
 ; R6 = address of input buffer
@@ -127,34 +132,30 @@ do_time_cmd:
     SYSCALL #2
     
     SYSCALL #32           ; Get system time in ms (result in R0)
-    PUSH R0               ; Save time value
+    MOVE R13, R0          ; Save time value
     
-    ; Convert to seconds
-    LOAD R5, #1000
-    DIV R0, R5            ; R0 = seconds
-    
-    ; Print seconds
+    ; Print whole seconds
+    LOAD R12, #1000
+    DIV R0, R12
     SYSCALL #1
     
     LOAD R0, #46          ; Period character
     SYSCALL #0
     
-    ; Calculate and print milliseconds
-    POP R0                ; Restore original time
-    LOAD R5, #1000
-    MOD R0, R5            ; R0 = milliseconds
-    
-    ; Ensure 3 digits for ms (pad with zeros)
-    CMP R0, #100
-    JP print_ms
-    ; Less than 100, need to print at least one zero
-    LOAD R13, #48         ; ASCII '0'
-    MOVE R14, R0          ; Save milliseconds
-    MOVE R0, R13
+    ; Print milliseconds padded to three digits
+    MOVE R14, R13
+    MOD R14, R12
+    CMP R14, #99
+    JA print_ms_tens
+    LOAD R0, #48          ; ASCII '0'
     SYSCALL #0
-    MOVE R0, R14          ; Restore milliseconds
-    
+print_ms_tens:
+    CMP R14, #9
+    JA print_ms
+    LOAD R0, #48
+    SYSCALL #0
 print_ms:
+    MOVE R0, R14
     SYSCALL #1            ; Print milliseconds
     
     LOAD R0, seconds_msg
@@ -332,68 +333,30 @@ parse_number_done:
 
 do_mem_cmd:
     ; Get memory information with syscall 23
-    SYSCALL #23           ; Get memory information
+    SYSCALL #23
+    MOVE R12, R0          ; Total memory
+    MOVE R13, R6          ; Free heap bytes
+    MOVE R14, R7          ; Largest free heap block
     
-    ; Print memory information
-    LOAD R13, mem_total_msg
-    MOVE R14, R0          ; Save total memory
-    MOVE R0, R13
+    LOAD R0, mem_total_msg
     SYSCALL #2
-    
-    MOVE R0, R14          ; Restore total memory
-    SYSCALL #1            ; Print total memory
-    
+    MOVE R0, R12
+    SYSCALL #1
     LOAD R0, bytes_msg
     SYSCALL #2
     
-    ; Print segment information (from R5-R7)
-    LOAD R0, mem_segments_msg
+    LOAD R0, heap_free_msg
     SYSCALL #2
-
-    ; Parse and print segment info from R5
-    LOAD R0, code_seg_msg
-    SYSCALL #2
-    
-    MOVE R0, R5
-    PUSH R0               ; Save R5 value
-    
-    ; Print code segment base
-    LOAD R11, #16
-    SHR R0, R11           ; Shift right 16 bits to get base
-    SYSCALL #5            ; Print hex
-    
-    ; Print code segment size
-    LOAD R0, mem_size_msg
+    MOVE R0, R13
+    SYSCALL #1
+    LOAD R0, bytes_msg
     SYSCALL #2
     
-    POP R0                ; Restore R5 value
-    AND R0, #0xFFFF       ; Mask to get size
-    SYSCALL #1            ; Print size
-    
-    LOAD R0, kb_msg
+    LOAD R0, heap_largest_msg
     SYSCALL #2
-    
-    ; Parse and print data segment info
-    LOAD R0, data_seg_msg
-    SYSCALL #2
-    
-    MOVE R0, R6
-    PUSH R0               ; Save R6 value
-    
-    ; Print data segment base
-    LOAD R11, #16
-    SHR R0, R11           ; Shift right 16 bits to get base
-    SYSCALL #5            ; Print hex
-    
-    ; Print data segment size
-    LOAD R0, mem_size_msg
-    SYSCALL #2
-    
-    POP R0                ; Restore R6 value
-    AND R0, #0xFFFF       ; Mask to get size
-    SYSCALL #1            ; Print size
-    
-    LOAD R0, kb_msg
+    MOVE R0, R14
+    SYSCALL #1
+    LOAD R0, bytes_msg
     SYSCALL #2
     JMP parse_cmd_done
     
@@ -501,16 +464,10 @@ mem_total_msg:
     .asciiz "Total memory: "
 bytes_msg:
     .asciiz " bytes\n"
-mem_segments_msg:
-    .asciiz "Memory segments:\n"
-code_seg_msg:
-    .asciiz "  Code segment: Base="
-data_seg_msg:
-    .asciiz "  Data segment: Base="
-mem_size_msg:
-    .asciiz ", Size="
-kb_msg:
-    .asciiz " KB\n"
+heap_free_msg:
+    .asciiz "Free heap: "
+heap_largest_msg:
+    .asciiz "Largest free heap block: "
 goodbye_msg:
     .asciiz "Goodbye!\n"
 input_buffer:
