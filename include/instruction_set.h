@@ -106,15 +106,15 @@
 #define MEMSET_OP   (uint8_t)0xC3 // MEMSET | Dst, Val, Size | Set memory block | None
 #define PROTECT_OP  (uint8_t)0xC4 // PROTECT | Addr, Flags | Set memory protection | None
 
-// Flage Definitions ( Status Register )
-#define ZERO_FLAG   (uint8_t)0b00000001 // Zero flag
-#define NEG_FLAG    (uint8_t)0b00000010 // Negative flag
-#define CARRY_FLAG  (uint8_t)0b00000100 // Carry flag
-#define OVER_FLAG   (uint8_t)0b00001000 // Overflow flag
-#define INT_FLAG    (uint8_t)0b00010000 // Interrupt enable flag
-#define DIR_FLAG    (uint8_t)0b00100000 // Direction flag
-#define SYS_FLAG    (uint8_t)0b01000000 // System mode flag
-#define TRAP_FLAG   (uint8_t)0b10000000 // Trap flag (debug)
+// Flag definitions (status register)
+#define ZERO_FLAG   (uint8_t)0x01 // Zero flag
+#define NEG_FLAG    (uint8_t)0x02 // Negative flag
+#define CARRY_FLAG  (uint8_t)0x04 // Carry flag
+#define OVER_FLAG   (uint8_t)0x08 // Overflow flag
+#define INT_FLAG    (uint8_t)0x10 // Interrupt enable flag
+#define DIR_FLAG    (uint8_t)0x20 // Direction flag
+#define SYS_FLAG    (uint8_t)0x40 // System mode flag
+#define TRAP_FLAG   (uint8_t)0x80 // Trap flag (debug)
 
 // Instruction structure that represents a decoded instruction
 typedef struct {
