@@ -111,13 +111,18 @@ static int equals_ignore_case(const char *a, const char *b) {
     return *a == *b;
 }
 
+// Called for every executed instruction, so opcodes are looked up in a table built on first use
 const InstructionInfo *isa_by_opcode(uint8_t opcode) {
-    for (size_t i = 0; i < INSTRUCTION_COUNT; i++) {
-        if (instruction_table[i].opcode == opcode) {
-            return &instruction_table[i];
+    static const InstructionInfo *by_opcode[256];
+    static int ready;
+
+    if (!ready) {
+        for (size_t i = 0; i < INSTRUCTION_COUNT; i++) {
+            by_opcode[instruction_table[i].opcode] = &instruction_table[i];
         }
+        ready = 1;
     }
-    return NULL;
+    return by_opcode[opcode];
 }
 
 const InstructionInfo *isa_by_mnemonic(const char *mnemonic) {
