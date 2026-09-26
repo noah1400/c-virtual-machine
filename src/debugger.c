@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "binfmt.h"
 #include "cpu.h"
 #include "debug.h"
 #include "debugger.h"
@@ -9,16 +10,25 @@
 
 #define MAX_BREAKPOINTS 32
 #define MAX_WORDS 4
+#define CONTEXT_LINES 2
 
 typedef struct {
     uint32_t address;
-    char location[64];
 } Breakpoint;
+
+// The most recently shown source file, split into lines
+typedef struct {
+    char *path;
+    char *text;
+    char **lines;
+    uint32_t count;
+} SourceCache;
 
 typedef struct {
     VM *vm;
     Breakpoint breakpoints[MAX_BREAKPOINTS];
     int breakpoint_count;
+    SourceCache source;
 } Debugger;
 
 static int is_command(const char *word, const char *short_name, const char *long_name) {
@@ -66,25 +76,99 @@ static void print_symbolic(const Debugger *dbg, uint32_t address) {
     }
 }
 
-static void show_location(const Debugger *dbg) {
-    VM *vm = dbg->vm;
-    uint32_t pc = vm->registers[R3_PC];
+static void source_free(SourceCache *cache) {
+    free(cache->path);
+    free(cache->text);
+    free(cache->lines);
+    memset(cache, 0, sizeof(*cache));
+}
 
-    printf("0x%04X", pc);
+// Returns line number (1-based) of a source file, or NULL when the file cannot be read
+static const char *source_line(SourceCache *cache, const char *path, uint32_t number) {
+    if (!cache->path || strcmp(cache->path, path) != 0) {
+        uint32_t size;
+        const char *problem;
+        uint8_t *bytes = read_binary_file(path, &size, &problem);
+
+        source_free(cache);
+        cache->path = malloc(strlen(path) + 1);
+        if (!cache->path) {
+            free(bytes);
+            return NULL;
+        }
+        strcpy(cache->path, path);
+        if (!bytes) {
+            return NULL;
+        }
+
+        cache->text = (char *)bytes;
+
+        uint32_t lines = 1;
+        for (uint32_t i = 0; i < size; i++) {
+            lines += cache->text[i] == '\n';
+        }
+        cache->lines = malloc(lines * sizeof(char *));
+        if (!cache->lines) {
+            return NULL;
+        }
+        char *line = cache->text;
+        for (cache->count = 0; line; cache->count++) {
+            cache->lines[cache->count] = line;
+            line = strchr(line, '\n');
+            if (line) {
+                *line++ = '\0';
+            }
+            size_t length = strlen(cache->lines[cache->count]);
+            if (length > 0 && cache->lines[cache->count][length - 1] == '\r') {
+                cache->lines[cache->count][length - 1] = '\0';
+            }
+        }
+    }
+
+    return cache->lines && number >= 1 && number <= cache->count ? cache->lines[number - 1] : NULL;
+}
+
+static void show_source(Debugger *dbg, const SourceLine *line) {
+    if (!line->source_file || !source_line(&dbg->source, line->source_file, line->line_num)) {
+        printf("  %s:%u: %s\n", line->source_file ? line->source_file : "?", line->line_num,
+               line->source ? line->source : "");
+        return;
+    }
+
+    printf("  %s:\n", line->source_file);
+    uint32_t first = line->line_num > CONTEXT_LINES ? line->line_num - CONTEXT_LINES : 1;
+    for (uint32_t n = first; n <= line->line_num + CONTEXT_LINES; n++) {
+        const char *text = source_line(&dbg->source, line->source_file, n);
+        if (text) {
+            printf("%s%5u  %s\n", n == line->line_num ? "=> " : "   ", n, text);
+        }
+    }
+}
+
+// Shows where execution stands: the next instruction, or the one that faulted
+static void show_location(Debugger *dbg) {
+    VM *vm = dbg->vm;
+    int faulted = vm->last_error != VM_ERROR_NONE;
+    uint32_t pc = faulted ? vm->error_pc : vm->registers[R3_PC];
+
+    if (vm->halted) {
+        return;
+    }
+
+    printf("%s0x%04X", faulted ? "Faulted at " : "", pc);
     print_symbolic(dbg, pc);
+    printf("\n");
 
     const SourceLine *line = debug_line_at(vm->debug_info, pc);
-    if (line) {
-        printf("  %s:%u: %s", line->source_file ? line->source_file : "?", line->line_num,
-               line->source ? line->source : "");
+    if (line && line->address == pc) {
+        show_source(dbg, line);
     }
-    printf("\n");
 
     Instruction instr;
     if (vm_peek_instruction(vm, pc, &instr)) {
         char text[160];
         disasm_format(&instr, vm->debug_info, text, sizeof(text));
-        printf("Next instruction: %s\n", text);
+        printf("%s: %s\n", faulted ? "Instruction" : "Next instruction", text);
     }
 }
 
@@ -97,7 +181,7 @@ static int breakpoint_index(const Debugger *dbg, uint32_t address) {
     return -1;
 }
 
-// Executes one instruction; returns 0 and reports why when execution cannot continue
+// Executes one instruction; returns 0 and reports why when execution has to stop
 static int step_instruction(Debugger *dbg) {
     VM *vm = dbg->vm;
 
@@ -113,6 +197,11 @@ static int step_instruction(Debugger *dbg) {
         printf("Program halted\n");
         return 0;
     }
+    if (vm->break_requested) {
+        vm->break_requested = 0;
+        printf("DEBUG instruction at 0x%04X\n", vm->error_pc);
+        return 0;
+    }
     return 1;
 }
 
@@ -123,6 +212,32 @@ static int at_breakpoint(Debugger *dbg) {
         return 1;
     }
     return 0;
+}
+
+static uint8_t next_opcode(const Debugger *dbg) {
+    Instruction instr;
+    return vm_peek_instruction(dbg->vm, dbg->vm->registers[R3_PC], &instr) ? instr.opcode : NOP_OP;
+}
+
+// Steps one instruction, running a CALL until it returns
+static int step_over(Debugger *dbg) {
+    VM *vm = dbg->vm;
+
+    if (next_opcode(dbg) != CALL_OP) {
+        return step_instruction(dbg);
+    }
+
+    uint32_t return_address = vm->registers[R3_PC] + 4;
+    uint32_t sp = vm->registers[R2_SP];
+    if (!step_instruction(dbg)) {
+        return 0;
+    }
+    while (vm->registers[R3_PC] != return_address || vm->registers[R2_SP] != sp) {
+        if (!step_instruction(dbg) || at_breakpoint(dbg)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static void cmd_step(Debugger *dbg, int argc, char **argv) {
@@ -143,13 +258,34 @@ static void cmd_next(Debugger *dbg) {
     VM *vm = dbg->vm;
     const SourceLine *start = debug_line_at(vm->debug_info, vm->registers[R3_PC]);
 
-    while (step_instruction(dbg) && !at_breakpoint(dbg)) {
+    while (step_over(dbg) && !at_breakpoint(dbg)) {
         const SourceLine *line = debug_line_at(vm->debug_info, vm->registers[R3_PC]);
         if (!start || line != start) {
             break;
         }
     }
     cpu_dump_registers(vm);
+}
+
+// Runs until the current subroutine returns to its caller
+static void cmd_finish(Debugger *dbg) {
+    int depth = 0;
+
+    for (;;) {
+        uint8_t opcode = next_opcode(dbg);
+        if (!step_instruction(dbg)) {
+            break;
+        }
+        if (opcode == CALL_OP) {
+            depth++;
+        } else if (opcode == RET_OP && depth-- == 0) {
+            break;
+        }
+        if (at_breakpoint(dbg)) {
+            break;
+        }
+    }
+    cpu_dump_registers(dbg->vm);
 }
 
 static void cmd_continue(Debugger *dbg) {
@@ -176,13 +312,22 @@ static void cmd_break(Debugger *dbg, int argc, char **argv) {
         return;
     }
 
-    Breakpoint *bp = &dbg->breakpoints[dbg->breakpoint_count++];
-    bp->address = address;
-    snprintf(bp->location, sizeof(bp->location), "%s", argv[1]);
-
+    dbg->breakpoints[dbg->breakpoint_count++].address = address;
     printf("Breakpoint %d at 0x%04X", dbg->breakpoint_count, address);
     print_symbolic(dbg, address);
     printf("\n");
+}
+
+static void cmd_delete(Debugger *dbg, int argc, char **argv) {
+    uint32_t number;
+    if (argc < 2 || !parse_number(argv[1], &number) || number == 0 || number > (uint32_t)dbg->breakpoint_count) {
+        printf("Usage: delete <breakpoint number>\n");
+        return;
+    }
+    memmove(&dbg->breakpoints[number - 1], &dbg->breakpoints[number],
+            (size_t)(dbg->breakpoint_count - (int)number) * sizeof(Breakpoint));
+    dbg->breakpoint_count--;
+    printf("Deleted breakpoint %u\n", number);
 }
 
 static void cmd_breakpoints(const Debugger *dbg) {
@@ -237,15 +382,76 @@ static void cmd_memory(const Debugger *dbg, int argc, char **argv) {
     disasm_hexdump(vm->memory + address, address, count);
 }
 
+static void cmd_disassemble(const Debugger *dbg, int argc, char **argv) {
+    VM *vm = dbg->vm;
+    uint32_t address = vm->registers[R3_PC], count = 8;
+
+    if ((argc > 1 && !parse_location(dbg, argv[1], &address)) || (argc > 2 && !parse_number(argv[2], &count))) {
+        return;
+    }
+    for (uint32_t i = 0; i < count; i++, address += 4) {
+        Instruction instr;
+        char text[160];
+        if (!vm_peek_instruction(vm, address, &instr)) {
+            break;
+        }
+        const Symbol *sym = debug_symbol_at(vm->debug_info, address);
+        if (sym) {
+            printf("%s:\n", sym->name);
+        }
+        disasm_format(&instr, vm->debug_info, text, sizeof(text));
+        printf("%s 0x%04X  %s\n", address == vm->registers[R3_PC] ? "=>" : "  ", address, text);
+    }
+}
+
+static void cmd_stack(const Debugger *dbg, int argc, char **argv) {
+    VM *vm = dbg->vm;
+    uint32_t count = 8;
+    uint32_t sp = vm->registers[R2_SP];
+    uint32_t top = STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE;
+
+    if (argc > 1 && !parse_number(argv[1], &count)) {
+        printf("Usage: stack [count]\n");
+        return;
+    }
+    if (sp < STACK_SEGMENT_BASE || sp > top) {
+        printf("SP 0x%08X is outside the stack segment\n", sp);
+        return;
+    }
+    if (sp == top) {
+        printf("The stack is empty\n");
+    }
+    for (uint32_t address = sp; address + 4 <= top && count > 0; address += 4, count--) {
+        uint32_t value = read_le32(vm->memory + address);
+        printf("0x%04X  0x%08X", address, value);
+        if (address == sp) {
+            printf("  <- SP");
+        }
+        if (address == vm->registers[R1_BP]) {
+            printf("  <- BP");
+        }
+        const Symbol *sym = debug_symbol_near(vm->debug_info, value);
+        if (sym && sym->type == SYMBOL_CODE && value < CODE_SEGMENT_BASE + CODE_SEGMENT_SIZE) {
+            printf("  ");
+            print_symbolic(dbg, value);
+        }
+        printf("\n");
+    }
+}
+
 static void cmd_help(void) {
     printf("Debugger commands (numbers are decimal or 0x-prefixed hex):\n");
     printf("  s, step [N]              Execute N instructions (default 1)\n");
-    printf("  n, next                  Run until the source line changes\n");
-    printf("  c, continue              Run until a breakpoint, halt or fault\n");
+    printf("  n, next                  Run to the next source line, stepping over calls\n");
+    printf("  f, finish                Run until the current subroutine returns\n");
+    printf("  c, continue              Run until a breakpoint, DEBUG instruction, halt or fault\n");
     printf("  b, break ADDR|SYMBOL     Set a breakpoint\n");
+    printf("  d, delete N              Delete breakpoint N\n");
     printf("  lb, breakpoints          List breakpoints\n");
     printf("  ls, symbols              List symbols\n");
+    printf("  x, disas [ADDR] [N]      Disassemble N instructions (default: 8 at PC)\n");
     printf("  m, memory ADDR [N]       Dump N bytes of memory (default 16)\n");
+    printf("  stack [N]                Show N words from the top of the stack (default 8)\n");
     printf("  r, registers             Show registers and flags\n");
     printf("  h, help                  Show this help\n");
     printf("  q, quit                  Leave the debugger\n");
@@ -283,17 +489,26 @@ int debugger_run(VM *vm) {
         } else if (is_command(cmd, "n", "next")) {
             cmd_next(&dbg);
             show_location(&dbg);
+        } else if (is_command(cmd, "f", "finish")) {
+            cmd_finish(&dbg);
+            show_location(&dbg);
         } else if (is_command(cmd, "c", "continue")) {
             cmd_continue(&dbg);
             show_location(&dbg);
         } else if (is_command(cmd, "b", "break")) {
             cmd_break(&dbg, argc, argv);
+        } else if (is_command(cmd, "d", "delete")) {
+            cmd_delete(&dbg, argc, argv);
         } else if (is_command(cmd, "lb", "breakpoints")) {
             cmd_breakpoints(&dbg);
         } else if (is_command(cmd, "ls", "symbols")) {
             cmd_symbols(&dbg);
+        } else if (is_command(cmd, "x", "disas")) {
+            cmd_disassemble(&dbg, argc, argv);
         } else if (is_command(cmd, "m", "memory")) {
             cmd_memory(&dbg, argc, argv);
+        } else if (is_command(cmd, "stack", "stack")) {
+            cmd_stack(&dbg, argc, argv);
         } else if (is_command(cmd, "r", "registers")) {
             cpu_dump_registers(vm);
         } else if (is_command(cmd, "h", "help")) {
@@ -303,5 +518,6 @@ int debugger_run(VM *vm) {
         }
     }
 
+    source_free(&dbg.source);
     return vm->last_error;
 }

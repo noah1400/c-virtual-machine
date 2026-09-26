@@ -460,7 +460,7 @@ static int execute_system(VM *vm, const Instruction *instr) {
             cpu_reset(vm);
             break;
         case DEBUG_OP:
-            vm->debug_mode = 1;
+            vm->break_requested = 1;
             break;
     }
     return vm->last_error;
