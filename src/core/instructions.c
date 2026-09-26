@@ -175,6 +175,12 @@ static int execute_logical(VM *vm, const Instruction *instr) {
         return vm->last_error;
     }
 
+    // Bitwise operations leave no carry or overflow behind
+    if (instr->opcode <= XOR_OP || instr->opcode == TEST_OP) {
+        cpu_set_flag(vm, CARRY_FLAG, 0);
+        cpu_set_flag(vm, OVER_FLAG, 0);
+    }
+
     switch (instr->opcode) {
         case AND_OP:
         case TEST_OP:
