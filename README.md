@@ -25,13 +25,13 @@ This is a virtual machine (VM) implementation featuring a RISC-like instruction 
 
 ## Building the VM
 
-To build the VM, simply run:
+To build the VM and the assembler, simply run:
 
 ```bash
 make
 ```
 
-This will compile the VM executable named `vm`.
+This compiles the VM executable `vm` and the assembler `vmasm`.
 
 ## Using the VM
 
@@ -138,12 +138,12 @@ The VM supports various instruction categories:
 
 ## Using the Assembler
 
-The assembler is written in Python and can be found in `assembler/assembler.py`.
+The assembler is written in C and lives in `assembler/`; `make` builds it as `vmasm`.
 
 To assemble a program:
 
 ```bash
-python3 assembler/assembler.py input.asm -o output.bin
+./vmasm input.asm -o output.bin
 ```
 
 ### Assembler Directives
