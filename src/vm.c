@@ -59,6 +59,9 @@ int vm_step(VM *vm) {
     uint32_t pc = vm->registers[R3_PC];
     vm->error_pc = pc;
 
+    if (pc % 4 != 0) {
+        return vm_raise(vm, VM_ERROR_INVALID_ALIGNMENT, "Unaligned program counter 0x%04X", pc);
+    }
     if (memory_check_address_permissions(vm, pc, 4, PROT_EXEC) != VM_ERROR_NONE) {
         return vm->last_error;
     }

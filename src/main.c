@@ -91,7 +91,7 @@ static void report_fault(const VM *vm) {
     }
 
     Instruction instr;
-    if (vm_peek_instruction(vm, pc, &instr)) {
+    if (pc % 4 == 0 && vm_peek_instruction(vm, pc, &instr)) {
         char text[160];
         disasm_format(&instr, vm->debug_info, text, sizeof(text));
         fprintf(stderr, ": %s", text);
