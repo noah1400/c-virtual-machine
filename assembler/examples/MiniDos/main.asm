@@ -16,10 +16,12 @@ command_loop:
     LOAD R0, prompt
     SYSCALL #2
     
-    ; Read command line input
+    ; Read command line input, stopping at the end of input
     LOAD R0, input_buffer
     LOAD R5, #255
     SYSCALL #4
+    CMP R5, #0
+    JNZ end_of_input
     
     ; Parse and execute command
     LOAD R6, input_buffer
@@ -27,6 +29,9 @@ command_loop:
     
     ; Loop back for next command
     JMP command_loop
+
+end_of_input:
+    HALT
 
 .include "data.asm"    ; Include data definitions
 .include "utils.asm"   ; Include utility functions
