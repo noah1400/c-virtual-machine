@@ -9,11 +9,10 @@ int vm_init(VM *vm, uint32_t memory_size);
 void vm_cleanup(VM *vm);
 
 // VM execution functions
-int vm_run(VM *vm);                       // Run until halted
-int vm_step(VM *vm);                      // Execute single instruction
+int vm_run(VM *vm);
+int vm_step(VM *vm);
 
-// Instruction operations
-int vm_decode_instruction(VM *vm, uint32_t address, Instruction *instr);
+int vm_peek_instruction(const VM *vm, uint32_t address, Instruction *instr);
 
 // Program loading
 int vm_load_program(VM *vm, const uint8_t *program, uint32_t size);

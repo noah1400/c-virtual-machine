@@ -381,7 +381,7 @@ void debug_execution(VM *vm) {
         
         // Show instruction
         Instruction instr;
-        if (vm_decode_instruction(vm, vm->registers[R3_PC], &instr) == VM_ERROR_NONE) {
+        if (vm_peek_instruction(vm, vm->registers[R3_PC], &instr)) {
             char instr_text[256];
             disasm_format(&instr, vm->debug_info, instr_text, sizeof(instr_text));
             printf("Next instruction: %s\n", instr_text);
@@ -606,7 +606,7 @@ int main(int argc, char *argv[]) {
             
             // Decode and display the instruction
             Instruction instr;
-            if (vm_decode_instruction(&vm, error_pc, &instr) == VM_ERROR_NONE) {
+            if (vm_peek_instruction(&vm, error_pc, &instr)) {
                 char disasm[256];
                 disasm_format(&instr, vm.debug_info, disasm, sizeof(disasm));
                 fprintf(stderr, "Error occurred at PC=0x%04X, instruction: %s\n", error_pc, disasm);

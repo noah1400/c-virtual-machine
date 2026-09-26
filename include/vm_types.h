@@ -38,11 +38,6 @@
 // Interrupt vector table: 256 handler addresses of 4 bytes each
 #define INTERRUPT_VECTOR_TABLE 0x0100
 
-// Special stack frame offsets
-#define FRAME_PREV_BP_OFFSET    0
-#define FRAME_RET_ADDR_OFFSET   4
-#define FRAME_FIRST_LOCAL       8
-
 #define VM_RNG_DEFAULT_SEED     0x12345678
 
 

@@ -2,138 +2,81 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "vm.h"
-#include "cpu.h"
-#include "memory.h"
-#include "debug.h"
 #include "binfmt.h"
+#include "cpu.h"
+#include "debug.h"
+#include "memory.h"
+#include "vm.h"
 
-// Initialize the VM with the specified memory size
 int vm_init(VM *vm, uint32_t memory_size) {
-    if (!vm) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-
     memset(vm, 0, sizeof(*vm));
 
-    // Initialize memory subsystem
     int result = memory_init(vm, memory_size);
     if (result != VM_ERROR_NONE) {
         return result;
     }
-    
-    cpu_reset(vm);
-    
-    // Initialize I/O devices (if any)
-    vm->io_devices = NULL;  // No I/O devices by default
-    
-    // Clear error state
-    vm->last_error = VM_ERROR_NONE;
-    memset(vm->error_message, 0, sizeof(vm->error_message));
 
-    vm->last_error = 0;
-    vm->debug_info = NULL;
+    cpu_reset(vm);
     vm->rng_state = VM_RNG_DEFAULT_SEED;
-    
     return VM_ERROR_NONE;
 }
 
-// Clean up VM resources
 void vm_cleanup(VM *vm) {
-    if (!vm) {
-        return;
-    }
-    
-    // Free memory
     memory_cleanup(vm);
     debug_info_free(vm->debug_info);
     vm->debug_info = NULL;
-    
-    // Free I/O devices (if any)
-    if (vm->io_devices) {
-        free(vm->io_devices);
-        vm->io_devices = NULL;
-    }
+    free(vm->io_devices);
+    vm->io_devices = NULL;
 }
 
-// Run the VM until halted
 int vm_run(VM *vm) {
-    if (!vm) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-    
-    // Execute instructions until halted or error
     while (!vm->halted) {
         int result = vm_step(vm);
         if (result != VM_ERROR_NONE) {
             return result;
         }
     }
-    
     return VM_ERROR_NONE;
 }
 
 int vm_step(VM *vm) {
-    if (!vm) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-    
-    // Check if VM is halted
     if (vm->halted) {
         return VM_ERROR_NONE;
     }
 
-    // A faulted VM stays stopped until it is reset
+    // A faulted VM stays stopped
     if (vm->last_error != VM_ERROR_NONE) {
         return vm->last_error;
     }
 
-    // Record the current PC (before execution)
-    uint32_t current_pc = vm->registers[R3_PC];
-    vm->error_pc = current_pc;
-    
-    // Fetch and decode instruction
-    Instruction instr;
-    int result = vm_decode_instruction(vm, current_pc, &instr);
-    if (result != VM_ERROR_NONE) {
-        return result;
-    }
-    
-    // Save current instruction for debugging
-    vm->current_instr = instr;
-    
-    // IMPORTANT: Increment PC BEFORE executing the instruction
-    // This is because some instructions (like CALL) rely on PC pointing to the next instruction
-    vm->registers[R3_PC] += 4;
-    
-    // Execute instruction and get result
-    result = cpu_execute_instruction(vm, &instr);
-    
-    // Check for errors
-    if (result != VM_ERROR_NONE) {
-        return result;
-    } else if (vm->last_error != VM_ERROR_NONE) {
+    uint32_t pc = vm->registers[R3_PC];
+    vm->error_pc = pc;
+
+    if (memory_check_address_permissions(vm, pc, 4, PROT_EXEC) != VM_ERROR_NONE) {
         return vm->last_error;
     }
-    
-    // Increment instruction count
+
+    Instruction instr;
+    isa_decode(read_le32(vm->memory + pc), &instr);
+
+    // PC already points at the next instruction while this one executes
+    vm->registers[R3_PC] = pc + 4;
+    cpu_execute_instruction(vm, &instr);
+    if (vm->last_error != VM_ERROR_NONE) {
+        return vm->last_error;
+    }
+
     vm->instruction_count++;
-    
     return VM_ERROR_NONE;
 }
 
-// Decode the 32-bit instruction at the specified memory address
-int vm_decode_instruction(VM *vm, uint32_t address, Instruction *instr) {
-    if (!vm || !instr) {
-        return VM_ERROR_INVALID_ADDRESS;
+// Decodes the instruction at address without faulting the VM; returns 0 if it is out of range
+int vm_peek_instruction(const VM *vm, uint32_t address, Instruction *instr) {
+    if (address > vm->memory_size || vm->memory_size - address < 4) {
+        return 0;
     }
-
-    if (memory_check_address(vm, address, 4) != VM_ERROR_NONE) {
-        return VM_ERROR_SEGMENTATION_FAULT;
-    }
-
-    isa_decode(memory_read_dword(vm, address), instr);
-    return VM_ERROR_NONE;
+    isa_decode(read_le32(vm->memory + address), instr);
+    return 1;
 }
 
 static int segment_fits(uint32_t base, uint32_t size, uint32_t seg_base, uint32_t seg_size) {
@@ -261,6 +204,8 @@ const char* vm_get_error_string(int error_code) {
             return "I/O operation error";
         case VM_ERROR_PROTECTION_FAULT:
             return "Memory protection fault";
+        case VM_ERROR_NESTED_INTERRUPT:
+            return "Nested interrupt";
         default:
             return "Unknown error";
     }
