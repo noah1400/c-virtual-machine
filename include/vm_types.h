@@ -38,6 +38,8 @@
 #define FRAME_RET_ADDR_OFFSET   4
 #define FRAME_FIRST_LOCAL       8
 
+#define VM_RNG_DEFAULT_SEED     0x12345678
+
 // Symbol represents a labeled address in the program
 typedef struct {
     char *name;          // Symbol name
@@ -113,6 +115,8 @@ typedef struct {
     // Error handling
     int last_error;          // Last error code
     char error_message[256]; // Error message
+
+    uint32_t rng_state;      // Random number generator state
 
     DebugInfo *debug_info;  // Debug information (NULL if not loaded)
 } VM;

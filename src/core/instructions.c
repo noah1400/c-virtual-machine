@@ -576,6 +576,14 @@ static int handle_logical(VM *vm, Instruction *instr) {
     return VM_ERROR_NONE;
 }
 
+static uint32_t mix_seed(uint32_t seed) {
+    seed += 0x9E3779B9;
+    seed = (seed ^ (seed >> 16)) * 0x85EBCA6B;
+    seed = (seed ^ (seed >> 13)) * 0xC2B2AE35;
+    seed ^= seed >> 16;
+    return seed ? seed : VM_RNG_DEFAULT_SEED;
+}
+
 /**
  * Handle system calls
  * 
@@ -962,40 +970,25 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
     else if (syscall_num < 50) {
         // Group 40-49: Random number generation and misc
         switch (syscall_num) {
-            case 40:  // Get random number (param1=max value)
+            case 40:  // Get random number in [0, max), full range when max is 0
                 {
-                    uint32_t max_val = param1;
-                    
-                    if (max_val == 0) {
-                        max_val = 0xFFFFFFFF;  // Full 32-bit range
-                    }
-                    
-                    // Simple pseudo-random number generation
-                    // In a real implementation, you'd use a better PRNG
-                    static uint32_t seed = 0x12345678;
-                    seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF;
-                    
-                    // Return random number in range [0, max_val]
-                    vm->registers[R0_ACC] = (uint32_t)((uint64_t)seed * max_val / 0x7FFFFFFF);
-                    vm->registers[R5] = 0;  // Success
-                }
-                break;
-                
-            case 41:  // Seed random number generator (param1=seed)
-                {
-                    // Set the seed for the PRNG
-                    uint32_t seed_val = param1;
-                    
-                    // In a real implementation, this would set the PRNG seed
-                    // For this simplified version, just store and return success
-                    static uint32_t seed = 0x12345678;
-                    seed = seed_val;
-                    
-                    vm->registers[R0_ACC] = 0;  // Success
+                    uint32_t x = vm->rng_state;
+                    x ^= x << 13;
+                    x ^= x >> 17;
+                    x ^= x << 5;
+                    vm->rng_state = x;
+
+                    vm->registers[R0_ACC] = param1 ? (uint32_t)(((uint64_t)x * param1) >> 32) : x;
                     vm->registers[R5] = 0;
                 }
                 break;
-                
+
+            case 41:  // Seed random number generator (param1=seed)
+                vm->rng_state = mix_seed(param1);
+                vm->registers[R0_ACC] = 0;
+                vm->registers[R5] = 0;
+                break;
+
             default:
                 vm->registers[R5] = 1;  // Error - unimplemented
                 break;

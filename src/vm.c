@@ -34,6 +34,7 @@ int vm_init(VM *vm, uint32_t memory_size) {
 
     vm->last_error = 0;
     vm->debug_info = NULL;
+    vm->rng_state = VM_RNG_DEFAULT_SEED;
     
     return VM_ERROR_NONE;
 }
