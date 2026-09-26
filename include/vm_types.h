@@ -50,27 +50,27 @@
 typedef struct {
     // CPU registers
     uint32_t registers[16];  // R0-R15
-    
+
     // Memory
     uint8_t *memory;         // Main memory array
     uint32_t memory_size;    // Total size of memory
-    
+
     // VM state flags
     uint8_t halted;          // VM halted flag
     uint8_t debug_mode;      // Debug mode flag
     uint8_t break_requested; // Set by the DEBUG instruction for the debugger
     uint8_t irq_pending;     // A device interrupt waits for the interrupt flag
     uint8_t irq_vector;
-    
+
     struct IODevices *io_devices;
-    
+
     // Interrupt state
-    
+
     // Instruction cycle info for debugging
     uint32_t instruction_count; // Number of instructions executed
     Instruction current_instr;  // Currently executing instruction
     uint32_t error_pc;         // Address of last error
-    
+
     // Error handling
     int last_error;          // Last error code
     char error_message[256]; // Error message

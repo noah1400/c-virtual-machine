@@ -183,8 +183,7 @@ void vm_clear_error(VM *vm) {
     vm->error_message[0] = '\0';
 }
 
-// Get error message for error code
-const char* vm_get_error_string(int error_code) {
+const char *vm_get_error_string(int error_code) {
     switch (error_code) {
         case VM_ERROR_NONE:
             return "No error";
@@ -219,14 +218,9 @@ const char* vm_get_error_string(int error_code) {
     }
 }
 
-const char* vm_get_error_message(const VM *vm) {
+const char *vm_get_error_message(const VM *vm) {
     if (!vm) {
         return "Invalid VM pointer";
     }
-    
-    if (vm->last_error == VM_ERROR_NONE) {
-        return "No error";
-    }
-    
-    return vm->error_message;
+    return vm->last_error == VM_ERROR_NONE ? "No error" : vm->error_message;
 }
