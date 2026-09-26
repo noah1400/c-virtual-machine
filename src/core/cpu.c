@@ -303,11 +303,6 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
         return;
     }
     
-    // Check if interrupts are enabled
-    if (!(vm->registers[R4_SR] & INT_FLAG)) {
-        return;
-    }
-    
     // The vector table holds one 32-bit handler address per vector
     uint32_t handler_addr = memory_read_dword(vm, INTERRUPT_VECTOR_TABLE + vector * 4);
     if (handler_addr == 0) {
