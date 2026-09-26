@@ -45,7 +45,6 @@
 #define VM_MAX_FILES            16
 #define VM_FIRST_FILE_HANDLE    3
 
-
 // Virtual Machine state
 typedef struct {
     // CPU registers
@@ -63,8 +62,6 @@ typedef struct {
     uint8_t irq_vector;
 
     struct IODevices *io_devices;
-
-    // Interrupt state
 
     // Instruction cycle info for debugging
     uint32_t instruction_count; // Number of instructions executed
