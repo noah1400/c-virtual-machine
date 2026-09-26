@@ -89,20 +89,20 @@ void cpu_leave_frame(VM *vm) {
     }
 }
 
-// Pushes R15 down to R0, storing SP as it was before the first push
-static void push_all_registers(VM *vm) {
+// Pushes R15 down to R0 so that [SP + 4 * n] holds Rn, saving SP as it was before the first push
+void cpu_push_all(VM *vm) {
     uint32_t original_sp = vm->registers[R2_SP];
 
-    for (int i = 15; i >= 0; i--) {
+    for (int i = 15; i >= 0 && vm->last_error == VM_ERROR_NONE; i--) {
         cpu_stack_push(vm, i == R2_SP ? original_sp : vm->registers[i]);
     }
 }
 
-// Pops registers saved by push_all_registers, discarding the saved SP
-static void pop_all_registers(VM *vm) {
-    for (int i = 0; i < 16; i++) {
+// Pops registers saved by cpu_push_all, discarding the saved SP
+void cpu_pop_all(VM *vm, int restore_pc) {
+    for (int i = 0; i < 16 && vm->last_error == VM_ERROR_NONE; i++) {
         uint32_t value = cpu_stack_pop(vm);
-        if (i != R2_SP) {
+        if (vm->last_error == VM_ERROR_NONE && i != R2_SP && (restore_pc || i != R3_PC)) {
             vm->registers[i] = value;
         }
     }
@@ -120,7 +120,7 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
     }
 
     // Save the execution context and mask interrupts while the handler runs
-    push_all_registers(vm);
+    cpu_push_all(vm);
     vm->registers[R4_SR] &= ~(uint32_t)INT_FLAG;
     vm->registers[R3_PC] = handler;
 }
@@ -139,10 +139,6 @@ int cpu_deliver_interrupt(VM *vm) {
     vm->irq_pending = 0;
     cpu_interrupt(vm, vm->irq_vector);
     return 1;
-}
-
-void cpu_return_from_interrupt(VM *vm) {
-    pop_all_registers(vm);
 }
 
 void cpu_enable_interrupts(VM *vm) {

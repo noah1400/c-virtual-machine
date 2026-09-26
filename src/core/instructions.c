@@ -344,22 +344,11 @@ static int execute_stack(VM *vm, const Instruction *instr) {
             }
             break;
         }
-        case PUSHA_OP: {
-            // SP is stored as it was before the first push
-            uint32_t original_sp = vm->registers[R2_SP];
-            for (int i = 0; i < 16; i++) {
-                cpu_stack_push(vm, i == R2_SP ? original_sp : vm->registers[i]);
-            }
+        case PUSHA_OP:
+            cpu_push_all(vm);
             break;
-        }
         case POPA_OP:
-            // The saved SP and PC are discarded
-            for (int i = 15; i >= 0; i--) {
-                uint32_t value = cpu_stack_pop(vm);
-                if (i != R2_SP && i != R3_PC) {
-                    vm->registers[i] = value;
-                }
-            }
+            cpu_pop_all(vm, 0);
             break;
         case ENTER_OP:
             cpu_enter_frame(vm, instr->immediate);
@@ -441,7 +430,7 @@ static int execute_system(VM *vm, const Instruction *instr) {
             cpu_enable_interrupts(vm);
             break;
         case IRET_OP:
-            cpu_return_from_interrupt(vm);
+            cpu_pop_all(vm, 1);
             break;
         case IN_OP: {
             uint32_t value = io_read(vm, read_operand(vm, instr, instr->reg2, 4));

@@ -24,6 +24,13 @@
     CALL print_int
     MOVE R8, R9
     CALL print_int
+
+    ; PUSHA leaves Rn at [SP + 4 * n]
+    PUSHA
+    LOAD R8, [SP+36]
+    CALL print_int
+    POPA
+
     MOVE R8, SP
     CALL print_hex
     HALT
