@@ -92,6 +92,22 @@ static int parse_number(const char **p, int64_t *value) {
     return 1;
 }
 
+static int two_char_operator(const char *p) {
+    static const struct {
+        char text[3];
+        int op;
+    } operators[] = {
+        { "<<", OP_SHL }, { ">>", OP_SHR }, { "==", OP_EQ }, { "!=", OP_NE },
+        { "<=", OP_LE }, { ">=", OP_GE }, { "&&", OP_AND }, { "||", OP_OR },
+    };
+    for (size_t i = 0; i < sizeof(operators) / sizeof(operators[0]); i++) {
+        if (p[0] == operators[i].text[0] && p[1] == operators[i].text[1]) {
+            return operators[i].op;
+        }
+    }
+    return -1;
+}
+
 int lex_line(const char *line, TokenList *out, char *error, size_t error_size) {
     size_t len = strlen(line);
     const char *p = line;
@@ -176,11 +192,11 @@ int lex_line(const char *line, TokenList *out, char *error, size_t error_size) {
             p++;
             t->kind = TOK_NUMBER;
             t->number = c;
-        } else if ((p[0] == '<' && p[1] == '<') || (p[0] == '>' && p[1] == '>')) {
+        } else if (two_char_operator(p) >= 0) {
             t->kind = TOK_PUNCT;
-            t->punct = p[0] == '<' ? OP_SHL : OP_SHR;
+            t->punct = two_char_operator(p);
             p += 2;
-        } else if (strchr(",:[]()+-*/%&|^~#$=", *p)) {
+        } else if (strchr(",:[]()+-*/%&|^~#$=<>!", *p)) {
             t->kind = TOK_PUNCT;
             t->punct = *p++;
         } else {

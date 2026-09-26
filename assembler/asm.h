@@ -7,12 +7,14 @@
 
 #define ASM_MAX_INCLUDE_DEPTH 16
 #define ASM_MAX_INCLUDE_DIRS  16
+#define ASM_MAX_DEFINES       32
+#define ASM_MAX_CONDITIONS    32
 #define ASM_MAX_ERRORS        50
 
 typedef enum { TOK_END, TOK_IDENT, TOK_NUMBER, TOK_STRING, TOK_PUNCT } TokenKind;
 
 // Two-character operators; single-character punctuation uses the character itself
-enum { OP_SHL = 256, OP_SHR };
+enum { OP_SHL = 256, OP_SHR, OP_EQ, OP_NE, OP_LE, OP_GE, OP_AND, OP_OR };
 
 typedef struct {
     TokenKind kind;
@@ -90,11 +92,21 @@ typedef struct {
     uint32_t size;
     int is_code;
     int wide;           // pseudo-instruction expanded to two words
+    int condition;      // result of a conditional directive, decided in pass 1
 } LineResult;
+
+// State of one open .if block
+typedef struct {
+    int active;         // lines are assembled
+    int taken;          // a branch of this block was already assembled
+    int parent_active;
+} Condition;
 
 typedef struct {
     const char *include_dirs[ASM_MAX_INCLUDE_DIRS];
     int include_dir_count;
+    const char *defines[ASM_MAX_DEFINES];   // NAME or NAME=VALUE from the command line
+    int define_count;
 
     SourceLine *lines;
     size_t line_count;
@@ -113,6 +125,8 @@ typedef struct {
     char scope[128];
     SymbolTable symbols;
     LineResult *results;
+    Condition conditions[ASM_MAX_CONDITIONS];
+    int condition_depth;
 
     struct PendingConstant *pending;
     size_t pending_count;

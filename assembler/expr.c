@@ -34,7 +34,7 @@ static int64_t fail(Parser *p, const char *format, ...) {
     return 0;
 }
 
-static int64_t parse_or(Parser *p);
+static int64_t parse_logical_or(Parser *p);
 
 static int64_t parse_primary(Parser *p) {
     Token *t = peek(p);
@@ -66,7 +66,7 @@ static int64_t parse_primary(Parser *p) {
         return p->as->statement_address;
     }
     if (accept(p, '(')) {
-        int64_t value = parse_or(p);
+        int64_t value = parse_logical_or(p);
         if (!accept(p, ')')) {
             return fail(p, "expected ')'");
         }
@@ -84,6 +84,9 @@ static int64_t parse_unary(Parser *p) {
     }
     if (accept(p, '~')) {
         return ~parse_unary(p);
+    }
+    if (accept(p, '!')) {
+        return !parse_unary(p);
     }
     return parse_primary(p);
 }
@@ -146,10 +149,40 @@ static int64_t parse_shift(Parser *p) {
     }
 }
 
-static int64_t parse_and(Parser *p) {
+static int64_t parse_relational(Parser *p) {
     int64_t value = parse_shift(p);
+    for (;;) {
+        if (accept(p, '<')) {
+            value = value < parse_shift(p);
+        } else if (accept(p, '>')) {
+            value = value > parse_shift(p);
+        } else if (accept(p, OP_LE)) {
+            value = value <= parse_shift(p);
+        } else if (accept(p, OP_GE)) {
+            value = value >= parse_shift(p);
+        } else {
+            return value;
+        }
+    }
+}
+
+static int64_t parse_equality(Parser *p) {
+    int64_t value = parse_relational(p);
+    for (;;) {
+        if (accept(p, OP_EQ)) {
+            value = value == parse_relational(p);
+        } else if (accept(p, OP_NE)) {
+            value = value != parse_relational(p);
+        } else {
+            return value;
+        }
+    }
+}
+
+static int64_t parse_and(Parser *p) {
+    int64_t value = parse_equality(p);
     while (accept(p, '&')) {
-        value &= parse_shift(p);
+        value &= parse_equality(p);
     }
     return value;
 }
@@ -170,6 +203,24 @@ static int64_t parse_or(Parser *p) {
     return value;
 }
 
+static int64_t parse_logical_and(Parser *p) {
+    int64_t value = parse_or(p);
+    while (accept(p, OP_AND)) {
+        int64_t right = parse_or(p);
+        value = value && right;
+    }
+    return value;
+}
+
+static int64_t parse_logical_or(Parser *p) {
+    int64_t value = parse_logical_and(p);
+    while (accept(p, OP_OR)) {
+        int64_t right = parse_logical_and(p);
+        value = value || right;
+    }
+    return value;
+}
+
 int64_t parse_expression(Parser *p) {
-    return parse_or(p);
+    return parse_logical_or(p);
 }
