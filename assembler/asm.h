@@ -94,6 +94,9 @@ typedef struct {
     SymbolTable symbols;
     LineResult *results;
 
+    struct PendingConstant *pending;
+    size_t pending_count;
+
     const SourceLine *line;
     uint32_t statement_address;
     int errors;
