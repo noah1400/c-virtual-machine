@@ -8,6 +8,7 @@
 #define PROT_READ  0x01     // Read permission
 #define PROT_WRITE 0x02     // Write permission
 #define PROT_EXEC  0x04     // Execute permission
+#define PROT_ALL   (PROT_READ | PROT_WRITE | PROT_EXEC)
 
 // Internal memory management functions
 int memory_init(VM *vm, uint32_t size);
@@ -31,7 +32,7 @@ int memory_copy(VM *vm, uint16_t dest, uint16_t src, uint16_t size);
 int memory_set(VM *vm, uint16_t address, uint8_t value, uint16_t size);
 
 // Heap memory management
-uint16_t memory_allocate(VM *vm, uint16_t size);
+uint16_t memory_allocate(VM *vm, uint32_t size);
 int memory_free(VM *vm, uint16_t address);
 int memory_protect(VM *vm, uint16_t address, uint8_t flags);
 

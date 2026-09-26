@@ -1,28 +1,64 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include "memory.h"
 #include "vm.h"
 
-// Memory block header structure - must be kept small
-typedef struct {
-    uint16_t magic;      // Magic number for validation (0xABCD)
-    uint16_t size;       // Size of the block including header
-    uint8_t  is_free;    // Flag indicating if block is free
-    uint8_t  protection; // Protection flags
-    uint16_t next;       // Offset to next block or 0 if last block
-} MemBlock;
+// Heap blocks tile the heap segment. Each starts with an 8-byte header stored in
+// VM memory: magic (u16), total size including header (u16), flags (u8), protection (u8).
+#define HEAP_BLOCK_MAGIC  0xABCD
+#define HEAP_HEADER_SIZE  8u
+#define HEAP_MIN_ALLOC    8u
+#define HEAP_END          (HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE)
+#define BLOCK_ALLOCATED   0x01
 
-#define MEMBLOCK_MAGIC 0xABCD
-#define MEMBLOCK_HEADER_SIZE sizeof(MemBlock)
-#define MIN_ALLOC_SIZE 8
+static int memory_fault(VM *vm, int code, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    vm->last_error = code;
+    vsnprintf(vm->error_message, sizeof(vm->error_message), format, args);
+    va_end(args);
+    return code;
+}
 
-// Protection flags (will be used when we implement PROTECT)
-#define PROT_NONE 0x00
-#define PROT_READ 0x01
-#define PROT_WRITE 0x02
-#define PROT_EXEC 0x04
-#define PROT_ALL (PROT_READ | PROT_WRITE | PROT_EXEC)
+static uint32_t block_size(const VM *vm, uint32_t block) {
+    return vm->memory[block + 2] | (vm->memory[block + 3] << 8);
+}
+
+static int block_allocated(const VM *vm, uint32_t block) {
+    return vm->memory[block + 4] & BLOCK_ALLOCATED;
+}
+
+static void write_block(VM *vm, uint32_t block, uint32_t size, int allocated, uint8_t protection) {
+    vm->memory[block] = HEAP_BLOCK_MAGIC & 0xFF;
+    vm->memory[block + 1] = HEAP_BLOCK_MAGIC >> 8;
+    vm->memory[block + 2] = size & 0xFF;
+    vm->memory[block + 3] = (size >> 8) & 0xFF;
+    vm->memory[block + 4] = allocated ? BLOCK_ALLOCATED : 0;
+    vm->memory[block + 5] = protection;
+    vm->memory[block + 6] = 0;
+    vm->memory[block + 7] = 0;
+}
+
+static int block_valid(const VM *vm, uint32_t block) {
+    uint32_t size = block_size(vm, block);
+    return (vm->memory[block] | (vm->memory[block + 1] << 8)) == HEAP_BLOCK_MAGIC &&
+           size >= HEAP_HEADER_SIZE && block + size <= HEAP_END;
+}
+
+// Returns the header address of the block whose data area contains address, or 0
+static uint32_t find_block(const VM *vm, uint32_t address) {
+    uint32_t block = HEAP_SEGMENT_BASE;
+    while (block < HEAP_END && block_valid(vm, block)) {
+        uint32_t size = block_size(vm, block);
+        if (address >= block + HEAP_HEADER_SIZE && address < block + size) {
+            return block;
+        }
+        block += size;
+    }
+    return 0;
+}
 
 // Initialize memory for the VM
 int memory_init(VM *vm, uint32_t size) {
@@ -51,13 +87,7 @@ int memory_init(VM *vm, uint32_t size) {
     memset(vm->memory, 0, size);
     vm->memory_size = size;
     
-    // Initialize heap - create initial free block at HEAP_SEGMENT_BASE
-    MemBlock* init_block = (MemBlock*)(vm->memory + HEAP_SEGMENT_BASE);
-    init_block->magic = MEMBLOCK_MAGIC;
-    init_block->size = HEAP_SEGMENT_SIZE;
-    init_block->is_free = 1;
-    init_block->protection = PROT_ALL;
-    init_block->next = 0;  // No next block
+    write_block(vm, HEAP_SEGMENT_BASE, HEAP_SEGMENT_SIZE, 0, PROT_ALL);
     
     return VM_ERROR_NONE;
 }
@@ -68,31 +98,6 @@ void memory_cleanup(VM *vm) {
         free(vm->memory);
         vm->memory = NULL;
         vm->memory_size = 0;
-    }
-}
-
-// Dump heap state for debugging
-void dump_heap(VM *vm) {
-    printf("Heap state:\n");
-    uint16_t block_addr = HEAP_SEGMENT_BASE;
-    
-    while (block_addr < HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE) {
-        MemBlock* block = (MemBlock*)(vm->memory + block_addr);
-        
-        // Check if this looks like a valid block
-        if (block->magic != MEMBLOCK_MAGIC) {
-            printf("  Invalid block at 0x%04X\n", block_addr);
-            break;
-        }
-        
-        printf("  Block at 0x%04X: size=%d, %s, next=%d\n", 
-               block_addr, block->size, 
-               block->is_free ? "FREE" : "USED",
-               block->next);
-        
-        // If no next block, we're done
-        if (block->next == 0) break;
-        block_addr += block->next;
     }
 }
 
@@ -220,286 +225,136 @@ int memory_set(VM *vm, uint16_t address, uint8_t value, uint16_t size) {
     return VM_ERROR_NONE;
 }
 
-// Allocate memory from the heap
-uint16_t memory_allocate(VM *vm, uint16_t size) {
+// Allocate zero-filled memory from the heap, returning 0 on failure
+uint16_t memory_allocate(VM *vm, uint32_t size) {
     if (!vm || !vm->memory) {
         return 0;
     }
-    
-    // Ensure minimum allocation size
-    if (size < MIN_ALLOC_SIZE) {
-        size = MIN_ALLOC_SIZE;
+
+    if (size > HEAP_SEGMENT_SIZE - HEAP_HEADER_SIZE) {
+        memory_fault(vm, VM_ERROR_MEMORY_ALLOCATION, "Allocation size too large: %u bytes", size);
+        return 0;
     }
-    
-    // Align size to 4 bytes for better memory efficiency
-    size = (size + 3) & ~3;
-    
-    // Add header size to allocation
-    uint16_t total_size = size + MEMBLOCK_HEADER_SIZE;
-    
-    // Find a free block that's large enough (first fit)
-    uint16_t block_addr = HEAP_SEGMENT_BASE;
-    uint16_t prev_addr = 0;
-    
-    while (block_addr < HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE) {
-        MemBlock* block = (MemBlock*)(vm->memory + block_addr);
-        
-        // Check if this is a valid block
-        if (block->magic != MEMBLOCK_MAGIC) {
-            vm->last_error = VM_ERROR_MEMORY_ALLOCATION;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                     "Corrupted heap at address 0x%04X", block_addr);
+
+    uint32_t needed = (size < HEAP_MIN_ALLOC ? HEAP_MIN_ALLOC : (size + 3) & ~3u) + HEAP_HEADER_SIZE;
+
+    for (uint32_t block = HEAP_SEGMENT_BASE; block < HEAP_END; block += block_size(vm, block)) {
+        if (!block_valid(vm, block)) {
+            memory_fault(vm, VM_ERROR_MEMORY_ALLOCATION, "Corrupted heap at address 0x%04X", block);
             return 0;
         }
-        
-        // Check if block is free and large enough
-        if (block->is_free && block->size >= total_size) {
-            
-            // Check if we need to split the block
-            if (block->size >= total_size + MEMBLOCK_HEADER_SIZE + MIN_ALLOC_SIZE) {
-                // Split the block
-                uint16_t new_block_addr = block_addr + total_size;
-                MemBlock* new_block = (MemBlock*)(vm->memory + new_block_addr);
-                
-                // Initialize the new block
-                new_block->magic = MEMBLOCK_MAGIC;
-                new_block->size = block->size - total_size;
-                new_block->is_free = 1;
-                new_block->protection = PROT_ALL;
-                new_block->next = block->next == 0 ? 0 : block->next - total_size;
-                
-                // Update current block
-                block->size = total_size;
-                block->next = total_size;
-            }
-            
-            // Mark block as allocated
-            block->is_free = 0;
-            
-            // Calculate the address after the header (for the user data)
-            uint16_t data_addr = block_addr + MEMBLOCK_HEADER_SIZE;
-            
-            // Return address after the header
-            return data_addr;
+
+        uint32_t available = block_size(vm, block);
+        if (block_allocated(vm, block) || available < needed) {
+            continue;
         }
-        
-        // Move to next block
-        prev_addr = block_addr;
-        if (block->next == 0) {
-            break;
+
+        if (available - needed >= HEAP_HEADER_SIZE + HEAP_MIN_ALLOC) {
+            write_block(vm, block + needed, available - needed, 0, PROT_ALL);
+            available = needed;
         }
-        block_addr += block->next;
+
+        write_block(vm, block, available, 1, PROT_ALL);
+        memset(vm->memory + block + HEAP_HEADER_SIZE, 0, available - HEAP_HEADER_SIZE);
+        return (uint16_t)(block + HEAP_HEADER_SIZE);
     }
-    
-    vm->last_error = VM_ERROR_MEMORY_ALLOCATION;
-    snprintf(vm->error_message, sizeof(vm->error_message), 
-             "Failed to allocate %d bytes from heap", size);
+
+    memory_fault(vm, VM_ERROR_MEMORY_ALLOCATION, "Out of heap memory allocating %u bytes", size);
     return 0;
-}
-
-// Find the block header for a given data address
-static MemBlock* find_block_header(VM *vm, uint16_t address) {
-    // The heap range is from HEAP_SEGMENT_BASE to HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE
-    if (address < HEAP_SEGMENT_BASE || 
-        address >= HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE) {
-        return NULL;
-    }
-    
-    // Scan through blocks to find the one containing this address
-    uint16_t block_addr = HEAP_SEGMENT_BASE;
-    
-    while (block_addr < HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE) {
-        MemBlock* block = (MemBlock*)(vm->memory + block_addr);
-        
-        // Check if this is a valid block
-        if (block->magic != MEMBLOCK_MAGIC) {
-            return NULL;
-        }
-        
-        // Calculate the data area for this block
-        uint16_t data_addr = block_addr + MEMBLOCK_HEADER_SIZE;
-        uint16_t block_end = block_addr + block->size;
-        
-        // Check if the requested address is in this block's data area
-        if (address >= data_addr && address < block_end) {
-            return block;
-        }
-        
-        // Move to next block
-        if (block->next == 0) {
-            break;
-        }
-        block_addr += block->next;
-    }
-    
-    return NULL;
-}
-
-static MemBlock* find_block_containing(VM *vm, uint16_t address) {
-    if (!vm || !vm->memory) {
-        return NULL;
-    }
-    
-    // Check if address is in heap segment
-    if (address < HEAP_SEGMENT_BASE || 
-        address >= HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE) {
-        return NULL;
-    }
-    
-    // Scan through blocks to find the one containing this address
-    uint16_t block_addr = HEAP_SEGMENT_BASE;
-    
-    while (block_addr < HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE) {
-        MemBlock* block = (MemBlock*)(vm->memory + block_addr);
-        
-        // Check if this is a valid block
-        if (block->magic != MEMBLOCK_MAGIC) {
-            return NULL;
-        }
-        
-        // Calculate the data area for this block
-        uint16_t data_start = block_addr + MEMBLOCK_HEADER_SIZE;
-        uint16_t block_end = block_addr + block->size;
-        
-        // Check if the requested address is in this block
-        if (address >= data_start && address < block_end) {
-            return block;
-        }
-        
-        // Move to next block
-        if (block->next == 0) {
-            break;
-        }
-        block_addr += block->next;
-    }
-    
-    return NULL;
 }
 
 int memory_check_address_permissions(VM *vm, uint16_t address, uint16_t size, uint8_t required_perm) {
     if (!vm || !vm->memory) {
         return VM_ERROR_INVALID_ADDRESS;
     }
-    
-    // Check if address is within bounds
-    if (address + size > vm->memory_size) {
-        vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Memory access violation: address 0x%04X, size %d", address, size);
-        return VM_ERROR_SEGMENTATION_FAULT;
+
+    uint32_t end = (uint32_t)address + size;
+    if (end > vm->memory_size) {
+        return memory_fault(vm, VM_ERROR_SEGMENTATION_FAULT,
+                            "Memory access violation: address 0x%04X, size %d", address, size);
     }
-    
-    // For heap memory, check if it's allocated and has appropriate permissions
-    if (address >= HEAP_SEGMENT_BASE && 
-        address < HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE) {
-        
-        // Check both the start and end addresses
-        MemBlock* start_block = find_block_containing(vm, address);
-        MemBlock* end_block = find_block_containing(vm, address + size - 1);
-        
-        // If not found, it's not in an allocated block
-        if (!start_block || !end_block) {
-            vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                     "Memory access to unallocated heap: address 0x%04X", address);
-            return VM_ERROR_SEGMENTATION_FAULT;
+
+    // Any access touching the heap must stay inside one allocated block
+    if (end > HEAP_SEGMENT_BASE && address < HEAP_END) {
+        uint32_t block = find_block(vm, address);
+
+        if (!block || !block_allocated(vm, block)) {
+            return memory_fault(vm, VM_ERROR_SEGMENTATION_FAULT,
+                                "Memory access to unallocated heap: address 0x%04X", address);
         }
-        
-        // If spans multiple blocks, error
-        if (start_block != end_block) {
-            vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                     "Memory access spans multiple blocks: address 0x%04X, size %d", address, size);
-            return VM_ERROR_SEGMENTATION_FAULT;
+        if (end > block + block_size(vm, block)) {
+            return memory_fault(vm, VM_ERROR_SEGMENTATION_FAULT,
+                                "Memory access past end of heap block: address 0x%04X, size %d", address, size);
         }
-        
-        // If the block is free, error
-        if (start_block->is_free) {
-            vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                     "Memory access to freed block: address 0x%04X", address);
-            return VM_ERROR_SEGMENTATION_FAULT;
-        }
-        
-        // Check protection flags
-        if ((start_block->protection & required_perm) != required_perm) {
-            vm->last_error = VM_ERROR_PROTECTION_FAULT;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                     "Memory protection violation: address 0x%04X, required permission 0x%02X, actual permission 0x%02X", 
-                     address, required_perm, start_block->protection);
-            return VM_ERROR_PROTECTION_FAULT;
+
+        uint8_t protection = vm->memory[block + 5];
+        if ((protection & required_perm) != required_perm) {
+            return memory_fault(vm, VM_ERROR_PROTECTION_FAULT,
+                                "Memory protection violation: address 0x%04X, required permission 0x%02X, actual permission 0x%02X",
+                                address, required_perm, protection);
         }
     }
-    
+
     return VM_ERROR_NONE;
 }
 
-// Free allocated memory
+// Merge a free block with free neighbours on both sides
+static void coalesce(VM *vm, uint32_t block) {
+    uint32_t size = block_size(vm, block);
+
+    while (block + size < HEAP_END && block_valid(vm, block + size) && !block_allocated(vm, block + size)) {
+        uint32_t next = block + size;
+        size += block_size(vm, next);
+        memset(vm->memory + next, 0, HEAP_HEADER_SIZE);
+    }
+    write_block(vm, block, size, 0, PROT_ALL);
+
+    uint32_t previous = 0;
+    for (uint32_t b = HEAP_SEGMENT_BASE; b < block && block_valid(vm, b); b += block_size(vm, b)) {
+        previous = b;
+    }
+    if (previous && !block_allocated(vm, previous)) {
+        write_block(vm, previous, block_size(vm, previous) + size, 0, PROT_ALL);
+        memset(vm->memory + block, 0, HEAP_HEADER_SIZE);
+    }
+}
+
+// Free an allocated block given the address returned by memory_allocate
 int memory_free(VM *vm, uint16_t address) {
     if (!vm || !vm->memory) {
         return VM_ERROR_INVALID_ADDRESS;
     }
-    
-    // Check if address is in heap segment
-    if (address < HEAP_SEGMENT_BASE || 
-        address >= HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE) {
-        vm->last_error = VM_ERROR_INVALID_ADDRESS;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Invalid heap address for free: 0x%04X", address);
-        return VM_ERROR_INVALID_ADDRESS;
+
+    if (address < HEAP_SEGMENT_BASE + HEAP_HEADER_SIZE || address >= HEAP_END) {
+        return memory_fault(vm, VM_ERROR_INVALID_ADDRESS, "Invalid heap address for free: 0x%04X", address);
     }
-    
-    // Find the block header for this address
-    MemBlock* block = find_block_header(vm, address);
-    if (!block) {
-        vm->last_error = VM_ERROR_INVALID_ADDRESS;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Address 0x%04X not within any allocated block", address);
-        return VM_ERROR_INVALID_ADDRESS;
+
+    uint32_t block = find_block(vm, address);
+    if (block && !block_allocated(vm, block)) {
+        return memory_fault(vm, VM_ERROR_INVALID_ADDRESS, "Double free detected at 0x%04X", address);
     }
-    
-    // Check if block is already free
-    if (block->is_free) {
-        vm->last_error = VM_ERROR_INVALID_ADDRESS;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Double free detected at 0x%04X", address);
-        return VM_ERROR_INVALID_ADDRESS;
+    if (!block || block + HEAP_HEADER_SIZE != address) {
+        return memory_fault(vm, VM_ERROR_INVALID_ADDRESS,
+                            "Address 0x%04X is not the start of an allocated block", address);
     }
-    
-    // Mark block as free
-    block->is_free = 1;
-    
+
+    coalesce(vm, block);
     return VM_ERROR_NONE;
 }
 
-// Set memory protection (will be implemented when PROTECT is supported)
+// Set the protection flags of an allocated block
 int memory_protect(VM *vm, uint16_t address, uint8_t flags) {
-
     if (!vm || !vm->memory) {
         return VM_ERROR_INVALID_ADDRESS;
     }
-    
-    // Check if address is in heap segment
-    if (address < HEAP_SEGMENT_BASE || 
-        address >= HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE) {
-        vm->last_error = VM_ERROR_INVALID_ADDRESS;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Invalid heap address for protect: 0x%04X", address);
-        return VM_ERROR_INVALID_ADDRESS;
+
+    uint32_t block = find_block(vm, address);
+    if (!block || !block_allocated(vm, block) || block + HEAP_HEADER_SIZE != address) {
+        return memory_fault(vm, VM_ERROR_INVALID_ADDRESS,
+                            "Address 0x%04X is not the start of an allocated block", address);
     }
-    
-    // Find the block header for this address
-    MemBlock* block = find_block_header(vm, address);
-    if (!block) {
-        vm->last_error = VM_ERROR_INVALID_ADDRESS;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Address 0x%04X not within any allocated block", address);
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-    
-    // Set the protection flags
-    block->protection = flags;
-    
+
+    vm->memory[block + 5] = flags & PROT_ALL;
     return VM_ERROR_NONE;
 }
 

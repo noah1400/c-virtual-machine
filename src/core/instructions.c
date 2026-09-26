@@ -576,6 +576,13 @@ static int handle_logical(VM *vm, Instruction *instr) {
     return VM_ERROR_NONE;
 }
 
+// Turns a fault raised while servicing a syscall into a status code in R5
+static void syscall_status(VM *vm) {
+    vm->registers[R5] = vm->last_error;
+    vm->last_error = VM_ERROR_NONE;
+    vm->error_message[0] = '\0';
+}
+
 static int invalid_syscall(VM *vm, uint16_t syscall_num) {
     vm->last_error = VM_ERROR_INVALID_SYSCALL;
     snprintf(vm->error_message, sizeof(vm->error_message),
@@ -854,53 +861,25 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
         // Group 20-29: Memory operations
         switch (syscall_num) {
             case 20:  // Allocate memory (param1=size)
-                {
-                    uint16_t size = param1;
-                    uint16_t addr = memory_allocate(vm, size);
-
-                    if (vm->last_error != VM_ERROR_NONE)
-                    {
-                        return vm->last_error;
-                    }
-                    
-                    vm->registers[R0_ACC] = addr;  // Return address
-                    vm->registers[R5] = (addr == 0) ? 1 : 0;  // Error if allocation failed
-                }
+                vm->registers[R0_ACC] = memory_allocate(vm, param1);
+                syscall_status(vm);
                 break;
-                
+
             case 21:  // Free memory (param1=address)
-                {
-                    uint16_t addr = param1;
-                    int result = memory_free(vm, addr);
-
-                    if (vm->last_error != VM_ERROR_NONE)
-                    {
-                        return vm->last_error;
-                    }
-                    
-                    vm->registers[R0_ACC] = result;
-                    vm->registers[R5] = (result == VM_ERROR_NONE) ? 0 : 1;
-                }
+                memory_free(vm, (uint16_t)param1);
+                vm->registers[R0_ACC] = vm->last_error;
+                syscall_status(vm);
                 break;
-                
+
             case 22:  // Copy memory (param1=dest, param2=src, param3=count)
                 {
-                    uint16_t dest = param1;
-                    uint16_t src = param2;
                     uint16_t count = param3;
-                    
-                    int result = memory_copy(vm, dest, src, count);
-
-                    if (vm->last_error != VM_ERROR_NONE)
-                    {
-                        return vm->last_error;
-                    }
-                    
-                    vm->registers[R0_ACC] = count;  // Return bytes copied
-                    vm->registers[R5] = (result == VM_ERROR_NONE) ? 0 : 1;
+                    int result = memory_copy(vm, param1, param2, count);
+                    vm->registers[R0_ACC] = result == VM_ERROR_NONE ? count : 0;
+                    syscall_status(vm);
                 }
                 break;
-                
+
             case 23:  // Memory information
                 {
                     // Return total memory size
@@ -1415,23 +1394,9 @@ static int handle_memory(VM *vm, Instruction *instr) {
             // Allocate heap memory
             // Format: ALLOC Rdest, Rsize/IMM
             
-            // Get size from second operand (register or immediate)
-            if (instr->mode == REG_MODE) {
-                size = vm->registers[src_reg];
-            } else {
-                size = instr->immediate;
-            }
-            
-            // Validate size
-            if (size > HEAP_SEGMENT_SIZE / 2) {
-                vm->last_error = VM_ERROR_MEMORY_ALLOCATION;
-                snprintf(vm->error_message, sizeof(vm->error_message), 
-                        "Allocation size too large: %d bytes", size);
-                return VM_ERROR_MEMORY_ALLOCATION;
-            }
-            
-            // Perform allocation
-            uint16_t addr = memory_allocate(vm, size);
+            // Perform allocation with the size from a register or immediate
+            uint16_t addr = memory_allocate(vm, instr->mode == REG_MODE ? vm->registers[src_reg]
+                                                                         : instr->immediate);
             
             // Check for allocation error
             if (addr == 0) {
