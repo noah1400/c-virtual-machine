@@ -40,6 +40,8 @@
 
 #define VM_RNG_DEFAULT_SEED     0x12345678
 
+#define VM_MAX_PROGRAM_FILE_SIZE (16L * 1024 * 1024)
+
 // Symbol represents a labeled address in the program
 typedef struct {
     char *name;          // Symbol name

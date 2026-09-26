@@ -203,99 +203,89 @@ void vm_io_write(VM *vm, uint16_t port, uint32_t value) {
     }
 }
 
-// Load a program into memory
+static uint32_t read_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static int load_error(VM *vm, int code, const char *message) {
+    vm->last_error = code;
+    snprintf(vm->error_message, sizeof(vm->error_message), "%s", message);
+    return code;
+}
+
+static int segment_fits(uint32_t base, uint32_t size, uint32_t seg_base, uint32_t seg_size) {
+    return base >= seg_base && (uint64_t)base + size <= (uint64_t)seg_base + seg_size;
+}
+
+static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
+    if (size < 32) {
+        return load_error(vm, VM_ERROR_IO_ERROR, "Truncated VM32 header");
+    }
+
+    uint16_t version_major = (uint16_t)(image[4] | (image[5] << 8));
+    uint16_t version_minor = (uint16_t)(image[6] | (image[7] << 8));
+    uint32_t header_size = read_le32(image + 8);
+    uint32_t code_base = read_le32(image + 12);
+    uint32_t code_size = read_le32(image + 16);
+    uint32_t data_base = read_le32(image + 20);
+    uint32_t data_size = read_le32(image + 24);
+    uint32_t symbol_size = read_le32(image + 28);
+
+    if (header_size < 32 || header_size > size) {
+        return load_error(vm, VM_ERROR_IO_ERROR, "Invalid header size in program file");
+    }
+    if ((uint64_t)header_size + code_size + data_size + symbol_size > size) {
+        return load_error(vm, VM_ERROR_IO_ERROR, "Segment sizes exceed program file size");
+    }
+    if (!segment_fits(code_base, code_size, CODE_SEGMENT_BASE, CODE_SEGMENT_SIZE)) {
+        return load_error(vm, VM_ERROR_SEGMENTATION_FAULT, "Code segment does not fit the code segment range");
+    }
+    if (!segment_fits(data_base, data_size, DATA_SEGMENT_BASE, DATA_SEGMENT_SIZE)) {
+        return load_error(vm, VM_ERROR_SEGMENTATION_FAULT, "Data segment does not fit the data segment range");
+    }
+
+    printf("Loading optimized format binary (v%d.%d)\n", version_major, version_minor);
+    printf("  Code segment: 0x%04X - %u bytes\n", code_base, code_size);
+    printf("  Data segment: 0x%04X - %u bytes\n", data_base, data_size);
+
+    const uint8_t *code = image + header_size;
+    const uint8_t *data = code + code_size;
+    const uint8_t *symbols = data + data_size;
+
+    memcpy(vm->memory + code_base, code, code_size);
+    memcpy(vm->memory + data_base, data, data_size);
+
+    if (symbol_size > 0 && vm->debug_mode) {
+        free_debug_info(vm);
+        load_debug_symbols(vm, symbols, symbol_size);
+    }
+
+    vm->registers[R3_PC] = code_base;
+    return VM_ERROR_NONE;
+}
+
+// Raw images without a header are loaded contiguously from address 0
+static int load_raw_image(VM *vm, const uint8_t *image, uint32_t size) {
+    if (size > CODE_SEGMENT_SIZE + DATA_SEGMENT_SIZE) {
+        return load_error(vm, VM_ERROR_SEGMENTATION_FAULT, "Raw program image exceeds code and data segments");
+    }
+
+    printf("Loading legacy format binary\n");
+    memcpy(vm->memory + CODE_SEGMENT_BASE, image, size);
+    vm->registers[R3_PC] = CODE_SEGMENT_BASE;
+    return VM_ERROR_NONE;
+}
+
+// Load a program image from memory
 int vm_load_program(VM *vm, const uint8_t *program, uint32_t size) {
     if (!vm || !program) {
         return VM_ERROR_INVALID_ADDRESS;
     }
-    
-    // Check if this is our new format with the magic number "VM32"
-    if (size >= 12 && program[0] == 'V' && program[1] == 'M' && 
-        program[2] == '3' && program[3] == '2') {
-        
-        // Parse new format
-        uint16_t version_major = *((uint16_t*)(program + 4));
-        uint16_t version_minor = *((uint16_t*)(program + 6));
-        uint32_t header_size = *((uint32_t*)(program + 8));
-        
-        // Basic validation
-        if (header_size > size) {
-            vm->last_error = VM_ERROR_INVALID_ADDRESS;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                    "Invalid header size in program file");
-            return VM_ERROR_INVALID_ADDRESS;
-        }
-        
-        // Parse segment information
-        uint32_t code_base = *((uint32_t*)(program + 12));
-        uint32_t code_size = *((uint32_t*)(program + 16));
-        uint32_t data_base = *((uint32_t*)(program + 20));
-        uint32_t data_size = *((uint32_t*)(program + 24));
-        uint32_t symbol_size = *((uint32_t*)(program + 28));
-        
-        // Validate sizes
-        if (header_size + code_size + data_size + symbol_size > size) {
-            vm->last_error = VM_ERROR_INVALID_ADDRESS;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                    "Invalid segment sizes in program file");
-            return VM_ERROR_INVALID_ADDRESS;
-        }
-        
-        // Load code segment
-        if (code_size > 0) {
-            if (code_size > CODE_SEGMENT_SIZE) {
-                vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-                snprintf(vm->error_message, sizeof(vm->error_message), 
-                        "Code segment too large for VM memory");
-                return VM_ERROR_SEGMENTATION_FAULT;
-            }
-            
-            memcpy(vm->memory + code_base, program + header_size, code_size);
-        }
-        
-        // Load data segment
-        if (data_size > 0) {
-            if (data_size > DATA_SEGMENT_SIZE) {
-                vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-                snprintf(vm->error_message, sizeof(vm->error_message), 
-                        "Data segment too large for VM memory");
-                return VM_ERROR_SEGMENTATION_FAULT;
-            }
-            
-            memcpy(vm->memory + data_base, 
-                   program + header_size + code_size, 
-                   data_size);
-        }
-        
-        // Load debug symbols if available
-        if (symbol_size > 0 && vm->debug_mode) {
-            load_debug_symbols(vm, 
-                              program + header_size + code_size + data_size, 
-                              symbol_size);
-        }
-        
-        // Set PC to start of code segment
-        vm->registers[R3_PC] = code_base;
-        
-        return VM_ERROR_NONE;
+
+    if (size >= 4 && memcmp(program, "VM32", 4) == 0) {
+        return load_vm32_image(vm, program, size);
     }
-    
-    // Fall back to the original format (backward compatibility)
-    if (size > CODE_SEGMENT_SIZE) {
-        vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                "Program size (%d bytes) exceeds code segment size (%d bytes)",
-                size, CODE_SEGMENT_SIZE);
-        return VM_ERROR_SEGMENTATION_FAULT;
-    }
-    
-    // Copy program to code segment
-    memcpy(vm->memory + CODE_SEGMENT_BASE, program, size);
-    
-    // Reset PC to start of code segment
-    vm->registers[R3_PC] = CODE_SEGMENT_BASE;
-    
-    return VM_ERROR_NONE;
+    return load_raw_image(vm, program, size);
 }
 
 // Load a program from a file
@@ -303,208 +293,44 @@ int vm_load_program_file(VM *vm, const char *filename) {
     if (!vm || !filename) {
         return VM_ERROR_INVALID_ADDRESS;
     }
-    
+
     FILE *file = fopen(filename, "rb");
     if (!file) {
         vm->last_error = VM_ERROR_IO_ERROR;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
+        snprintf(vm->error_message, sizeof(vm->error_message),
                  "Failed to open program file: %s", filename);
         return VM_ERROR_IO_ERROR;
     }
-    
-    // Read the first 32 bytes to check format and get header info
-    uint8_t header_buffer[32];
-    size_t header_read = fread(header_buffer, 1, 32, file);
-    
-    // Go back to beginning of file
-    fseek(file, 0, SEEK_SET);
-    
-    // Get file size
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    
-    // Check for new format with magic "VM32"
-    if (header_read >= 12 && 
-        header_buffer[0] == 'V' && header_buffer[1] == 'M' && 
-        header_buffer[2] == '3' && header_buffer[3] == '2') {
-        
-        // Parse header info
-        uint16_t major_ver = *((uint16_t*)(header_buffer + 4));
-        uint16_t minor_ver = *((uint16_t*)(header_buffer + 6));
-        uint32_t header_size = *((uint32_t*)(header_buffer + 8));
-        uint32_t code_base = *((uint32_t*)(header_buffer + 12));
-        uint32_t code_size = *((uint32_t*)(header_buffer + 16));
-        uint32_t data_base = *((uint32_t*)(header_buffer + 20));
-        uint32_t data_size = *((uint32_t*)(header_buffer + 24));
-        uint32_t symbol_size = *((uint32_t*)(header_buffer + 28));
-        
-        printf("Loading optimized format binary (v%d.%d)\n", major_ver, minor_ver);
-        printf("  Code segment: 0x%04X - %d bytes\n", code_base, code_size);
-        printf("  Data segment: 0x%04X - %d bytes\n", data_base, data_size);
-        
-        // Validate sizes
-        if (code_size > CODE_SEGMENT_SIZE) {
-            fclose(file);
-            vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                    "Code segment too large: %d bytes (max: %d bytes)",
-                    code_size, CODE_SEGMENT_SIZE);
-            return VM_ERROR_SEGMENTATION_FAULT;
-        }
-        
-        if (data_size > DATA_SEGMENT_SIZE) {
-            fclose(file);
-            vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                    "Data segment too large: %d bytes (max: %d bytes)",
-                    data_size, DATA_SEGMENT_SIZE);
-            return VM_ERROR_SEGMENTATION_FAULT;
-        }
-        
-        // Calculate file offsets for segments
-        long code_offset = header_size;
-        long data_offset = code_offset + code_size;
-        long symbol_offset = data_offset + data_size;
-        
-        // Load code segment
-        if (code_size > 0) {
-            fseek(file, code_offset, SEEK_SET);
-            size_t bytes_read = fread(vm->memory + code_base, 1, code_size, file);
-            if (bytes_read != code_size) {
-                fclose(file);
-                vm->last_error = VM_ERROR_IO_ERROR;
-                snprintf(vm->error_message, sizeof(vm->error_message), 
-                        "Failed to read code segment: %zu of %d bytes",
-                        bytes_read, code_size);
-                return VM_ERROR_IO_ERROR;
-            }
-        }
-        
-        // Load data segment
-        if (data_size > 0) {
-            fseek(file, data_offset, SEEK_SET);
-            size_t bytes_read = fread(vm->memory + data_base, 1, data_size, file);
-            if (bytes_read != data_size) {
-                fclose(file);
-                vm->last_error = VM_ERROR_IO_ERROR;
-                snprintf(vm->error_message, sizeof(vm->error_message), 
-                        "Failed to read data segment: %zu of %d bytes",
-                        bytes_read, data_size);
-                return VM_ERROR_IO_ERROR;
-            }
-        }
-        
-        // Load debug symbols if present and debug mode is enabled
-        if (symbol_size > 0 && vm->debug_mode) {
-            printf("  Symbol table: %d bytes\n", symbol_size);
-            
-            // Allocate a buffer for the symbol table
-            uint8_t *symbol_buffer = (uint8_t *)malloc(symbol_size);
-            if (!symbol_buffer) {
-                // Non-fatal error - we can continue without debug info
-                printf("Warning: Failed to allocate memory for symbol table\n");
-            } else {
-                // Read symbol table
-                fseek(file, symbol_offset, SEEK_SET);
-                size_t bytes_read = fread(symbol_buffer, 1, symbol_size, file);
-                if (bytes_read != symbol_size) {
-                    printf("Warning: Failed to read symbol table: %zu of %d bytes\n",
-                           bytes_read, symbol_size);
-                    free(symbol_buffer);
-                } else {
-                    // Parse debug symbols
-                    if (vm->debug_info) {
-                        // Clean up old debug info if it exists
-                        free_debug_info(vm);
-                    }
-                    
-                    // Load new debug info
-                    load_debug_symbols(vm, symbol_buffer, symbol_size);
-                    free(symbol_buffer);
-                }
-            }
-        }
-        
-        // Set PC to start of code segment
-        vm->registers[R3_PC] = code_base;
-        fclose(file);
-        return VM_ERROR_NONE;
+
+    long file_size = -1;
+    if (fseek(file, 0, SEEK_END) == 0) {
+        file_size = ftell(file);
+        rewind(file);
     }
-    
-    // Legacy format - load differently
-    printf("Loading legacy format binary\n");
-    
-    // Check if file fits in memory
-    if (file_size > vm->memory_size) {
+    if (file_size < 0 || file_size > VM_MAX_PROGRAM_FILE_SIZE) {
         fclose(file);
-        vm->last_error = VM_ERROR_MEMORY_ALLOCATION;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Program file too large: %ld bytes (memory size: %d bytes)",
-                 file_size, vm->memory_size);
-        return VM_ERROR_MEMORY_ALLOCATION;
+        return load_error(vm, VM_ERROR_IO_ERROR, "Program file is unreadable or too large");
     }
-    
-    // For legacy format, just load file directly if it fits
-    if (file_size <= CODE_SEGMENT_SIZE) {
-        size_t bytes_read = fread(vm->memory + CODE_SEGMENT_BASE, 1, file_size, file);
+
+    uint8_t *buffer = malloc(file_size > 0 ? (size_t)file_size : 1);
+    if (!buffer) {
         fclose(file);
-        
-        if (bytes_read != file_size) {
-            vm->last_error = VM_ERROR_IO_ERROR;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                    "Failed to read program file: %s (read %zu of %ld bytes)",
-                    filename, bytes_read, file_size);
-            return VM_ERROR_IO_ERROR;
-        }
-        
-        // Set PC to start of code segment
-        vm->registers[R3_PC] = CODE_SEGMENT_BASE;
-        return VM_ERROR_NONE;
+        return load_error(vm, VM_ERROR_MEMORY_ALLOCATION, "Failed to allocate program buffer");
     }
-    else if (file_size <= vm->memory_size) {
-        // Check if this might be a larger binary with data segment
-        printf("  Loading large binary with possible data segment\n");
-        
-        // Try to find where code ends and data begins
-        long data_start = CODE_SEGMENT_SIZE;
-        
-        // Read code segment
-        size_t code_read = fread(vm->memory + CODE_SEGMENT_BASE, 1, CODE_SEGMENT_SIZE, file);
-        if (code_read != CODE_SEGMENT_SIZE) {
-            fclose(file);
-            vm->last_error = VM_ERROR_IO_ERROR;
-            snprintf(vm->error_message, sizeof(vm->error_message), 
-                    "Failed to read code segment: %zu of %d bytes",
-                    code_read, CODE_SEGMENT_SIZE);
-            return VM_ERROR_IO_ERROR;
-        }
-        
-        // Read data segment (as much as fits)
-        long remaining = file_size - CODE_SEGMENT_SIZE;
-        long data_to_read = (remaining <= DATA_SEGMENT_SIZE) ? remaining : DATA_SEGMENT_SIZE;
-        
-        if (data_to_read > 0) {
-            size_t data_read = fread(vm->memory + DATA_SEGMENT_BASE, 1, data_to_read, file);
-            if (data_read != data_to_read) {
-                // Warning but not a fatal error - we loaded the code
-                printf("Warning: Failed to read complete data segment: %zu of %ld bytes\n",
-                       data_read, data_to_read);
-            }
-        }
-        
-        fclose(file);
-        vm->registers[R3_PC] = CODE_SEGMENT_BASE;
-        return VM_ERROR_NONE;
-    }
-    
-    // File is too large for memory
+
+    size_t bytes_read = fread(buffer, 1, (size_t)file_size, file);
     fclose(file);
-    vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
-    snprintf(vm->error_message, sizeof(vm->error_message), 
-            "Program size exceeds VM memory: %ld bytes (memory: %d bytes)",
-            file_size, vm->memory_size);
-    return VM_ERROR_SEGMENTATION_FAULT;
+    if (bytes_read != (size_t)file_size) {
+        free(buffer);
+        vm->last_error = VM_ERROR_IO_ERROR;
+        snprintf(vm->error_message, sizeof(vm->error_message),
+                 "Failed to read program file: %s", filename);
+        return VM_ERROR_IO_ERROR;
+    }
+
+    int result = vm_load_program(vm, buffer, (uint32_t)file_size);
+    free(buffer);
+    return result;
 }
 
 // Get error message for error code
