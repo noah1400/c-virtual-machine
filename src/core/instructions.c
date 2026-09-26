@@ -384,10 +384,10 @@ static void execute_cpuid(VM *vm) {
             break;
         case 1:
             // Version 1.1.0; R5 features: I/O ports, memory protection, interrupts, syscalls;
-            // R6 features: debug support
+            // R6 features: debug support, timer device
             vm->registers[R0_ACC] = 0x00010001;
             vm->registers[R5] = 0x00000004 | 0x00000008 | 0x00000010 | 0x00000020;
-            vm->registers[R6] = 0x00000001;
+            vm->registers[R6] = 0x00000001 | 0x00000002;
             vm->registers[R7] = 0;
             break;
         case 2:

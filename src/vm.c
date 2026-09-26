@@ -52,6 +52,10 @@ int vm_step(VM *vm) {
         return vm->last_error;
     }
 
+    if (cpu_deliver_interrupt(vm) && vm->last_error != VM_ERROR_NONE) {
+        return vm->last_error;
+    }
+
     uint32_t pc = vm->registers[R3_PC];
     vm->error_pc = pc;
 

@@ -59,6 +59,8 @@ typedef struct {
     uint8_t halted;          // VM halted flag
     uint8_t debug_mode;      // Debug mode flag
     uint8_t break_requested; // Set by the DEBUG instruction for the debugger
+    uint8_t irq_pending;     // A device interrupt waits for the interrupt flag
+    uint8_t irq_vector;
     
     struct IODevices *io_devices;
     

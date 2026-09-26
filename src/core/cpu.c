@@ -125,6 +125,22 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
     vm->registers[R3_PC] = handler;
 }
 
+// Latches a device interrupt; requests made while one is pending are merged
+void cpu_request_interrupt(VM *vm, uint8_t vector) {
+    vm->irq_pending = 1;
+    vm->irq_vector = vector;
+}
+
+// Enters the handler of a pending device interrupt if interrupts are enabled; returns 1 if it did
+int cpu_deliver_interrupt(VM *vm) {
+    if (!vm->irq_pending || !cpu_get_flag(vm, INT_FLAG)) {
+        return 0;
+    }
+    vm->irq_pending = 0;
+    cpu_interrupt(vm, vm->irq_vector);
+    return 1;
+}
+
 void cpu_return_from_interrupt(VM *vm) {
     pop_all_registers(vm);
 }
