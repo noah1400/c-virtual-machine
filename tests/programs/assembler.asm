@@ -27,6 +27,8 @@ here:
 .equ TO_SECOND, second - $          ; $ is the address of this line
     LOAD R8, #TO_SECOND
     CALL print_int
+    LOAD R8, #1 << (second - $)         ; the shift amount is only known in pass 2
+    CALL print_int
 
 second:
     JMP .skip

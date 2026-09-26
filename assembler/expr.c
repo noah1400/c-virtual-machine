@@ -138,7 +138,9 @@ static int64_t parse_shift(Parser *p) {
         }
         int64_t amount = parse_add(p);
         if (amount < 0 || amount > 63) {
-            fail(p, "shift amount out of range");
+            if (!p->unresolved) {
+                fail(p, "shift amount out of range");
+            }
             amount = 0;
         }
         if (left) {
