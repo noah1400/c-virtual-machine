@@ -219,7 +219,7 @@ static uint8_t next_opcode(const Debugger *dbg) {
     return vm_peek_instruction(dbg->vm, dbg->vm->registers[R3_PC], &instr) ? instr.opcode : NOP_OP;
 }
 
-// Steps one instruction, running a CALL until it returns
+// Steps one instruction, running a CALL until it returns; RET #n leaves SP above its old value
 static int step_over(Debugger *dbg) {
     VM *vm = dbg->vm;
 
@@ -232,7 +232,7 @@ static int step_over(Debugger *dbg) {
     if (!step_instruction(dbg)) {
         return 0;
     }
-    while (vm->registers[R3_PC] != return_address || vm->registers[R2_SP] != sp) {
+    while (vm->registers[R3_PC] != return_address || vm->registers[R2_SP] < sp) {
         if (!step_instruction(dbg) || at_breakpoint(dbg)) {
             return 0;
         }
