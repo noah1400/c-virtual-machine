@@ -31,7 +31,8 @@ for src in "$root"/tests/programs/*.asm; do
 
     input=/dev/null
     [ -f "$base.in" ] && input="$base.in"
-    "$vm" "$tmp/$name.bin" < "$input" > "$tmp/$name.out" 2> "$tmp/$name.err"
+    # Programs run inside the scratch directory so the files they create do not leak
+    (cd "$tmp" && "$vm" "$name.bin" < "$input" > "$name.out" 2> "$name.err")
     status=$?
 
     expected_status=$(expectation "$src" expect-exit)
