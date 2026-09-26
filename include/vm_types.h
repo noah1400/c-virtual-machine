@@ -2,6 +2,7 @@
 #define _VM_TYPES_H_
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include "instruction_set.h"
@@ -40,6 +41,10 @@
 
 #define VM_RNG_DEFAULT_SEED     0x12345678
 
+// Files opened by programs get handles 3 and up; 0-2 are stdin, stdout and stderr
+#define VM_MAX_FILES            16
+#define VM_FIRST_FILE_HANDLE    3
+
 
 // Virtual Machine state
 typedef struct {
@@ -70,6 +75,7 @@ typedef struct {
     uint32_t rng_state;      // Random number generator state
     uint32_t exit_code;      // Set by the exit syscall
     uint64_t start_ms;       // Host clock when the VM started
+    FILE *files[VM_MAX_FILES];
 
     struct DebugInfo *debug_info;  // Debug information (NULL if not loaded)
 } VM;

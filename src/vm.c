@@ -29,6 +29,7 @@ void vm_cleanup(VM *vm) {
     debug_info_free(vm->debug_info);
     vm->debug_info = NULL;
     io_cleanup(vm);
+    syscalls_cleanup(vm);
 }
 
 int vm_run(VM *vm) {

@@ -112,6 +112,110 @@ void syscalls_init(VM *vm) {
     vm->start_ms = monotonic_ms();
 }
 
+void syscalls_cleanup(VM *vm) {
+    for (int i = 0; i < VM_MAX_FILES; i++) {
+        if (vm->files[i]) {
+            fclose(vm->files[i]);
+            vm->files[i] = NULL;
+        }
+    }
+}
+
+static FILE *file_for_handle(VM *vm, uint32_t handle) {
+    switch (handle) {
+        case 0:
+            return stdin;
+        case 1:
+            return stdout;
+        case 2:
+            return stderr;
+        default:
+            return handle - VM_FIRST_FILE_HANDLE < VM_MAX_FILES ? vm->files[handle - VM_FIRST_FILE_HANDLE] : NULL;
+    }
+}
+
+// Copies a NUL-terminated string out of VM memory; returns 0 if it is unreadable or too long
+static int read_string(VM *vm, uint32_t address, char *out, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        out[i] = (char)memory_read_byte(vm, address + (uint32_t)i);
+        if (vm->last_error != VM_ERROR_NONE) {
+            return 0;
+        }
+        if (out[i] == '\0') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void file_open(VM *vm, uint32_t path_address, uint32_t mode) {
+    static const char *const modes[] = { "rb", "wb", "ab", "r+b", "w+b" };
+    char path[256];
+    int slot = 0;
+
+    while (slot < VM_MAX_FILES && vm->files[slot]) {
+        slot++;
+    }
+    if (!read_string(vm, path_address, path, sizeof(path)) || mode >= sizeof(modes) / sizeof(modes[0]) ||
+        slot == VM_MAX_FILES || !(vm->files[slot] = fopen(path, modes[mode]))) {
+        vm_raise(vm, VM_ERROR_IO_ERROR, "Cannot open file");
+        vm->registers[R0_ACC] = 0;
+        return;
+    }
+    vm->registers[R0_ACC] = VM_FIRST_FILE_HANDLE + (uint32_t)slot;
+}
+
+static void file_close(VM *vm, uint32_t handle) {
+    FILE *file = handle >= VM_FIRST_FILE_HANDLE ? file_for_handle(vm, handle) : NULL;
+    if (!file || fclose(file) != 0) {
+        vm_raise(vm, VM_ERROR_IO_ERROR, "Invalid file handle");
+    }
+    if (file) {
+        vm->files[handle - VM_FIRST_FILE_HANDLE] = NULL;
+    }
+}
+
+// Transfers count bytes between a file and VM memory, returning the number moved in R0
+static void file_transfer(VM *vm, uint32_t handle, uint32_t address, uint32_t count, int writing) {
+    FILE *file = file_for_handle(vm, handle);
+
+    vm->registers[R0_ACC] = 0;
+    if (!file) {
+        vm_raise(vm, VM_ERROR_IO_ERROR, "Invalid file handle");
+        return;
+    }
+    if (memory_check_address_permissions(vm, address, count, writing ? PROT_READ : PROT_WRITE) != VM_ERROR_NONE) {
+        return;
+    }
+
+    if (writing) {
+        fflush(stdout);
+    }
+    size_t moved = writing ? fwrite(vm->memory + address, 1, count, file)
+                           : fread(vm->memory + address, 1, count, file);
+    if (writing) {
+        fflush(file);
+    }
+    vm->registers[R0_ACC] = (uint32_t)moved;
+    if (moved < count && ferror(file)) {
+        clearerr(file);
+        vm_raise(vm, VM_ERROR_IO_ERROR, "File transfer failed");
+    }
+}
+
+static void file_seek(VM *vm, uint32_t handle, uint32_t offset, uint32_t whence) {
+    static const int origins[] = { SEEK_SET, SEEK_CUR, SEEK_END };
+    FILE *file = handle >= VM_FIRST_FILE_HANDLE ? file_for_handle(vm, handle) : NULL;
+    long position;
+
+    if (!file || whence > 2 || fseek(file, (int32_t)offset, origins[whence]) != 0 || (position = ftell(file)) < 0) {
+        vm_raise(vm, VM_ERROR_IO_ERROR, "Cannot seek");
+        vm->registers[R0_ACC] = 0;
+        return;
+    }
+    vm->registers[R0_ACC] = (uint32_t)position;
+}
+
 static uint32_t mix_seed(uint32_t seed) {
     seed += 0x9E3779B9;
     seed = (seed ^ (seed >> 16)) * 0x85EBCA6B;
@@ -175,25 +279,21 @@ int syscall_dispatch(VM *vm, uint16_t number) {
             break;
 
         case SYS_OPEN:
-            r[R0_ACC] = 1;
+            file_open(vm, arg0, arg1);
+            syscall_status(vm);
             break;
         case SYS_CLOSE:
-            r[R0_ACC] = 0;
+            file_close(vm, arg0);
+            syscall_status(vm);
             break;
-        case SYS_READ: {
-            uint16_t buffer_addr = arg1;
-            uint16_t count = arg2;
-            if (buffer_addr + count > vm->memory_size) {
-                count = vm->memory_size - buffer_addr;
-            }
-            for (uint16_t i = 0; i < count; i++) {
-                memory_write_byte(vm, buffer_addr + i, i & 0xFF);
-            }
-            r[R0_ACC] = count;
-            break;
-        }
+        case SYS_READ:
         case SYS_WRITE:
-            r[R0_ACC] = (uint16_t)arg2;
+            file_transfer(vm, arg0, arg1, arg2, number == SYS_WRITE);
+            syscall_status(vm);
+            break;
+        case SYS_SEEK:
+            file_seek(vm, arg0, arg1, arg2);
+            syscall_status(vm);
             break;
 
         case SYS_ALLOC:

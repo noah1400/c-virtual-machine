@@ -20,6 +20,7 @@ enum {
     SYS_CLOSE        = 11,
     SYS_READ         = 12,
     SYS_WRITE        = 13,
+    SYS_SEEK         = 14,
     SYS_ALLOC        = 20,
     SYS_FREE         = 21,
     SYS_MEMCPY       = 22,
@@ -33,6 +34,7 @@ enum {
 };
 
 void syscalls_init(VM *vm);
+void syscalls_cleanup(VM *vm);
 
 // Services SYSCALL #number; returns a VM error code if the syscall faulted
 int syscall_dispatch(VM *vm, uint16_t number);
