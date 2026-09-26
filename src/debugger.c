@@ -12,8 +12,11 @@
 #define MAX_WORDS 4
 #define CONTEXT_LINES 2
 
+// Watchpoints stop after the word at their address changes, breakpoints before executing it
 typedef struct {
     uint32_t address;
+    int watch;
+    uint32_t value;
 } Breakpoint;
 
 // The most recently shown source file, split into lines
@@ -172,13 +175,28 @@ static void show_location(Debugger *dbg) {
     }
 }
 
-static int breakpoint_index(const Debugger *dbg, uint32_t address) {
+static int breakpoint_index(const Debugger *dbg, uint32_t address, int watch) {
     for (int i = 0; i < dbg->breakpoint_count; i++) {
-        if (dbg->breakpoints[i].address == address) {
+        if (dbg->breakpoints[i].address == address && dbg->breakpoints[i].watch == watch) {
             return i;
         }
     }
     return -1;
+}
+
+// Reports every watched word that changed since it was last seen
+static int watch_triggered(Debugger *dbg) {
+    int triggered = 0;
+    for (int i = 0; i < dbg->breakpoint_count; i++) {
+        Breakpoint *bp = &dbg->breakpoints[i];
+        uint32_t value = bp->watch ? read_le32(dbg->vm->memory + bp->address) : 0;
+        if (bp->watch && value != bp->value) {
+            printf("Watchpoint %d: 0x%04X changed from 0x%08X to 0x%08X\n", i + 1, bp->address, bp->value, value);
+            bp->value = value;
+            triggered = 1;
+        }
+    }
+    return triggered;
 }
 
 // Executes one instruction; returns 0 and reports why when execution has to stop
@@ -191,6 +209,9 @@ static int step_instruction(Debugger *dbg) {
     }
     if (vm_step(vm) != VM_ERROR_NONE) {
         printf("Error: %s\n", vm_get_error_message(vm));
+        return 0;
+    }
+    if (watch_triggered(dbg)) {
         return 0;
     }
     if (vm->halted) {
@@ -206,7 +227,7 @@ static int step_instruction(Debugger *dbg) {
 }
 
 static int at_breakpoint(Debugger *dbg) {
-    int index = breakpoint_index(dbg, dbg->vm->registers[R3_PC]);
+    int index = breakpoint_index(dbg, dbg->vm->registers[R3_PC], 0);
     if (index >= 0) {
         printf("Breakpoint %d at 0x%04X\n", index + 1, dbg->breakpoints[index].address);
         return 1;
@@ -294,17 +315,11 @@ static void cmd_continue(Debugger *dbg) {
     cpu_dump_registers(dbg->vm);
 }
 
-static void cmd_break(Debugger *dbg, int argc, char **argv) {
-    uint32_t address;
-    if (argc < 2) {
-        printf("Usage: break <address|symbol>\n");
-        return;
-    }
-    if (!parse_location(dbg, argv[1], &address)) {
-        return;
-    }
-    if (breakpoint_index(dbg, address) >= 0) {
-        printf("Breakpoint already set at 0x%04X\n", address);
+static void add_breakpoint(Debugger *dbg, uint32_t address, int watch) {
+    const char *kind = watch ? "Watchpoint" : "Breakpoint";
+
+    if (breakpoint_index(dbg, address, watch) >= 0) {
+        printf("%s already set at 0x%04X\n", kind, address);
         return;
     }
     if (dbg->breakpoint_count >= MAX_BREAKPOINTS) {
@@ -312,27 +327,58 @@ static void cmd_break(Debugger *dbg, int argc, char **argv) {
         return;
     }
 
-    dbg->breakpoints[dbg->breakpoint_count++].address = address;
-    printf("Breakpoint %d at 0x%04X", dbg->breakpoint_count, address);
+    Breakpoint *bp = &dbg->breakpoints[dbg->breakpoint_count++];
+    bp->address = address;
+    bp->watch = watch;
+    bp->value = watch ? read_le32(dbg->vm->memory + address) : 0;
+    printf("%s %d at 0x%04X", kind, dbg->breakpoint_count, address);
     print_symbolic(dbg, address);
     printf("\n");
+}
+
+static void cmd_break(Debugger *dbg, int argc, char **argv) {
+    uint32_t address;
+    if (argc < 2) {
+        printf("Usage: break <address|symbol>\n");
+        return;
+    }
+    if (parse_location(dbg, argv[1], &address)) {
+        add_breakpoint(dbg, address, 0);
+    }
+}
+
+static void cmd_watch(Debugger *dbg, int argc, char **argv) {
+    uint32_t address;
+    if (argc < 2) {
+        printf("Usage: watch <address|symbol>\n");
+        return;
+    }
+    if (!parse_location(dbg, argv[1], &address)) {
+        return;
+    }
+    if (address > dbg->vm->memory_size - 4) {
+        printf("Address out of range\n");
+        return;
+    }
+    add_breakpoint(dbg, address, 1);
 }
 
 static void cmd_delete(Debugger *dbg, int argc, char **argv) {
     uint32_t number;
     if (argc < 2 || !parse_number(argv[1], &number) || number == 0 || number > (uint32_t)dbg->breakpoint_count) {
-        printf("Usage: delete <breakpoint number>\n");
+        printf("Usage: delete <number>\n");
         return;
     }
+    const char *kind = dbg->breakpoints[number - 1].watch ? "watchpoint" : "breakpoint";
     memmove(&dbg->breakpoints[number - 1], &dbg->breakpoints[number],
             (size_t)(dbg->breakpoint_count - (int)number) * sizeof(Breakpoint));
     dbg->breakpoint_count--;
-    printf("Deleted breakpoint %u\n", number);
+    printf("Deleted %s %u\n", kind, number);
 }
 
 static void cmd_breakpoints(const Debugger *dbg) {
     if (dbg->breakpoint_count == 0) {
-        printf("No breakpoints set\n");
+        printf("No breakpoints or watchpoints set\n");
         return;
     }
     for (int i = 0; i < dbg->breakpoint_count; i++) {
@@ -340,7 +386,9 @@ static void cmd_breakpoints(const Debugger *dbg) {
         printf("%2d  0x%04X", i + 1, bp->address);
         print_symbolic(dbg, bp->address);
         const SourceLine *line = debug_line_at(dbg->vm->debug_info, bp->address);
-        if (line) {
+        if (bp->watch) {
+            printf("  watch, value 0x%08X", bp->value);
+        } else if (line) {
             printf("  %s:%u", line->source_file ? line->source_file : "?", line->line_num);
         }
         printf("\n");
@@ -446,8 +494,9 @@ static void cmd_help(void) {
     printf("  f, finish                Run until the current subroutine returns\n");
     printf("  c, continue              Run until a breakpoint, DEBUG instruction, halt or fault\n");
     printf("  b, break ADDR|SYMBOL     Set a breakpoint\n");
-    printf("  d, delete N              Delete breakpoint N\n");
-    printf("  lb, breakpoints          List breakpoints\n");
+    printf("  w, watch ADDR|SYMBOL     Stop when the word at ADDR changes\n");
+    printf("  d, delete N              Delete breakpoint or watchpoint N\n");
+    printf("  lb, breakpoints          List breakpoints and watchpoints\n");
     printf("  ls, symbols              List symbols\n");
     printf("  x, disas [ADDR] [N]      Disassemble N instructions (default: 8 at PC)\n");
     printf("  m, memory ADDR [N]       Dump N bytes of memory (default 16)\n");
@@ -497,6 +546,8 @@ int debugger_run(VM *vm) {
             show_location(&dbg);
         } else if (is_command(cmd, "b", "break")) {
             cmd_break(&dbg, argc, argv);
+        } else if (is_command(cmd, "w", "watch")) {
+            cmd_watch(&dbg, argc, argv);
         } else if (is_command(cmd, "d", "delete")) {
             cmd_delete(&dbg, argc, argv);
         } else if (is_command(cmd, "lb", "breakpoints")) {
