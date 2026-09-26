@@ -77,8 +77,8 @@ static void write_debug_info(Assembler *as, Buffer *b) {
         put_string(b, sym->name);
         put_u32(b, (uint32_t)sym->value);
         put_u8(b, (uint8_t)sym->kind);
-        put_u32(b, (uint32_t)sym->line->number);
-        put_string(b, sym->line->file);
+        put_u32(b, sym->line ? (uint32_t)sym->line->number : 0);
+        put_string(b, sym->line ? sym->line->file : NULL);
     }
 
     uint32_t count = 0;

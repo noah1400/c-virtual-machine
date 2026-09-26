@@ -152,6 +152,14 @@ static int fits(int64_t value, int bytes) {
     }
 }
 
+static void report_redefinition(Assembler *as, const char *name, const AsmSymbol *sym) {
+    if (sym->line) {
+        asm_error(as, "'%s' is already defined at %s:%d", name, sym->line->file, sym->line->number);
+    } else {
+        asm_error(as, "'%s' is already defined on the command line", name);
+    }
+}
+
 static void define_label(Assembler *as, const char *text) {
     char name[256];
 
@@ -181,7 +189,7 @@ static void define_label(Assembler *as, const char *text) {
         return;
     }
     if (sym) {
-        asm_error(as, "'%s' is already defined at %s:%d", name, sym->line->file, sym->line->number);
+        report_redefinition(as, name, sym);
         return;
     }
     sym = symbols_add(&as->symbols, name);
@@ -317,7 +325,7 @@ static void directive_equ(Assembler *as, Parser *p) {
 
     AsmSymbol *sym = symbols_find(&as->symbols, name);
     if (sym) {
-        asm_error(as, "'%s' is already defined at %s:%d", name, sym->line->file, sym->line->number);
+        report_redefinition(as, name, sym);
         return;
     }
     sym = symbols_add(&as->symbols, name);
@@ -676,6 +684,67 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
     }
 }
 
+static int conditions_active(const Assembler *as) {
+    return as->condition_depth == 0 || as->conditions[as->condition_depth - 1].active;
+}
+
+// Handles .if, .ifdef, .ifndef, .else and .endif; returns 0 for any other statement
+static int conditional(Assembler *as, Parser *p, LineResult *result) {
+    const Token *t = &p->tokens->items[p->pos];
+    const char *name = t->kind == TOK_IDENT ? t->text : "";
+    int is_if = name_equals(name, ".if"), is_ifdef = name_equals(name, ".ifdef"), is_ifndef = name_equals(name, ".ifndef");
+
+    if (is_if || is_ifdef || is_ifndef) {
+        int parent_active = conditions_active(as);
+        p->pos++;
+
+        if (as->condition_depth == ASM_MAX_CONDITIONS) {
+            asm_error(as, "conditionals are nested too deeply");
+            return 1;
+        }
+        if (parent_active && as->pass == 1) {
+            int64_t value = 0;
+            if (is_if) {
+                if (!eval_now(p, &value, "a .if condition")) {
+                    value = 0;
+                }
+            } else if (peek(p)->kind != TOK_IDENT) {
+                asm_error(as, "expected a symbol name");
+            } else {
+                char qualified[256];
+                AsmSymbol *sym = qualify_name(as, peek(p)->text, qualified, sizeof(qualified))
+                                     ? symbols_find(&as->symbols, qualified) : NULL;
+                value = (sym != NULL) == is_ifdef;
+                p->pos++;
+            }
+            expect_end(p);
+            result->condition = value != 0;
+        }
+
+        int active = parent_active && result->condition;
+        as->conditions[as->condition_depth++] = (Condition){ active, active, parent_active };
+        return 1;
+    }
+
+    if (name_equals(name, ".else") || name_equals(name, ".endif")) {
+        p->pos++;
+        if (as->condition_depth == 0) {
+            asm_error(as, "%s without .if", name);
+            return 1;
+        }
+        Condition *c = &as->conditions[as->condition_depth - 1];
+        if (name_equals(name, ".endif")) {
+            as->condition_depth--;
+        } else {
+            c->active = c->parent_active && !c->taken;
+            c->taken = 1;
+        }
+        expect_end(p);
+        return 1;
+    }
+    return 0;
+}
+
 static void assemble_line(Assembler *as, size_t index, int labels_only) {
     LineResult *result = &as->results[index];
     TokenList tokens;
@@ -687,9 +756,17 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
     }
 
     Parser p = { as, &tokens, 0, 0, 0 };
+    int active = conditions_active(as);
     while (tokens.items[p.pos].kind == TOK_IDENT && token_is_punct(&tokens.items[p.pos + 1], ':')) {
-        define_label(as, tokens.items[p.pos].text);
+        if (active) {
+            define_label(as, tokens.items[p.pos].text);
+        }
         p.pos += 2;
+    }
+
+    if (conditional(as, &p, result) || !active) {
+        tokens_free(&tokens);
+        return;
     }
 
     int section = as->section;
@@ -724,6 +801,7 @@ static void run_pass(Assembler *as, int pass) {
     }
     as->section = SECTION_TEXT;
     as->section_depth = 0;
+    as->condition_depth = 0;
     as->scope[0] = '\0';
 
     for (size_t i = 0; i < as->line_count && as->errors < ASM_MAX_ERRORS; i++) {
@@ -744,6 +822,50 @@ static void run_pass(Assembler *as, int pass) {
         }
     }
     as->line = NULL;
+
+    if (as->condition_depth > 0 && pass == 1) {
+        asm_error(as, "missing .endif");
+    }
+}
+
+// Defines NAME=VALUE constants given on the command line before any source is assembled
+static void define_command_line_constants(Assembler *as) {
+    for (int i = 0; i < as->define_count; i++) {
+        char name[128];
+        const char *equals = strchr(as->defines[i], '=');
+        size_t length = equals ? (size_t)(equals - as->defines[i]) : strlen(as->defines[i]);
+        int64_t value = 1;
+
+        snprintf(name, sizeof(name), "%.*s", (int)length, as->defines[i]);
+        if (equals) {
+            TokenList tokens;
+            char error[64];
+            if (!lex_line(equals + 1, &tokens, error, sizeof(error))) {
+                asm_error(as, "invalid value for -D %s", name);
+                continue;
+            }
+            Parser p = { as, &tokens, 0, 0, 0 };
+            as->pass = 1;
+            value = parse_expression(&p);
+            if (!p.failed && (p.unresolved || tokens.items[p.pos].kind != TOK_END)) {
+                asm_error(as, "invalid value for -D %s", name);
+            }
+            tokens_free(&tokens);
+        }
+
+        if (length == 0 || isa_register_index(name) >= 0 || symbols_find(&as->symbols, name)) {
+            asm_error(as, "cannot define '%s' on the command line", name);
+            continue;
+        }
+        AsmSymbol *sym = symbols_add(&as->symbols, name);
+        if (!sym) {
+            asm_error(as, "out of memory");
+            return;
+        }
+        sym->kind = SYM_CONST;
+        sym->value = value;
+        sym->defined = 1;
+    }
 }
 
 // Constants that referred to later labels are evaluated once every label is known
@@ -796,7 +918,8 @@ static void resolve_pending(Assembler *as) {
 }
 
 int asm_assemble(Assembler *as, const char *path) {
-    if (!source_load(as, path)) {
+    define_command_line_constants(as);
+    if (as->errors || !source_load(as, path)) {
         return 0;
     }
 

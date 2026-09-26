@@ -9,6 +9,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -o FILE   Write the binary to FILE (default: input with a .bin extension)\n");
     fprintf(out, "  -l FILE   Write a listing to FILE\n");
     fprintf(out, "  -I DIR    Also search DIR for included files\n");
+    fprintf(out, "  -D NAME[=VALUE]  Define a constant, 1 unless a value is given\n");
     fprintf(out, "  -s        Print the symbol table\n");
     fprintf(out, "  -S        Leave out debug information\n");
     fprintf(out, "  -h        Show this help\n");
@@ -36,7 +37,8 @@ int main(int argc, char *argv[]) {
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
-        int needs_value = strcmp(arg, "-o") == 0 || strcmp(arg, "-l") == 0 || strcmp(arg, "-I") == 0;
+        int needs_value = strcmp(arg, "-o") == 0 || strcmp(arg, "-l") == 0 || strcmp(arg, "-I") == 0 ||
+                          strcmp(arg, "-D") == 0;
 
         if (needs_value && i + 1 >= argc) {
             fprintf(stderr, "vmasm: error: %s needs a value\n", arg);
@@ -52,6 +54,12 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             as.include_dirs[as.include_dir_count++] = argv[++i];
+        } else if (strcmp(arg, "-D") == 0) {
+            if (as.define_count == ASM_MAX_DEFINES) {
+                fprintf(stderr, "vmasm: error: too many -D options\n");
+                return 1;
+            }
+            as.defines[as.define_count++] = argv[++i];
         } else if (strcmp(arg, "-s") == 0) {
             show_symbols = 1;
         } else if (strcmp(arg, "-S") == 0) {
