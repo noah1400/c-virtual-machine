@@ -1307,10 +1307,10 @@ static int handle_system(VM *vm, Instruction *instr) {
                         // Return maximum function number in R0_ACC
                         vm->registers[R0_ACC] = 4;
                         
-                        // Store vendor string in R5-R7 ("VM32CPU" in ASCII)
-                        vm->registers[R5] = 0x334D5632; // "2VM3"
-                        vm->registers[R6] = 0x55504332; // "2CPU"
-                        vm->registers[R7] = 0x00000000; // Null terminator
+                        // Vendor string "VM32CPU" as little-endian bytes in R5-R6
+                        vm->registers[R5] = 0x32334D56; // "VM32"
+                        vm->registers[R6] = 0x00555043; // "CPU\0"
+                        vm->registers[R7] = 0x00000000;
                         break;
                         
                     case 1: // Version and feature information
@@ -1318,17 +1318,12 @@ static int handle_system(VM *vm, Instruction *instr) {
                         // Format: [Major:8][Minor:8][Revision:8][Reserved:8]
                         vm->registers[R0_ACC] = 0x00010001; // Version 1.1.0
                         
-                        // R5: Feature flags 1
-                        vm->registers[R5] = 0x00000001 |  // Bit 0: Has FPU emulation  (not implemented yet)
-                                            0x00000002 |  // Bit 1: Has SIMD           (not implemented yet)
-                                            0x00000004 |  // Bit 2: Has I/O system
-                                            0x00000008 |  // Bit 3: Has memory protection (partially implemented)
-                                            0x00000010 |  // Bit 4: Has interrupts      (partially implemented)
-                                            0x00000020;   // Bit 5: Has syscalls
-                        
-                        // R6: Feature flags 2
-                        vm->registers[R6] = 0x00000001 |  // Bit 0: Has debug support
-                                            0x00000002;   // Bit 1: Has timer device
+                        // R5: Feature flags (bit 2: I/O ports, bit 3: memory protection,
+                        // bit 4: interrupts, bit 5: syscalls)
+                        vm->registers[R5] = 0x00000004 | 0x00000008 | 0x00000010 | 0x00000020;
+
+                        // R6: Feature flags 2 (bit 0: debug support)
+                        vm->registers[R6] = 0x00000001;
                         
                         // R7: Reserved for future use
                         vm->registers[R7] = 0;
@@ -1338,11 +1333,11 @@ static int handle_system(VM *vm, Instruction *instr) {
                         // R0_ACC: Total memory size in bytes
                         vm->registers[R0_ACC] = vm->memory_size;
                         
-                        // R5: Segment information (base addresses)
-                        vm->registers[R5] = (CODE_SEGMENT_BASE << 24) | 
-                                           (DATA_SEGMENT_BASE << 16) | 
-                                           (STACK_SEGMENT_BASE << 8) | 
-                                           (HEAP_SEGMENT_BASE);
+                        // R5: Segment base addresses divided by 256, one byte each
+                        vm->registers[R5] = ((CODE_SEGMENT_BASE >> 8) << 24) |
+                                           ((DATA_SEGMENT_BASE >> 8) << 16) |
+                                           ((STACK_SEGMENT_BASE >> 8) << 8) |
+                                           (HEAP_SEGMENT_BASE >> 8);
                         
                         // R6: Segment information (sizes in KB)
                         vm->registers[R6] = (CODE_SEGMENT_SIZE / 1024 << 24) | 
