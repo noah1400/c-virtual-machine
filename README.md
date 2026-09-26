@@ -93,6 +93,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-D` | Disassemble the program instead of running it |
 | `-m KB` | Memory size in KB, 64 to 65536 (default 64) |
 | `-n COUNT` | Stop with an error after COUNT instructions |
+| `-p` | Print an execution profile on stderr when the program stops |
 | `-t` | Print each instruction on stderr before it executes |
 | `-v` | Print loading and execution statistics on stderr |
 | `-h` | Show help |
@@ -119,6 +120,17 @@ $ ./vm -t hello.bin 2>&1 >/dev/null | head -4
 0x0004 <main+4>             SYSCALL #2
 0x0008 <main+8>             LOAD R8, #0x0
 0x000C <main+12>            LOAD R9, #0xA
+```
+
+A profile adds up the executed instructions under the closest preceding label:
+
+```console
+$ ./vm -p hello.bin
+Hello from VM32! Sum: 55
+vm: profile of 29 instructions
+       count   share  location
+          25   86.2%  0x0010 <main.loop>
+           4   13.8%  0x0000 <main>
 ```
 
 `-D` prints the header, then the code with its labels, then a hex dump of the data segment. A file without a VM32 header is treated as raw code and loaded at address 0.
