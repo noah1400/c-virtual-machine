@@ -7,6 +7,7 @@
 #include "debug.h"
 #include "io.h"
 #include "memory.h"
+#include "syscalls.h"
 #include "vm.h"
 
 int vm_init(VM *vm, uint32_t memory_size) {
@@ -18,6 +19,7 @@ int vm_init(VM *vm, uint32_t memory_size) {
     }
 
     cpu_reset(vm);
+    syscalls_init(vm);
     vm->rng_state = VM_RNG_DEFAULT_SEED;
     return io_init(vm);
 }

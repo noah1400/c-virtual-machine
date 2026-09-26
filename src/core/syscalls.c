@@ -98,6 +98,20 @@ static void sleep_ms(uint32_t ms) {
 #endif
 }
 
+static uint64_t monotonic_ms(void) {
+#ifdef _WIN32
+    return GetTickCount64();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+#endif
+}
+
+void syscalls_init(VM *vm) {
+    vm->start_ms = monotonic_ms();
+}
+
 static uint32_t mix_seed(uint32_t seed) {
     seed += 0x9E3779B9;
     seed = (seed ^ (seed >> 16)) * 0x85EBCA6B;
@@ -209,7 +223,7 @@ int syscall_dispatch(VM *vm, uint16_t number) {
             sleep_ms(arg0);
             break;
         case SYS_TIME:
-            r[R0_ACC] = vm->instruction_count * 10;
+            r[R0_ACC] = (uint32_t)(monotonic_ms() - vm->start_ms);
             break;
         case SYS_TICKS:
             r[R0_ACC] = vm->instruction_count;

@@ -69,6 +69,7 @@ typedef struct {
 
     uint32_t rng_state;      // Random number generator state
     uint32_t exit_code;      // Set by the exit syscall
+    uint64_t start_ms;       // Host clock when the VM started
 
     struct DebugInfo *debug_info;  // Debug information (NULL if not loaded)
 } VM;
