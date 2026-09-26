@@ -1,6 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "cpu.h"
 #include "memory.h"
 #include "instruction_set.h"
@@ -922,25 +926,14 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 
             case 31:  // Sleep (param1=milliseconds)
                 {
-                    // Use platform-specific sleep
                     #ifdef _WIN32
-                    // Windows
-                    Sleep(param1);  // Windows Sleep takes milliseconds
+                    Sleep(param1);
                     #else
-                    // Unix/Linux/macOS
                     struct timespec ts;
                     ts.tv_sec = param1 / 1000;
-                    ts.tv_nsec = (param1 % 1000) * 1000000;
+                    ts.tv_nsec = (long)(param1 % 1000) * 1000000L;
                     nanosleep(&ts, NULL);
                     #endif
-                    
-                    // Still update instruction count for consistency
-                    uint32_t dummy_cycles = param1 / 10;
-                    if (dummy_cycles > 0) {
-                        vm->instruction_count += dummy_cycles;
-                    } else {
-                        vm->instruction_count++;
-                    }
                 }
                 break;
                 
