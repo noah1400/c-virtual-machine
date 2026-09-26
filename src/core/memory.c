@@ -184,18 +184,18 @@ int memory_check_address_permissions(VM *vm, uint32_t address, uint32_t size, ui
 
         if (!block || !block_allocated(vm, block)) {
             return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
-                                "Memory access to unallocated heap: address 0x%04X", address);
+                            "Memory access to unallocated heap: address 0x%04X", address);
         }
         if (end > block + block_size(vm, block)) {
             return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
-                                "Memory access past end of heap block: address 0x%04X, size %u", address, size);
+                            "Memory access past end of heap block: address 0x%04X, size %u", address, size);
         }
 
         uint8_t protection = vm->memory[block + 5];
         if ((protection & required_perm) != required_perm) {
             return vm_raise(vm, VM_ERROR_PROTECTION_FAULT,
-                                "Memory protection violation: address 0x%04X, required permission 0x%02X, actual permission 0x%02X",
-                                address, required_perm, protection);
+                            "Memory protection violation: address 0x%04X, required permission 0x%02X, actual permission 0x%02X",
+                            address, required_perm, protection);
         }
     }
 
@@ -251,7 +251,7 @@ int memory_free(VM *vm, uint32_t address) {
     }
     if (!block || block + HEAP_HEADER_SIZE != address) {
         return vm_raise(vm, VM_ERROR_INVALID_ADDRESS,
-                            "Address 0x%04X is not the start of an allocated block", address);
+                        "Address 0x%04X is not the start of an allocated block", address);
     }
 
     coalesce(vm, block);
@@ -263,7 +263,7 @@ int memory_protect(VM *vm, uint32_t address, uint8_t flags) {
     uint32_t block = find_block(vm, address);
     if (!block || !block_allocated(vm, block) || block + HEAP_HEADER_SIZE != address) {
         return vm_raise(vm, VM_ERROR_INVALID_ADDRESS,
-                            "Address 0x%04X is not the start of an allocated block", address);
+                        "Address 0x%04X is not the start of an allocated block", address);
     }
 
     vm->memory[block + 5] = flags & PROT_ALL;
