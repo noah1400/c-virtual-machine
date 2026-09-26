@@ -36,47 +36,23 @@ do_time_cmd:
     ; Print time label
     LOAD R0, time_text
     SYSCALL #2
-    
-    ; Get and display system time
-    SYSCALL #32
-    PUSH R0
-    
-    ; Save R7
-    PUSH R7
 
-    ; Convert to seconds
-    LOAD R7, #1000
-    DIV R0, R7
-    
-    ; Print seconds
+    ; Get the time in milliseconds and print it as seconds
+    SYSCALL #32
+    MOVE R7, R0
+    LOAD R8, #1000
+    DIV R0, R8
     SYSCALL #1
-    
+
     ; Print decimal point
     LOAD R0, #46
     SYSCALL #0
-    
-    ; Print milliseconds
-    POP R0
-    MOD R0, R7
 
-    ; Restore R7
-    POP R7
-    
-    ; Ensure we print leading zeros
-    CMP R0, #100
-    JP print_msec
-    ; Less than 100, need to print at least one zero
-    LOAD R0, #48
-    SYSCALL #0
-    
-    CMP R0, #10
-    JP print_msec
-    ; Less than 10, need two leading zeros
-    LOAD R0, #48
-    SYSCALL #0
-    
-print_msec:
-    SYSCALL #1
+    ; Print milliseconds with leading zeros
+    MOVE R0, R7
+    MOD R0, R8
+    CALL print_3_digits
+
     LOAD R0, seconds_text
     SYSCALL #2
     JMP parse_cmd_done

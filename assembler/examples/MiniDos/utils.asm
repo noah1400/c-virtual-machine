@@ -83,6 +83,26 @@ strcmp_done:
 
 ; ----- Number Utilities -----
 
+; Print a number from 0 to 999 with leading zeros
+; Input: R0 = number
+print_3_digits:
+    PUSH R7
+    MOVE R7, R0
+    CMP R7, #99
+    JA print_3_tens
+    LOAD R0, #48
+    SYSCALL #0
+print_3_tens:
+    CMP R7, #9
+    JA print_3_units
+    LOAD R0, #48
+    SYSCALL #0
+print_3_units:
+    MOVE R0, R7
+    SYSCALL #1
+    POP R7
+    RET
+
 ; Parse a number from string
 ; Input: R6 = pointer to string
 ; Output: R0 = parsed number, R6 updated to after number
