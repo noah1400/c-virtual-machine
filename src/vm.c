@@ -100,14 +100,10 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
         return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Data segment does not fit the data segment range");
     }
 
-    printf("Loading optimized format binary (v%d.%d)\n", bin.version_major, bin.version_minor);
-    printf("  Code segment: 0x%04X - %u bytes\n", code_base, code_size);
-    printf("  Data segment: 0x%04X - %u bytes\n", data_base, data_size);
-
     memcpy(vm->memory + code_base, bin.code, code_size);
     memcpy(vm->memory + data_base, bin.data, data_size);
 
-    if (bin.symbol_size > 0 && vm->debug_mode) {
+    if (bin.symbol_size > 0) {
         debug_info_free(vm->debug_info);
         vm->debug_info = debug_info_parse(bin.symbols, bin.symbol_size);
     }
@@ -122,7 +118,6 @@ static int load_raw_image(VM *vm, const uint8_t *image, uint32_t size) {
         return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Raw program image exceeds code and data segments");
     }
 
-    printf("Loading legacy format binary\n");
     memcpy(vm->memory + CODE_SEGMENT_BASE, image, size);
     vm->registers[R3_PC] = CODE_SEGMENT_BASE;
     return VM_ERROR_NONE;
@@ -211,7 +206,7 @@ const char* vm_get_error_string(int error_code) {
     }
 }
 
-const char* vm_get_error_message(VM *vm) {
+const char* vm_get_error_message(const VM *vm) {
     if (!vm) {
         return "Invalid VM pointer";
     }

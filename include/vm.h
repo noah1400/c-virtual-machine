@@ -22,6 +22,6 @@ int vm_load_program_file(VM *vm, const char *filename);
 int vm_raise(VM *vm, int code, const char *format, ...);
 void vm_clear_error(VM *vm);
 const char* vm_get_error_string(int error_code);
-const char* vm_get_error_message(VM *vm);
+const char* vm_get_error_message(const VM *vm);
 
 #endif // _VM_H_
