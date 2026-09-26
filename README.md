@@ -437,6 +437,7 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.org address` | Pad forward to an address in the current section |
 | `.equ NAME, expr` or `.set` | Define a constant. A constant cannot be redefined |
 | `.entry expr` | Start execution here instead of at 0x0000 |
+| `.error "message"` | Stop assembly with this message. Useful inside `.if` |
 | `.include "file"` | Insert a file. It is searched for next to the including file, then in `-I` directories |
 | `.macro` ... `.endm` | Define a macro |
 | `.if`, `.ifdef`, `.ifndef`, `.else`, `.endif` | Conditional assembly |
@@ -603,8 +604,9 @@ These codes appear in R5 after syscalls and in `CPUID` function 4.
 | `f`, `finish` | Run until the current subroutine returns |
 | `c`, `continue` | Run until a breakpoint, a `DEBUG` instruction, `HALT` or a fault |
 | `b`, `break ADDR\|SYMBOL` | Set a breakpoint, for example `b main.loop` or `b 0x10` |
-| `d`, `delete N` | Delete breakpoint N |
-| `lb`, `breakpoints` | List breakpoints |
+| `w`, `watch ADDR\|SYMBOL` | Stop after an instruction changes the 32-bit word at ADDR |
+| `d`, `delete N` | Delete breakpoint or watchpoint N |
+| `lb`, `breakpoints` | List breakpoints and watchpoints |
 | `ls`, `symbols` | List symbols |
 | `x`, `disas [ADDR] [N]` | Disassemble N instructions (default: 8 at PC) |
 | `m`, `memory ADDR [N]` | Dump N bytes (default 16) |
