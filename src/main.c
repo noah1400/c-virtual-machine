@@ -17,7 +17,7 @@ int breakpoint_count = 0;
 void print_usage(const char *program_name) {
     printf("Usage: %s [options] [program_file]\n", program_name);
     printf("Options:\n");
-    printf("  -m SIZE       Set memory size in KB (default: 64)\n");
+    printf("  -m SIZE       Set memory size in KB, at least 64 (default: 64)\n");
     printf("  -d            Enable debug mode\n");
     printf("  -dd           Enable extra verbose debug mode\n");
     printf("  -D            Disassemble program file instead of running it\n");
@@ -47,12 +47,13 @@ int parse_arguments(int argc, char *argv[], int *memory_size, int *debug_mode,
                 case 'm':
                     // Memory size
                     if (i + 1 < argc) {
-                        int size = atoi(argv[i + 1]);
-                        if (size <= 0) {
-                            fprintf(stderr, "Error: Invalid memory size\n");
+                        char *end;
+                        long size = strtol(argv[i + 1], &end, 10);
+                        if (*end != '\0' || size < 64 || size > 65536) {
+                            fprintf(stderr, "Error: Memory size must be between 64 and 65536 KB\n");
                             return 0;
                         }
-                        *memory_size = size * 1024;  // Convert KB to bytes
+                        *memory_size = (int)(size * 1024);  // Convert KB to bytes
                         i++;
                     } else {
                         fprintf(stderr, "Error: Missing memory size value\n");

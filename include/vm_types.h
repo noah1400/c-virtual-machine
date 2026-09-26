@@ -32,6 +32,7 @@
 #define STACK_SEGMENT_SIZE  0x4000
 #define HEAP_SEGMENT_BASE   0xC000
 #define HEAP_SEGMENT_SIZE   0x4000
+#define VM_ADDRESS_SPACE_SIZE 0x10000u
 
 // Special stack frame offsets
 #define FRAME_PREV_BP_OFFSET    0

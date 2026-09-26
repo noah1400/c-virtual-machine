@@ -29,7 +29,15 @@ int memory_init(VM *vm, uint32_t size) {
     if (!vm) {
         return VM_ERROR_INVALID_ADDRESS;
     }
-    
+
+    // The fixed segment layout spans the whole 16-bit address space
+    if (size < VM_ADDRESS_SPACE_SIZE) {
+        vm->last_error = VM_ERROR_MEMORY_ALLOCATION;
+        snprintf(vm->error_message, sizeof(vm->error_message),
+                 "Memory size must be at least %u bytes", VM_ADDRESS_SPACE_SIZE);
+        return VM_ERROR_MEMORY_ALLOCATION;
+    }
+
     // Allocate memory buffer
     vm->memory = (uint8_t*)malloc(size);
     if (!vm->memory) {
