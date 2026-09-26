@@ -31,24 +31,17 @@ void vm_destroy_stack_frame(VM *vm) {
     vm->registers[R3_PC] = cpu_stack_pop(vm);
 }
 
-// Push all registers onto stack (except SP)
+// Push all registers in reverse order, storing SP as it was before the first push
 void vm_push_all_registers(VM *vm) {
-    // Save all registers in reverse order
+    uint32_t original_sp = vm->registers[R2_SP];
+
     for (int i = 15; i >= 0; i--) {
-        if (i != R2_SP) {  // Don't push SP
-            cpu_stack_push(vm, vm->registers[i]);
-        } else {
-            // Push original SP value (before any pushes)
-            cpu_stack_push(vm, vm->registers[R2_SP] + 4 * 15);
-        }
+        cpu_stack_push(vm, i == R2_SP ? original_sp : vm->registers[i]);
     }
 }
 
-// Pop all registers from stack
+// Pop all registers from stack, discarding the saved SP
 void vm_pop_all_registers(VM *vm) {
-    uint32_t orig_sp = vm->registers[R2_SP];
-    
-    // Restore all registers
     for (int i = 0; i < 16; i++) {
         if (i != R2_SP) {  // Don't pop into SP
             vm->registers[i] = cpu_stack_pop(vm);

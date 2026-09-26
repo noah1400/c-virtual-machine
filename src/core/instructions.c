@@ -1172,29 +1172,22 @@ static int handle_stack(VM *vm, Instruction *instr) {
             break;
             
         case PUSHA_OP:
-            // Push all registers onto stack
-            for (int i = 0; i < 16; i++) {
-                if (i != R2_SP) {  // Don't push SP
-                    cpu_stack_push(vm, vm->registers[i]);
-                } else {
-                    // Push original SP value
-                    cpu_stack_push(vm, vm->registers[R2_SP] + 4 * 15);
+            // Push all registers, storing SP as it was before the first push
+            {
+                uint32_t original_sp = vm->registers[R2_SP];
+
+                for (int i = 0; i < 16; i++) {
+                    cpu_stack_push(vm, i == R2_SP ? original_sp : vm->registers[i]);
                 }
             }
             break;
-            
+
         case POPA_OP:
-            // Pop all registers from stack (in reverse order)
-            {
-                uint32_t orig_sp = vm->registers[R2_SP];
-                
-                for (int i = 15; i >= 0; i--) {
-                    if (i != R2_SP) {  // Don't pop into SP
-                        vm->registers[i] = cpu_stack_pop(vm);
-                    } else {
-                        // Skip SP
-                        vm->registers[R2_SP] += 4;
-                    }
+            // Pop all registers in reverse order, discarding the saved SP and PC
+            for (int i = 15; i >= 0; i--) {
+                uint32_t value = cpu_stack_pop(vm);
+                if (i != R2_SP && i != R3_PC) {
+                    vm->registers[i] = value;
                 }
             }
             break;
