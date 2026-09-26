@@ -8,6 +8,7 @@
 // A .equ whose value depends on labels defined later in the source
 struct PendingConstant {
     size_t line;
+    uint32_t address;
     char scope[128];
 };
 
@@ -346,6 +347,7 @@ static void directive_equ(Assembler *as, Parser *p) {
         }
         as->pending = pending;
         pending[as->pending_count].line = (size_t)(as->line - as->lines);
+        pending[as->pending_count].address = as->statement_address;
         snprintf(pending[as->pending_count].scope, sizeof(pending->scope), "%s", as->scope);
         as->pending_count++;
     }
@@ -891,7 +893,7 @@ static void resolve_pending(Assembler *as) {
                 Parser p = { as, &tokens, pos + 3, 0, 0 };
                 snprintf(as->scope, sizeof(as->scope), "%s", as->pending[i].scope);
                 as->line = line;
-                as->statement_address = as->results[as->pending[i].line].address;
+                as->statement_address = as->pending[i].address;
                 int64_t value = parse_expression(&p);
                 if (!p.unresolved && !p.failed) {
                     sym = symbols_find(&as->symbols, tokens.items[pos + 1].text);

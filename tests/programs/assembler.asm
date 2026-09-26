@@ -24,6 +24,9 @@ first:
 here:
     LOAD R8, #$ - here
     CALL print_int
+.equ TO_SECOND, second - $          ; $ is the address of this line
+    LOAD R8, #TO_SECOND
+    CALL print_int
 
 second:
     JMP .skip
