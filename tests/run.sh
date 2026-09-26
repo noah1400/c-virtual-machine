@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble.
-# Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:"
-# and "; vm-args:" lines.
+# Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:",
+# "; asm-args:" and "; vm-args:" lines.
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 vm="$root/vm"
@@ -26,7 +26,8 @@ for src in "$root"/tests/programs/*.asm; do
     base=${src%.asm}
 
     # Assemble with a relative path so debug info does not depend on the checkout location
-    if ! (cd "$root" && "$asm" "tests/programs/$name.asm" -o "$tmp/$name.bin" 2> "$tmp/$name.log"); then
+    asm_args=$(expectation "$src" asm-args)
+    if ! (cd "$root" && "$asm" $asm_args "tests/programs/$name.asm" -o "$tmp/$name.bin" 2> "$tmp/$name.log"); then
         fail "$name" "does not assemble: $(head -n 1 "$tmp/$name.log")"
         continue
     fi
@@ -62,8 +63,9 @@ for src in "$root"/tests/errors/*.asm; do
     [ -e "$src" ] || continue
     name=$(basename "$src" .asm)
     expected=$(expectation "$src" expect-error)
+    asm_args=$(expectation "$src" asm-args)
 
-    if "$asm" "$src" -o "$tmp/$name.bin" 2> "$tmp/$name.log"; then
+    if "$asm" $asm_args "$src" -o "$tmp/$name.bin" 2> "$tmp/$name.log"; then
         fail "$name" "assembled although it should not"
     elif ! grep -qF -- "$expected" "$tmp/$name.log"; then
         fail "$name" "expected '$expected', got: $(head -n 1 "$tmp/$name.log")"
