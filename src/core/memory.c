@@ -270,6 +270,22 @@ int memory_check_address_permissions(VM *vm, uint32_t address, uint32_t size, ui
     return VM_ERROR_NONE;
 }
 
+// Total and largest free payload bytes in the heap
+void memory_heap_stats(const VM *vm, uint32_t *free_bytes, uint32_t *largest_free) {
+    *free_bytes = 0;
+    *largest_free = 0;
+    for (uint32_t block = HEAP_SEGMENT_BASE; block < HEAP_END && block_valid(vm, block);
+         block += block_size(vm, block)) {
+        if (!block_allocated(vm, block)) {
+            uint32_t payload = block_size(vm, block) - HEAP_HEADER_SIZE;
+            *free_bytes += payload;
+            if (payload > *largest_free) {
+                *largest_free = payload;
+            }
+        }
+    }
+}
+
 // Merge a free block with free neighbours on both sides
 static void coalesce(VM *vm, uint32_t block) {
     uint32_t size = block_size(vm, block);
