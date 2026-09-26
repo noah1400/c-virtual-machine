@@ -22,9 +22,12 @@ $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) -c -o $@ $<
 
+test: vm vmasm
+	sh tests/run.sh
+
 clean:
 	rm -rf $(BUILD) vm vmasm
 
 -include $(VM_OBJ:.o=.d) $(ASM_OBJ:.o=.d)
 
-.PHONY: all clean
+.PHONY: all test clean
