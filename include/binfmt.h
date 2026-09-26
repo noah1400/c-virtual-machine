@@ -3,12 +3,14 @@
 
 #include <stdint.h>
 
-// VM32 binary layout: 32-byte header, code bytes, data bytes, symbol table
-#define VM32_MAGIC          "VM32"
-#define VM32_VERSION_MAJOR  1
-#define VM32_VERSION_MINOR  0
-#define VM32_HEADER_SIZE    32
-#define VM32_MAX_FILE_SIZE  (16u * 1024 * 1024)
+// VM32 binary layout: header, code bytes, data bytes, symbol table. Version 1.0 headers are
+// 32 bytes; version 1.1 appends the entry point address.
+#define VM32_MAGIC           "VM32"
+#define VM32_VERSION_MAJOR   1
+#define VM32_VERSION_MINOR   1
+#define VM32_MIN_HEADER_SIZE 32
+#define VM32_HEADER_SIZE     36
+#define VM32_MAX_FILE_SIZE   (16u * 1024 * 1024)
 
 typedef struct {
     uint16_t version_major;
@@ -19,6 +21,7 @@ typedef struct {
     uint32_t data_base;
     uint32_t data_size;
     uint32_t symbol_size;
+    uint32_t entry;
     const uint8_t *code;
     const uint8_t *data;
     const uint8_t *symbols;

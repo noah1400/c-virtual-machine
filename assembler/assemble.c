@@ -330,6 +330,20 @@ static void directive_equ(Assembler *as, Parser *p) {
     }
 }
 
+static void directive_entry(Assembler *as, Parser *p) {
+    if (as->pass == 1 && as->entry_line) {
+        asm_error(as, "the entry point is already set at %s:%d", as->entry_line->file, as->entry_line->number);
+        return;
+    }
+    as->entry_line = as->line;
+
+    p->unresolved = 0;
+    int64_t entry = parse_expression(p);
+    if (!p->failed && expect_end(p) && as->pass == 2) {
+        as->entry = entry;
+    }
+}
+
 static void directive(Assembler *as, Parser *p) {
     const char *name = peek(p)->text;
     p->pos++;
@@ -356,6 +370,8 @@ static void directive(Assembler *as, Parser *p) {
         directive_org(as, p);
     } else if (name_equals(name, ".equ") || name_equals(name, ".set")) {
         directive_equ(as, p);
+    } else if (name_equals(name, ".entry")) {
+        directive_entry(as, p);
     } else if (name_equals(name, ".include")) {
         // The source reader already spliced the file in after this line
         if (peek(p)->kind != TOK_STRING) {
@@ -785,7 +801,15 @@ int asm_assemble(Assembler *as, const char *path) {
         resolve_pending(as);
     }
     if (as->errors == 0) {
+        as->entry = as->sections[SECTION_TEXT].base;
         run_pass(as, 2);
+    }
+
+    const Section *text = &as->sections[SECTION_TEXT];
+    if (as->errors == 0 && as->entry_line && (as->entry < text->base || as->entry >= text->end)) {
+        as->line = as->entry_line;
+        asm_error(as, "entry point 0x%llX is outside the assembled code", (long long)as->entry);
+        as->line = NULL;
     }
     return as->errors == 0;
 }

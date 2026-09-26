@@ -114,6 +114,7 @@ int output_binary(Assembler *as, const char *path, int with_debug) {
     put_u32(&b, data->base);
     put_u32(&b, data_size);
     put_u32(&b, 0);
+    put_u32(&b, (uint32_t)as->entry);
     put(&b, code->bytes, code_size);
     put(&b, data->bytes, data_size);
 

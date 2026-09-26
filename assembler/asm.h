@@ -96,6 +96,8 @@ typedef struct {
 
     struct PendingConstant *pending;
     size_t pending_count;
+    int64_t entry;
+    const SourceLine *entry_line;   // the .entry directive, if any
 
     const SourceLine *line;
     uint32_t statement_address;

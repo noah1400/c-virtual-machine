@@ -11,7 +11,7 @@ void cpu_reset(VM *vm) {
     memset(vm->registers, 0, sizeof(vm->registers));
     vm->registers[R2_SP] = STACK_TOP;
     vm->registers[R1_BP] = STACK_TOP;
-    vm->registers[R3_PC] = CODE_SEGMENT_BASE;
+    vm->registers[R3_PC] = vm->entry_point;
     vm->halted = 0;
 }
 

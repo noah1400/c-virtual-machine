@@ -103,6 +103,9 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
     if (!segment_fits(data_base, data_size, DATA_SEGMENT_BASE, DATA_SEGMENT_SIZE)) {
         return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Data segment does not fit the data segment range");
     }
+    if (bin.entry < code_base || bin.entry - code_base >= code_size) {
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Entry point 0x%04X is outside the code segment", bin.entry);
+    }
 
     memcpy(vm->memory + code_base, bin.code, code_size);
     memcpy(vm->memory + data_base, bin.data, data_size);
@@ -112,7 +115,8 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
         vm->debug_info = debug_info_parse(bin.symbols, bin.symbol_size);
     }
 
-    vm->registers[R3_PC] = code_base;
+    vm->entry_point = bin.entry;
+    vm->registers[R3_PC] = bin.entry;
     return VM_ERROR_NONE;
 }
 
@@ -123,6 +127,7 @@ static int load_raw_image(VM *vm, const uint8_t *image, uint32_t size) {
     }
 
     memcpy(vm->memory + CODE_SEGMENT_BASE, image, size);
+    vm->entry_point = CODE_SEGMENT_BASE;
     vm->registers[R3_PC] = CODE_SEGMENT_BASE;
     return VM_ERROR_NONE;
 }

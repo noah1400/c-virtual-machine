@@ -186,6 +186,7 @@ int disassemble_file(const char *filename) {
     DebugInfo *info = bin.symbol_size ? debug_info_parse(bin.symbols, bin.symbol_size) : NULL;
 
     printf("VM32 binary v%u.%u\n", bin.version_major, bin.version_minor);
+    printf("  Entry point:  0x%04X\n", bin.entry);
     printf("  Code segment: 0x%04X, %u bytes\n", bin.code_base, bin.code_size);
     printf("  Data segment: 0x%04X, %u bytes\n", bin.data_base, bin.data_size);
     printf("  Symbol table: %u bytes", bin.symbol_size);
