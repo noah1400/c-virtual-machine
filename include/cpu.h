@@ -9,7 +9,6 @@ int cpu_reset(VM *vm);
 
 // Instruction execution
 int cpu_execute_instruction(VM *vm, Instruction *instr);
-int cpu_step(VM *vm);
 
 // Register operations
 uint32_t cpu_get_register(VM *vm, uint8_t reg);

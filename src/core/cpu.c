@@ -184,47 +184,6 @@ void cpu_leave_frame(VM *vm) {
     vm->registers[R1_BP] = cpu_stack_pop(vm);
 }
 
-// Execute a single instruction
-int cpu_step(VM *vm) {
-    if (!vm) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-    
-    // Check if VM is halted
-    if (vm->halted) {
-        return VM_ERROR_NONE;
-    }
-    
-    // Fetch and decode instruction
-    Instruction instr;
-    int result = vm_decode_instruction(vm, vm->registers[R3_PC], &instr);
-    if (result != VM_ERROR_NONE) {
-        return result;
-    }
-    
-    // Save current instruction for debugging
-    vm->current_instr = instr;
-    
-    // Increment PC to next instruction
-    vm->registers[R3_PC] += 4;
-    
-    // Execute instruction
-    result = cpu_execute_instruction(vm, &instr);
-
-    if (result != VM_ERROR_NONE)
-    {
-        return result;
-    } else if (vm->last_error != VM_ERROR_NONE)
-    {
-        return vm->last_error;
-    }
-    
-    // Increment instruction count
-    vm->instruction_count++;
-    
-    return result;
-}
-
 // Dump register state for debugging
 void cpu_dump_registers(VM *vm) {
     if (!vm) {

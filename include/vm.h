@@ -12,7 +12,6 @@ int vm_reset(VM *vm);
 // VM execution functions
 int vm_run(VM *vm);                       // Run until halted
 int vm_step(VM *vm);                      // Execute single instruction
-int vm_execute_instruction(VM *vm);       // Execute current instruction at PC
 
 // Memory operations
 uint8_t vm_read_byte(VM *vm, uint16_t address);

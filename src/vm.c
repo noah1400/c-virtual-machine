@@ -111,7 +111,12 @@ int vm_step(VM *vm) {
     if (vm->halted) {
         return VM_ERROR_NONE;
     }
-    
+
+    // A faulted VM stays stopped until it is reset
+    if (vm->last_error != VM_ERROR_NONE) {
+        return vm->last_error;
+    }
+
     // Record the current PC (before execution)
     uint16_t current_pc = vm->registers[R3_PC];
     vm->error_pc = current_pc;
@@ -144,23 +149,6 @@ int vm_step(VM *vm) {
     vm->instruction_count++;
     
     return VM_ERROR_NONE;
-}
-
-// Execute the current instruction pointed to by PC
-int vm_execute_instruction(VM *vm) {
-    if (!vm) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-    
-    // Fetch and decode instruction at PC
-    Instruction instr;
-    int result = vm_decode_instruction(vm, vm->registers[R3_PC], &instr);
-    if (result != VM_ERROR_NONE) {
-        return result;
-    }
-    
-    // Execute the instruction
-    return cpu_execute_instruction(vm, &instr);
 }
 
 // Memory access wrappers
