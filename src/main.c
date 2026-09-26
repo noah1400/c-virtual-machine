@@ -18,6 +18,7 @@ typedef struct {
     int debug;
     int disassemble;
     int trace;
+    int profile;
     int verbose;
 } Options;
 
@@ -28,6 +29,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
     fprintf(out, "  -m KB     Memory size in KB, at least %d (default %d)\n", DEFAULT_MEMORY_KB, DEFAULT_MEMORY_KB);
     fprintf(out, "  -n COUNT  Stop with an error after COUNT instructions\n");
+    fprintf(out, "  -p        Print an execution profile by label on stderr\n");
     fprintf(out, "  -t        Trace every executed instruction on stderr\n");
     fprintf(out, "  -v        Report loading and execution statistics on stderr\n");
     fprintf(out, "  -h        Show this help\n");
@@ -53,6 +55,8 @@ static int parse_options(int argc, char **argv, Options *opts) {
             opts->disassemble = 1;
         } else if (strcmp(arg, "-t") == 0) {
             opts->trace = 1;
+        } else if (strcmp(arg, "-p") == 0) {
+            opts->profile = 1;
         } else if (strcmp(arg, "-v") == 0) {
             opts->verbose = 1;
         } else if (strcmp(arg, "-h") == 0) {
@@ -122,26 +126,87 @@ static void describe_address(const VM *vm, uint32_t address, char *out, size_t s
     }
 }
 
-// Runs like vm_run but prints each instruction on stderr before executing it
-static int run_traced(VM *vm) {
+// Runs like vm_run, optionally printing each instruction on stderr before executing it and
+// counting how often each instruction in the first 64 KB executes
+static int run(VM *vm, int trace, uint32_t *counts) {
     while (!vm->halted) {
-        uint32_t pc = vm->registers[R3_PC];
-        Instruction instr;
-        char where[80], text[160] = "?";
+        if (trace) {
+            uint32_t pc = vm->registers[R3_PC];
+            Instruction instr;
+            char where[80], text[160] = "?";
 
-        if (vm_peek_instruction(vm, pc, &instr)) {
-            disasm_format(&instr, vm->debug_info, text, sizeof(text));
+            if (vm_peek_instruction(vm, pc, &instr)) {
+                disasm_format(&instr, vm->debug_info, text, sizeof(text));
+            }
+            describe_address(vm, pc, where, sizeof(where));
+            fflush(stdout);
+            fprintf(stderr, "0x%04X %-20s %s\n", pc, where, text);
         }
-        describe_address(vm, pc, where, sizeof(where));
-        fflush(stdout);
-        fprintf(stderr, "0x%04X %-20s %s\n", pc, where, text);
 
         int result = vm_step(vm);
         if (result != VM_ERROR_NONE) {
             return result;
         }
+        if (counts && vm->error_pc < VM_ADDRESS_SPACE_SIZE) {
+            counts[vm->error_pc / 4]++;
+        }
     }
     return VM_ERROR_NONE;
+}
+
+typedef struct {
+    uint32_t address;
+    uint64_t count;
+} ProfileEntry;
+
+static int compare_entries(const void *a, const void *b) {
+    const ProfileEntry *x = a, *y = b;
+    if (x->count != y->count) {
+        return x->count < y->count ? 1 : -1;
+    }
+    return x->address < y->address ? -1 : x->address > y->address;
+}
+
+// Sums the counts under the closest preceding label, or per address without debug information
+static void report_profile(const VM *vm, const uint32_t *counts) {
+    enum { SHOWN = 15 };
+    ProfileEntry *entries = calloc(VM_ADDRESS_SPACE_SIZE / 4, sizeof(ProfileEntry));
+    size_t used = 0;
+    uint64_t total = 0;
+
+    if (!entries) {
+        return;
+    }
+    for (uint32_t i = 0; i < VM_ADDRESS_SPACE_SIZE / 4; i++) {
+        if (counts[i] == 0) {
+            continue;
+        }
+        const Symbol *sym = debug_symbol_near(vm->debug_info, i * 4);
+        uint32_t key = sym ? sym->address : i * 4;
+        size_t e = 0;
+        while (e < used && entries[e].address != key) {
+            e++;
+        }
+        if (e == used) {
+            entries[used++].address = key;
+        }
+        entries[e].count += counts[i];
+        total += counts[i];
+    }
+    qsort(entries, used, sizeof(ProfileEntry), compare_entries);
+
+    fprintf(stderr, "vm: profile of %llu instructions\n", (unsigned long long)total);
+    fprintf(stderr, "%12s  %6s  %s\n", "count", "share", "location");
+    for (size_t e = 0; e < used && e < SHOWN; e++) {
+        char where[80];
+        describe_address(vm, entries[e].address, where, sizeof(where));
+        fprintf(stderr, "%12llu  %5.1f%%  0x%04X%s%s\n", (unsigned long long)entries[e].count,
+                100.0 * (double)entries[e].count / (double)total, entries[e].address, where[0] ? " " : "", where);
+    }
+    if (used > SHOWN) {
+        fprintf(stderr, "%12s  %6s  %zu more\n", "", "", used - SHOWN);
+    }
+    free(entries);
 }
 
 int main(int argc, char *argv[]) {
@@ -176,11 +241,16 @@ int main(int argc, char *argv[]) {
                 vm.memory_size / 1024, vm.registers[R3_PC], vm.debug_info ? vm.debug_info->symbol_count : 0);
     }
 
-    int result = opts.debug ? debugger_run(&vm) : opts.trace ? run_traced(&vm) : vm_run(&vm);
+    uint32_t *counts = opts.profile && !opts.debug ? calloc(VM_ADDRESS_SPACE_SIZE / 4, sizeof(uint32_t)) : NULL;
+    int result = opts.debug ? debugger_run(&vm) : run(&vm, opts.trace, counts);
     fflush(stdout);
 
     if (result != VM_ERROR_NONE && !opts.debug) {
         report_fault(&vm);
+    }
+    if (counts) {
+        report_profile(&vm, counts);
+        free(counts);
     }
     if (opts.verbose) {
         fprintf(stderr, "vm: %s after %u instructions\n", result == VM_ERROR_NONE ? "stopped" : "faulted",
