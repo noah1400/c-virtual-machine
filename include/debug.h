@@ -1,16 +1,41 @@
 #ifndef _DEBUG_H_
 #define _DEBUG_H_
 
-#include "vm_types.h"
-#include <string.h>
-#include <stdlib.h>
+#include <stdint.h>
 
-void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size);
+#define SYMBOL_CODE  0
+#define SYMBOL_DATA  1
+#define SYMBOL_CONST 2
 
-void free_debug_info(VM *vm);
+typedef struct {
+    char *name;
+    uint32_t address;
+    uint8_t type;           // SYMBOL_CODE, SYMBOL_DATA or SYMBOL_CONST
+    uint32_t line_num;
+    char *source_file;
+} Symbol;
 
-Symbol* find_symbol_by_address(VM *vm, uint32_t address);
+typedef struct {
+    uint32_t address;
+    uint32_t line_num;
+    char *source;
+    char *source_file;
+} SourceLine;
 
-SourceLine* find_source_line_by_address(VM *vm, uint32_t address);
+typedef struct DebugInfo {
+    Symbol *symbols;
+    uint32_t symbol_count;
+    SourceLine *source_lines;
+    uint32_t source_line_count;
+} DebugInfo;
+
+// Parses the symbol table section of a VM32 binary; truncated tables yield the entries read so far
+DebugInfo *debug_info_parse(const uint8_t *data, uint32_t size);
+void debug_info_free(DebugInfo *info);
+
+const Symbol *debug_symbol_at(const DebugInfo *info, uint32_t address);
+const Symbol *debug_symbol_near(const DebugInfo *info, uint32_t address);
+const Symbol *debug_symbol_named(const DebugInfo *info, const char *name);
+const SourceLine *debug_line_at(const DebugInfo *info, uint32_t address);
 
 #endif // _DEBUG_H_

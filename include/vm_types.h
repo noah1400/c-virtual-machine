@@ -47,34 +47,6 @@
 
 #define VM_MAX_PROGRAM_FILE_SIZE (16L * 1024 * 1024)
 
-// Symbol represents a labeled address in the program
-typedef struct {
-    char *name;          // Symbol name
-    uint32_t address;    // Symbol address
-    uint8_t type;        // Symbol type (0=code, 1=data)
-    uint32_t line_num;   // Source line number
-    char *source_file;   // Source file path
-} Symbol;
-
-// SourceLine represents a line from the source code
-typedef struct {
-    uint32_t address;     // Program address
-    uint32_t line_num;    // Source line number
-    char *source;         // Source line text
-    char *source_file;    // Source file path
-} SourceLine;
-
-// DebugInfo holds all debugging information
-typedef struct {
-    // Symbol table
-    Symbol *symbols;
-    uint32_t symbol_count;
-    
-    // Source line information
-    SourceLine *source_lines;
-    uint32_t source_line_count;
-} DebugInfo;
-
 #define MAX_BREAKPOINTS 32
 
 typedef struct {
@@ -116,7 +88,7 @@ typedef struct {
 
     uint32_t rng_state;      // Random number generator state
 
-    DebugInfo *debug_info;  // Debug information (NULL if not loaded)
+    struct DebugInfo *debug_info;  // Debug information (NULL if not loaded)
 } VM;
 
 // Error codes

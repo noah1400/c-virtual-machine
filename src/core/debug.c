@@ -1,4 +1,6 @@
-#include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 #include "debug.h"
 
 typedef struct {
@@ -20,10 +22,14 @@ static uint32_t read_uint(Reader *r, int bytes) {
     return value;
 }
 
+// Reads a length-prefixed string; empty strings become NULL
 static char *read_string(Reader *r) {
     uint16_t len = (uint16_t)read_uint(r, 2);
     if (!r->ok || r->end - r->ptr < len) {
         r->ok = false;
+        return NULL;
+    }
+    if (len == 0) {
         return NULL;
     }
     char *str = malloc(len + 1u);
@@ -37,27 +43,22 @@ static char *read_string(Reader *r) {
     return str;
 }
 
-void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
-    if (!vm || !data) {
-        return;
-    }
-
+DebugInfo *debug_info_parse(const uint8_t *data, uint32_t size) {
     DebugInfo *info = calloc(1, sizeof(DebugInfo));
-    if (!info) {
-        return;
+    if (!info || !data) {
+        return info;
     }
-    vm->debug_info = info;
 
     Reader r = { data, data + size, true };
 
     // Entries have a minimum encoded size, which bounds allocations for corrupt counts
     uint32_t symbol_count = read_uint(&r, 4);
     if (!r.ok || symbol_count > size / 13) {
-        return;
+        return info;
     }
     info->symbols = calloc(symbol_count ? symbol_count : 1, sizeof(Symbol));
     if (!info->symbols) {
-        return;
+        return info;
     }
     for (uint32_t i = 0; i < symbol_count; i++) {
         Symbol *sym = &info->symbols[i];
@@ -66,25 +67,21 @@ void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
         sym->type = (uint8_t)read_uint(&r, 1);
         sym->line_num = read_uint(&r, 4);
         sym->source_file = read_string(&r);
-        if (!r.ok) {
+        if (!r.ok || !sym->name) {
             free(sym->name);
             free(sym->source_file);
-            return;
-        }
-        if (sym->source_file && sym->source_file[0] == '\0') {
-            free(sym->source_file);
-            sym->source_file = NULL;
+            return info;
         }
         info->symbol_count = i + 1;
     }
 
     uint32_t line_count = read_uint(&r, 4);
     if (!r.ok || line_count > size / 12) {
-        return;
+        return info;
     }
     info->source_lines = calloc(line_count ? line_count : 1, sizeof(SourceLine));
     if (!info->source_lines) {
-        return;
+        return info;
     }
     for (uint32_t i = 0; i < line_count; i++) {
         SourceLine *line = &info->source_lines[i];
@@ -95,243 +92,70 @@ void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
         if (!r.ok) {
             free(line->source);
             free(line->source_file);
-            return;
-        }
-        if (line->source_file && line->source_file[0] == '\0') {
-            free(line->source_file);
-            line->source_file = NULL;
+            return info;
         }
         info->source_line_count = i + 1;
     }
+
+    return info;
 }
 
-// Function to free debug info
-void free_debug_info(VM *vm) {
-    if (!vm || !vm->debug_info) {
+void debug_info_free(DebugInfo *info) {
+    if (!info) {
         return;
     }
-    
-    // Free symbols
-    if (vm->debug_info->symbols) {
-        for (uint32_t i = 0; i < vm->debug_info->symbol_count; i++) {
-            free(vm->debug_info->symbols[i].name);
-            free(vm->debug_info->symbols[i].source_file);
-        }
-        free(vm->debug_info->symbols);
+    for (uint32_t i = 0; i < info->symbol_count; i++) {
+        free(info->symbols[i].name);
+        free(info->symbols[i].source_file);
     }
-    
-    // Free source lines
-    if (vm->debug_info->source_lines) {
-        for (uint32_t i = 0; i < vm->debug_info->source_line_count; i++) {
-            free(vm->debug_info->source_lines[i].source);
-            free(vm->debug_info->source_lines[i].source_file);
-        }
-        free(vm->debug_info->source_lines);
+    for (uint32_t i = 0; i < info->source_line_count; i++) {
+        free(info->source_lines[i].source);
+        free(info->source_lines[i].source_file);
     }
-    
-    // Free debug info structure
-    free(vm->debug_info);
-    vm->debug_info = NULL;
+    free(info->symbols);
+    free(info->source_lines);
+    free(info);
 }
 
-// Helper function to find symbol by address
-Symbol* find_symbol_by_address(VM *vm, uint32_t address) {
-    if (!vm || !vm->debug_info) {
-        return NULL;
-    }
-    
-    // Find closest symbol before the address
-    Symbol *closest = NULL;
-    uint32_t closest_distance = 0xFFFFFFFF;
-    
-    for (uint32_t i = 0; i < vm->debug_info->symbol_count; i++) {
-        Symbol *sym = &vm->debug_info->symbols[i];
-        
-        // Symbol must be before the address
-        if (sym->address <= address) {
-            uint32_t distance = address - sym->address;
-            
-            // Update if this is closer
-            if (distance < closest_distance) {
-                closest = sym;
-                closest_distance = distance;
-            }
+const Symbol *debug_symbol_at(const DebugInfo *info, uint32_t address) {
+    for (uint32_t i = 0; info && i < info->symbol_count; i++) {
+        if (info->symbols[i].type != SYMBOL_CONST && info->symbols[i].address == address) {
+            return &info->symbols[i];
         }
     }
-    
-    return closest;
+    return NULL;
 }
 
-// Function to find source line by address
-SourceLine* find_source_line_by_address(VM *vm, uint32_t address) {
-    if (!vm || !vm->debug_info) {
-        return NULL;
-    }
-    
-    if (vm->debug_mode > 1) {  // Extra verbose debugging
-        printf("\nLooking for source line at address: 0x%04X\n", address);
-    }
-    
-    // First, look for exact address match
-    SourceLine *best_match = NULL;
-    int best_score = -1;
-    
-    for (uint32_t i = 0; i < vm->debug_info->source_line_count; i++) {
-        SourceLine *line = &vm->debug_info->source_lines[i];
-        
-        if (line->address == address) {
-            // Skip invalid entries
-            if (!line->source) {
-                continue;
-            }
-            
-            // Skip .include directives
-            if (strstr(line->source, ".include") != NULL) {
-                continue;
-            }
-            
-            int score = 10;  // Base score for exact address match
-            
-            // Check if this is from an included file (not main.asm)
-            if (line->source_file) {
-                score += 5;  // Having a source file is good
-                
-                // Prefer included files over main.asm
-                char *filename = strrchr(line->source_file, '/');
-                if (!filename) {
-                    filename = strrchr(line->source_file, '\\');
-                }
-                filename = filename ? filename + 1 : line->source_file;
-                
-                // Included files are more specific and get higher priority
-                if (strcmp(filename, "main.asm") != 0) {
-                    score += 50;  // Much higher priority for included files
-                    
-                    if (vm->debug_mode > 1) {
-                        printf("Found included file match: %s (score %d)\n", filename, score);
-                    }
-                }
-            }
-            
-            // Keep the highest scoring match
-            if (score > best_score) {
-                best_match = line;
-                best_score = score;
-            }
+// Closest label at or before the address
+const Symbol *debug_symbol_near(const DebugInfo *info, uint32_t address) {
+    const Symbol *best = NULL;
+    for (uint32_t i = 0; info && i < info->symbol_count; i++) {
+        const Symbol *sym = &info->symbols[i];
+        if (sym->type != SYMBOL_CONST && sym->address <= address &&
+            (!best || sym->address > best->address)) {
+            best = sym;
         }
     }
-    
-    // If we found an exact address match, return it
-    if (best_match) {
-        if (vm->debug_mode > 1) {
-            printf("Best exact match: 0x%04X line %d in %s\n", 
-                best_match->address, best_match->line_num,
-                best_match->source_file ? best_match->source_file : "(none)");
-        }
-        return best_match;
-    }
-    
-    // If no exact match, find nearest line before this address
-    // Group by source file to find most relevant matches
-    typedef struct {
-        SourceLine *line;
-        uint32_t distance;
-        char *filename;  // Just the basename for comparison
-    } CandidateLine;
-    
-    CandidateLine candidates[50] = {0};  // Up to 50 different source files
-    int candidate_count = 0;
-    
-    // Find the closest line before address for each source file
-    for (uint32_t i = 0; i < vm->debug_info->source_line_count; i++) {
-        SourceLine *line = &vm->debug_info->source_lines[i];
-        
-        // Skip invalid entries
-        if (!line->source) {
-            continue;
-        }
-        
-        // Skip .include directives
-        if (strstr(line->source, ".include") != NULL) {
-            continue;
-        }
-        
-        // Line must be before the address
-        if (line->address <= address) {
-            uint32_t distance = address - line->address;
-            
-            // Extract filename (basename)
-            char *filename = NULL;
-            if (line->source_file) {
-                filename = strrchr(line->source_file, '/');
-                if (!filename) {
-                    filename = strrchr(line->source_file, '\\');
-                }
-                filename = filename ? filename + 1 : line->source_file;
-            } else {
-                // If no source file, use a placeholder
-                filename = "unknown";
-            }
-            
-            // Check if we already have a candidate for this file
-            int file_idx = -1;
-            for (int j = 0; j < candidate_count; j++) {
-                if (candidates[j].filename && 
-                    strcmp(candidates[j].filename, filename) == 0) {
-                    file_idx = j;
-                    break;
-                }
-            }
-            
-            if (file_idx >= 0) {
-                // Update if this line is closer
-                if (distance < candidates[file_idx].distance) {
-                    candidates[file_idx].line = line;
-                    candidates[file_idx].distance = distance;
-                }
-            } else if (candidate_count < 50) {
-                // Add new source file candidate
-                candidates[candidate_count].line = line;
-                candidates[candidate_count].distance = distance;
-                candidates[candidate_count].filename = filename;
-                candidate_count++;
-            }
+    return best;
+}
+
+const Symbol *debug_symbol_named(const DebugInfo *info, const char *name) {
+    for (uint32_t i = 0; info && i < info->symbol_count; i++) {
+        if (strcmp(info->symbols[i].name, name) == 0) {
+            return &info->symbols[i];
         }
     }
-    
-    // Find closest overall match, with preference to included files
-    SourceLine *closest = NULL;
-    uint32_t closest_distance = 0xFFFFFFFF;
-    int closest_score = -1;
-    
-    for (int i = 0; i < candidate_count; i++) {
-        CandidateLine *candidate = &candidates[i];
-        
-        // Calculate score based on distance and filename
-        int score = 0;
-        
-        // Closer is better - use inverse of distance as part of score
-        // But max out at 10 to avoid overflow with very small distances
-        score += 10 - (candidate->distance > 1000 ? 10 : candidate->distance / 100);
-        
-        // Prefer included files over main
-        if (candidate->filename && strcmp(candidate->filename, "main.asm") != 0) {
-            score += 50;  // Much higher priority for included files
-        }
-        
-        if (score > closest_score || 
-            (score == closest_score && candidate->distance < closest_distance)) {
-            closest = candidate->line;
-            closest_distance = candidate->distance;
-            closest_score = score;
+    return NULL;
+}
+
+// Line that produced the address, or the closest line before it
+const SourceLine *debug_line_at(const DebugInfo *info, uint32_t address) {
+    const SourceLine *best = NULL;
+    for (uint32_t i = 0; info && i < info->source_line_count; i++) {
+        const SourceLine *line = &info->source_lines[i];
+        if (line->address <= address && (!best || line->address > best->address)) {
+            best = line;
         }
     }
-    
-    if (vm->debug_mode > 1 && closest) {
-        printf("Best closest match: 0x%04X (distance %u) line %d in %s\n", 
-            closest->address, closest_distance, closest->line_num,
-            closest->source_file ? closest->source_file : "(none)");
-    }
-    
-    return closest;
+    return best;
 }

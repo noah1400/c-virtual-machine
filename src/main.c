@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include "disassembler.h"
 #include <ctype.h>
-#include <debug.h>
+#include "debug.h"
 
 Breakpoint breakpoints[MAX_BREAKPOINTS];
 int breakpoint_count = 0;
@@ -161,7 +161,7 @@ void debug_print_current_context(VM *vm) {
     
     // Find symbol if debug info available
     if (vm->debug_info) {
-        Symbol *sym = find_symbol_by_address(vm, pc);
+        const Symbol *sym = debug_symbol_near(vm->debug_info, pc);
         if (sym) {
             uint32_t offset = pc - sym->address;
             if (offset == 0) {
@@ -172,7 +172,7 @@ void debug_print_current_context(VM *vm) {
         }
         
         // Find source line
-        SourceLine *line = find_source_line_by_address(vm, pc);
+        const SourceLine *line = debug_line_at(vm->debug_info, pc);
         if (line) {
             // Extract filename from line's source_file
             char *filename = NULL;
@@ -202,14 +202,14 @@ void debug_print_current_context(VM *vm) {
             printf("\nSource context:\n");
             
             // Context lines array: [0,1] = before, [2] = current, [3,4] = after
-            SourceLine *context_array[5] = {NULL};
+            const SourceLine *context_array[5] = {NULL};
             context_array[2] = line;  // Current line in the middle
             
             // Find lines from the same file with line numbers before and after
             if (line->source_file) {
                 // Find context lines from the same file
                 for (uint32_t i = 0; i < vm->debug_info->source_line_count; i++) {
-                    SourceLine *curr = &vm->debug_info->source_lines[i];
+                    const SourceLine *curr = &vm->debug_info->source_lines[i];
                     
                     // Skip if from a different file
                     if (!curr->source_file || strcmp(curr->source_file, line->source_file) != 0) {
@@ -282,7 +282,7 @@ void debug_list_symbols(VM *vm) {
     printf("------------------------------------------------\n");
     
     for (uint32_t i = 0; i < vm->debug_info->symbol_count; i++) {
-        Symbol *sym = &vm->debug_info->symbols[i];
+        const Symbol *sym = &vm->debug_info->symbols[i];
         printf("%-20s %-6s 0x%04X   %d %s\n", 
                sym->name, 
                sym->type == 0 ? "CODE" : "DATA", 
@@ -338,7 +338,7 @@ bool debug_set_breakpoint(VM *vm, const char *location) {
     
     // Show symbol if available
     if (vm->debug_info) {
-        Symbol *sym = find_symbol_by_address(vm, address);
+        const Symbol *sym = debug_symbol_near(vm->debug_info, address);
         if (sym) {
             uint32_t offset = address - sym->address;
             if (offset == 0) {
@@ -383,7 +383,7 @@ void debug_list_breakpoints(VM *vm) {
         
         // Show symbol if available
         if (vm->debug_info) {
-            Symbol *sym = find_symbol_by_address(vm, breakpoints[i].address);
+            const Symbol *sym = debug_symbol_near(vm->debug_info, breakpoints[i].address);
             if (sym && strcmp(sym->name, breakpoints[i].name) != 0) {
                 uint32_t offset = breakpoints[i].address - sym->address;
                 if (offset == 0) {
@@ -394,7 +394,7 @@ void debug_list_breakpoints(VM *vm) {
             }
             
             // Show source line if available
-            SourceLine *line = find_source_line_by_address(vm, breakpoints[i].address);
+            const SourceLine *line = debug_line_at(vm->debug_info, breakpoints[i].address);
             if (line) {
                 printf("    Line %d: %s\n", line->line_num, line->source);
             }
@@ -460,7 +460,7 @@ void debug_execution(VM *vm) {
             // Step one line (not instruction)
             if (vm->debug_info) {
                 // Find current source line
-                SourceLine *current = find_source_line_by_address(vm, vm->registers[R3_PC]);
+                const SourceLine *current = debug_line_at(vm->debug_info, vm->registers[R3_PC]);
                 if (current) {
                     uint32_t current_line = current->line_num;
                     
@@ -479,7 +479,7 @@ void debug_execution(VM *vm) {
                         }
                         
                         // Check if we're on a new line
-                        SourceLine *new_line = find_source_line_by_address(vm, vm->registers[R3_PC]);
+                        const SourceLine *new_line = debug_line_at(vm->debug_info, vm->registers[R3_PC]);
                         if (new_line && new_line->line_num != current_line) {
                             break;
                         }

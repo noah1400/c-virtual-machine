@@ -49,7 +49,8 @@ void vm_cleanup(VM *vm) {
     
     // Free memory
     memory_cleanup(vm);
-    free_debug_info(vm);
+    debug_info_free(vm->debug_info);
+    vm->debug_info = NULL;
     
     // Free I/O devices (if any)
     if (vm->io_devices) {
@@ -246,8 +247,8 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
     memcpy(vm->memory + data_base, data, data_size);
 
     if (symbol_size > 0 && vm->debug_mode) {
-        free_debug_info(vm);
-        load_debug_symbols(vm, symbols, symbol_size);
+        debug_info_free(vm->debug_info);
+        vm->debug_info = debug_info_parse(symbols, symbol_size);
     }
 
     vm->registers[R3_PC] = code_base;
