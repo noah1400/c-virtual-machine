@@ -27,10 +27,7 @@ int cpu_init(VM *vm) {
     // Clear status register
     vm->registers[R4_SR] = 0;
     
-    // Clear VM state
     vm->halted = 0;
-    vm->debug_mode = 0;
-    vm->instruction_count = 0;
     vm->last_error = VM_ERROR_NONE;
     
     return VM_ERROR_NONE;
@@ -348,7 +345,6 @@ void cpu_enable_interrupts(VM *vm) {
     }
     
     vm->registers[R4_SR] |= INT_FLAG;
-    vm->interrupt_enabled = 1;  // Also update the VM state
 }
 
 void cpu_disable_interrupts(VM *vm) {
@@ -357,10 +353,4 @@ void cpu_disable_interrupts(VM *vm) {
     }
     
     vm->registers[R4_SR] &= ~INT_FLAG;
-    vm->interrupt_enabled = 0;  // Also update the VM state
-}
-
-int cpu_execute_instruction(VM *vm, Instruction *instr) {
-    extern int cpu_execute_instruction_impl(VM *vm, Instruction *instr);
-    return cpu_execute_instruction_impl(vm, instr);
 }

@@ -74,7 +74,6 @@ typedef struct {
     
     // Interrupt state
     uint32_t interrupt_vector;  // Current interrupt vector
-    uint8_t interrupt_enabled;  // Interrupt enable status
     
     // Instruction cycle info for debugging
     uint32_t instruction_count; // Number of instructions executed
