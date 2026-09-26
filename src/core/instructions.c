@@ -576,6 +576,13 @@ static int handle_logical(VM *vm, Instruction *instr) {
     return VM_ERROR_NONE;
 }
 
+static int invalid_syscall(VM *vm, uint16_t syscall_num) {
+    vm->last_error = VM_ERROR_INVALID_SYSCALL;
+    snprintf(vm->error_message, sizeof(vm->error_message),
+             "Invalid system call: %d", syscall_num);
+    return VM_ERROR_INVALID_SYSCALL;
+}
+
 static uint32_t mix_seed(uint32_t seed) {
     seed += 0x9E3779B9;
     seed = (seed ^ (seed >> 16)) * 0x85EBCA6B;
@@ -763,8 +770,7 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 break;
                 
             default:
-                vm->registers[R5] = 1;  // Error - unimplemented
-                break;
+                return invalid_syscall(vm, syscall_num);
         }
     }
     else if (syscall_num < 20) {
@@ -845,8 +851,7 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 break;
                 
             default:
-                vm->registers[R5] = 1;  // Error - unimplemented
-                break;
+                return invalid_syscall(vm, syscall_num);
         }
     }
     else if (syscall_num < 30) {
@@ -915,8 +920,7 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 break;
                 
             default:
-                vm->registers[R5] = 1;  // Error - unimplemented
-                break;
+                return invalid_syscall(vm, syscall_num);
         }
     }
     else if (syscall_num < 40) {
@@ -963,8 +967,7 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 break;
                 
             default:
-                vm->registers[R5] = 1;  // Error - unimplemented
-                break;
+                return invalid_syscall(vm, syscall_num);
         }
     }
     else if (syscall_num < 50) {
@@ -990,14 +993,11 @@ static int handle_syscall(VM *vm, uint16_t syscall_num) {
                 break;
 
             default:
-                vm->registers[R5] = 1;  // Error - unimplemented
-                break;
+                return invalid_syscall(vm, syscall_num);
         }
     }
     else {
-        // Unknown syscall group
-        vm->registers[R5] = 1;  // Error code
-        return VM_ERROR_INVALID_SYSCALL;
+        return invalid_syscall(vm, syscall_num);
     }
     
     return VM_ERROR_NONE;
@@ -1113,11 +1113,7 @@ static int handle_jump(VM *vm, Instruction *instr) {
             {
                 uint16_t syscall_num = instr->immediate;
                 int result = handle_syscall(vm, syscall_num);
-                         
                 if (result != VM_ERROR_NONE) {
-                        vm->last_error = result;
-                    snprintf(vm->error_message, sizeof(vm->error_message),
-                        "Invalid system call: %d", syscall_num);
                     return result;
                 }
             }
