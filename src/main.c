@@ -699,8 +699,6 @@ int main(int argc, char *argv[]) {
     // Load program
     printf("Loading program '%s'...\n", program_file);
     result = vm_load_program_file(&vm, program_file);
-    debug_print_source_info(&vm);
-    debug_dump_source_mapping(&vm);
     if (result != VM_ERROR_NONE) {
         fprintf(stderr, "Failed to load program: %s\n", vm_get_error_message(&vm));
         vm_cleanup(&vm);
