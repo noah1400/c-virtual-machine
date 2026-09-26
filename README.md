@@ -77,8 +77,10 @@ Hello from VM32! Sum: 55
 ## Running programs
 
 ```
-./vm [options] program.bin
+./vm [options] program.bin [arguments...]
 ```
+
+Everything after the program path is passed to the program, which reads it with [syscall 34](#process-and-random-numbers).
 
 | Option | Effect |
 |---|---|
@@ -459,7 +461,7 @@ A value can be written signed or unsigned, but it must fit its width. For exampl
     PRINT_NUMBER R8
 ```
 
-- **Parameters:** separated by commas. In the body, `\name` is replaced by the argument.
+- **Parameters:** separated by commas. In the body, `\name` is replaced by the argument everywhere except inside quotes.
 - **`\@`:** replaced by a number unique to each expansion, which keeps labels from clashing.
 - **Arguments:** split at commas that are not inside quotes, brackets or parentheses.
 - **Order:** a macro must be defined before it is used.
@@ -480,7 +482,7 @@ A value can be written signed or unsigned, but it must fit its width. For exampl
 ```
 
 - `.if` evaluates an expression, which must be known when the line is reached.
-- `.ifdef` and `.ifndef` test whether a symbol is defined.
+- `.ifdef` and `.ifndef` test whether a symbol is defined by an earlier line or on the command line.
 - Blocks can be nested.
 - `vmasm -D NAME[=VALUE]` defines constants from the command line.
 
@@ -562,8 +564,11 @@ A program can read and write any file that the user running it can access.
 | 31 | Sleep | R0 = milliseconds | |
 | 32 | Time | | R0 = milliseconds since start |
 | 33 | Ticks | | R0 = instructions executed |
+| 34 | Argument | R0 = index, R5 = buffer, R6 = buffer size | Copies argument *index* into the buffer, truncating it to fit. R0 = the argument's full length, or 0xFFFFFFFF if there is no such argument. With a size of 0, only the length is returned |
 | 40 | Random | R0 = limit | R0 = a number below the limit, or any 32-bit value if the limit is 0 |
 | 41 | Seed | R0 = seed | |
+
+Argument 0 is the program path as given to `vm`.
 
 The random generator is xorshift32 with a fixed default seed. Runs are therefore reproducible unless the program seeds it.
 
@@ -660,7 +665,8 @@ Comment lines in a test adjust the checks:
 | `; expect-stderr: text` | Text that must appear on stderr |
 | `; expect-error: text` | Expected assembler error (only in `tests/errors`) |
 | `; asm-args: ...` | Extra arguments for the assembler |
-| `; vm-args: ...` | Extra arguments for the VM |
+| `; vm-args: ...` | Extra options for the VM |
+| `; program-args: ...` | Arguments passed to the program |
 
 Programs run inside a temporary directory, so any files they create are discarded. The `example_*` tests include the programs from `assembler/examples`.
 
