@@ -216,6 +216,28 @@ static void file_seek(VM *vm, uint32_t handle, uint32_t offset, uint32_t whence)
     vm->registers[R0_ACC] = (uint32_t)position;
 }
 
+// Copies argument index into a buffer of size bytes, truncating it to fit; R0 receives its full
+// length, or 0xFFFFFFFF when there is no such argument
+static void program_argument(VM *vm, uint32_t index, uint32_t address, uint32_t size) {
+    if (index >= (uint32_t)vm->arg_count) {
+        vm->registers[R0_ACC] = 0xFFFFFFFF;
+        return;
+    }
+
+    const char *arg = vm->args[index];
+    uint32_t length = (uint32_t)strlen(arg);
+    vm->registers[R0_ACC] = length;
+    if (size == 0) {
+        return;
+    }
+
+    uint32_t copied = length < size - 1 ? length : size - 1;
+    if (memory_check_address_permissions(vm, address, copied + 1, PROT_WRITE) == VM_ERROR_NONE) {
+        memcpy(vm->memory + address, arg, copied);
+        vm->memory[address + copied] = '\0';
+    }
+}
+
 static uint32_t mix_seed(uint32_t seed) {
     seed += 0x9E3779B9;
     seed = (seed ^ (seed >> 16)) * 0x85EBCA6B;
@@ -327,6 +349,10 @@ int syscall_dispatch(VM *vm, uint16_t number) {
             break;
         case SYS_TICKS:
             r[R0_ACC] = vm->instruction_count;
+            break;
+        case SYS_ARGUMENT:
+            program_argument(vm, arg0, arg1, arg2);
+            syscall_status(vm);
             break;
 
         case SYS_RANDOM:

@@ -11,6 +11,8 @@
 
 typedef struct {
     const char *program;
+    int arg_count;
+    char **args;
     uint32_t memory_size;
     int debug;
     int disassemble;
@@ -19,7 +21,7 @@ typedef struct {
 } Options;
 
 static void print_usage(FILE *out, const char *name) {
-    fprintf(out, "Usage: %s [options] program.bin\n", name);
+    fprintf(out, "Usage: %s [options] program.bin [arguments...]\n", name);
     fprintf(out, "Options:\n");
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
@@ -38,11 +40,11 @@ static int parse_options(int argc, char **argv, Options *opts) {
         const char *arg = argv[i];
 
         if (arg[0] != '-' || arg[1] == '\0') {
-            if (opts->program) {
-                fprintf(stderr, "vm: only one program file may be given\n");
-                return -1;
-            }
+            // Everything from the program path on belongs to the program
             opts->program = arg;
+            opts->arg_count = argc - i;
+            opts->args = argv + i;
+            break;
         } else if (strcmp(arg, "-d") == 0) {
             opts->debug = 1;
         } else if (strcmp(arg, "-D") == 0) {
@@ -150,6 +152,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     vm.debug_mode = (uint8_t)opts.debug;
+    vm.arg_count = opts.arg_count;
+    vm.args = opts.args;
 
     if (vm_load_program_file(&vm, opts.program) != VM_ERROR_NONE) {
         fprintf(stderr, "vm: cannot load %s: %s\n", opts.program, vm_get_error_message(&vm));

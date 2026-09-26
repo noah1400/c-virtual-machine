@@ -77,6 +77,8 @@ typedef struct {
     uint64_t start_ms;       // Host clock when the VM started
     uint32_t entry_point;    // Where execution starts and RESET returns to
     FILE *files[VM_MAX_FILES];
+    int arg_count;           // Program arguments, starting with the program path
+    char **args;
 
     struct DebugInfo *debug_info;  // Debug information (NULL if not loaded)
 } VM;

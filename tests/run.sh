@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble.
 # Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:",
-# "; asm-args:" and "; vm-args:" lines.
+# "; asm-args:", "; vm-args:" and "; program-args:" lines.
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 vm="$root/vm"
@@ -36,7 +36,8 @@ for src in "$root"/tests/programs/*.asm; do
     [ -f "$base.in" ] && input="$base.in"
     # Programs run inside the scratch directory so the files they create do not leak
     args=$(expectation "$src" vm-args)
-    (cd "$tmp" && "$vm" $args "$name.bin" < "$input" > "$name.out" 2> "$name.err")
+    program_args=$(expectation "$src" program-args)
+    (cd "$tmp" && "$vm" $args "$name.bin" $program_args < "$input" > "$name.out" 2> "$name.err")
     status=$?
 
     expected_status=$(expectation "$src" expect-exit)
