@@ -37,29 +37,34 @@ int main(int argc, char *argv[]) {
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
-        int needs_value = strcmp(arg, "-o") == 0 || strcmp(arg, "-l") == 0 || strcmp(arg, "-I") == 0 ||
-                          strcmp(arg, "-D") == 0;
+        int takes_value = strcmp(arg, "-o") == 0 || strcmp(arg, "-l") == 0 ||
+                          strncmp(arg, "-I", 2) == 0 || strncmp(arg, "-D", 2) == 0;
+        // -I and -D also accept their value attached, as in -DNAME
+        const char *value = takes_value && arg[2] != '\0' ? arg + 2 : NULL;
 
-        if (needs_value && i + 1 >= argc) {
-            fprintf(stderr, "vmasm: error: %s needs a value\n", arg);
-            return 1;
+        if (takes_value && !value) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "vmasm: error: %s needs a value\n", arg);
+                return 1;
+            }
+            value = argv[++i];
         }
         if (strcmp(arg, "-o") == 0) {
-            output = argv[++i];
+            output = value;
         } else if (strcmp(arg, "-l") == 0) {
-            listing = argv[++i];
-        } else if (strcmp(arg, "-I") == 0) {
+            listing = value;
+        } else if (strncmp(arg, "-I", 2) == 0) {
             if (as.include_dir_count == ASM_MAX_INCLUDE_DIRS) {
                 fprintf(stderr, "vmasm: error: too many include directories\n");
                 return 1;
             }
-            as.include_dirs[as.include_dir_count++] = argv[++i];
-        } else if (strcmp(arg, "-D") == 0) {
+            as.include_dirs[as.include_dir_count++] = value;
+        } else if (strncmp(arg, "-D", 2) == 0) {
             if (as.define_count == ASM_MAX_DEFINES) {
                 fprintf(stderr, "vmasm: error: too many -D options\n");
                 return 1;
             }
-            as.defines[as.define_count++] = argv[++i];
+            as.defines[as.define_count++] = value;
         } else if (strcmp(arg, "-s") == 0) {
             show_symbols = 1;
         } else if (strcmp(arg, "-S") == 0) {

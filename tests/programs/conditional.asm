@@ -1,5 +1,5 @@
 ; Conditional assembly driven by constants, including ones given on the command line
-; asm-args: -D VERBOSE -D LEVEL=2
+; asm-args: -DVERBOSE -D LEVEL=2
 
 .equ MODE, 3
 
