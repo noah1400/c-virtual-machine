@@ -136,6 +136,7 @@ int main(int argc, char *argv[]) {
                 vm.instruction_count);
     }
 
+    int status = result == VM_ERROR_NONE ? (int)(vm.exit_code & 0xFF) : 1;
     vm_cleanup(&vm);
-    return result == VM_ERROR_NONE ? 0 : 1;
+    return status;
 }

@@ -201,6 +201,7 @@ int syscall_dispatch(VM *vm, uint16_t number) {
             break;
 
         case SYS_EXIT:
+            vm->exit_code = arg0;
             vm->halted = 1;
             break;
         case SYS_SLEEP:

@@ -68,6 +68,7 @@ typedef struct {
     char error_message[256]; // Error message
 
     uint32_t rng_state;      // Random number generator state
+    uint32_t exit_code;      // Set by the exit syscall
 
     struct DebugInfo *debug_info;  // Debug information (NULL if not loaded)
 } VM;
