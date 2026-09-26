@@ -530,69 +530,75 @@ int disassemble_file(const char *filename) {
     return 0;
 }
 
+static uint16_t read_u16(const uint8_t *p) {
+    return (uint16_t)(p[0] | (p[1] << 8));
+}
+
+static uint32_t read_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
 void parse_symbol_table(const uint8_t *data, uint32_t size, SymbolTable *table) {
     if (!data || !table || size < 4) {
         return;
     }
-    
-    // Read symbol count
-    uint32_t symbol_count = *((uint32_t*)data);
+
+    const uint8_t *end = data + size;
+    uint32_t symbol_count = read_u32(data);
     data += 4;
-    
-    // Allocate arrays
-    table->names = (char**)malloc(symbol_count * sizeof(char*));
-    table->addresses = (uint32_t*)malloc(symbol_count * sizeof(uint32_t));
-    table->types = (uint8_t*)malloc(symbol_count * sizeof(uint8_t));
-    table->count = symbol_count;
-    
+
+    // Each entry needs at least 13 bytes, which bounds the allocation for corrupt counts
+    if (symbol_count > size / 13) {
+        symbol_count = size / 13;
+    }
+
+    table->names = calloc(symbol_count ? symbol_count : 1, sizeof(char *));
+    table->addresses = calloc(symbol_count ? symbol_count : 1, sizeof(uint32_t));
+    table->types = calloc(symbol_count ? symbol_count : 1, sizeof(uint8_t));
+    table->count = 0;
+
     if (!table->names || !table->addresses || !table->types) {
         fprintf(stderr, "Error: Failed to allocate memory for symbol table\n");
-        free(table->names);
-        free(table->addresses);
-        free(table->types);
-        table->count = 0;
+        free_symbol_table(table);
         return;
     }
-    
-    // Parse symbols
-    uint32_t i;
-    for (i = 0; i < symbol_count; i++) {
-        // Check if we have enough data left
-        if (data - (const uint8_t*)data + 7 >= size) {
+
+    for (uint32_t i = 0; i < symbol_count; i++) {
+        if (end - data < 2) {
             break;
         }
-        
-        // Name length
-        uint16_t name_len = *((uint16_t*)data);
+        uint16_t name_len = read_u16(data);
         data += 2;
-        
-        // Check bounds
-        if (data - (const uint8_t*)data + name_len + 5 >= size) {
+
+        // name, address (4), type (1), line (4), file length (2)
+        if (end - data < (long)name_len + 11) {
             break;
         }
-        
-        // Allocate and copy name
-        table->names[i] = (char*)malloc(name_len + 1);
-        if (!table->names[i]) {
-            continue;
+        char *name = malloc(name_len + 1);
+        if (!name) {
+            break;
         }
-        
-        memcpy(table->names[i], data, name_len);
-        table->names[i][name_len] = '\0';
+        memcpy(name, data, name_len);
+        name[name_len] = '\0';
         data += name_len;
-        
-        // Address and type
-        table->addresses[i] = *((uint32_t*)data);
-        data += 4;
-        table->types[i] = *data++;
-        
-        // Skip line number
-        data += 4;
+
+        uint32_t address = read_u32(data);
+        uint8_t type = data[4];
+        uint16_t file_len = read_u16(data + 9);
+        data += 11;
+
+        if (end - data < file_len) {
+            free(name);
+            break;
+        }
+        data += file_len;
+
+        table->names[i] = name;
+        table->addresses[i] = address;
+        table->types[i] = type;
+        table->count = i + 1;
     }
-    
-    // Update actual count (in case of truncation)
-    table->count = i;
-    
+
     printf("Loaded %d symbols from debug information\n", table->count);
 }
 
@@ -610,6 +616,9 @@ void free_symbol_table(SymbolTable *table) {
     
     free(table->addresses);
     free(table->types);
+    table->names = NULL;
+    table->addresses = NULL;
+    table->types = NULL;
     table->count = 0;
 }
 
