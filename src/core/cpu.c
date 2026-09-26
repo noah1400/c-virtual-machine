@@ -3,7 +3,7 @@
 #include "cpu.h"
 #include "memory.h"
 #include "instruction_set.h"
-#include "decoder.h"
+#include "disassembler.h"
 #include "vm.h"
 
 // CPU initialization
@@ -293,13 +293,9 @@ void cpu_dump_registers(VM *vm) {
     // Print instruction information
     printf("Instruction count: %u\n", vm->instruction_count);
     
-    // Add mnemonic to the last instruction output
-    const char* mnemonic = vm_opcode_to_mnemonic(vm->current_instr.opcode);
-    printf("Last instruction: OP=0x%02X (%s) MODE=0x%01X R1=0x%01X R2=0x%01X IMM=0x%03X\n",
-           vm->current_instr.opcode, mnemonic,
-           vm->current_instr.mode,
-           vm->current_instr.reg1, vm->current_instr.reg2,
-           vm->current_instr.immediate);
+    char text[160];
+    disasm_format(&vm->current_instr, vm->debug_info, text, sizeof(text));
+    printf("Last instruction: %s\n", text);
 }
 
 void cpu_interrupt(VM *vm, uint8_t vector) {

@@ -1,10 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <vm.h>
-#include <decoder.h>
+#include "vm.h"
 #include <stdbool.h>
 #include "disassembler.h"
+#include "cpu.h"
+#include "memory.h"
 #include <ctype.h>
 #include "debug.h"
 
@@ -98,54 +99,20 @@ int parse_arguments(int argc, char *argv[], int *memory_size, int *debug_mode,
     return 1;
 }
 
-void debug_dump_memory(VM *vm, uint16_t addr, int count) {
-    if (!vm || addr >= vm->memory_size) {
+void debug_dump_memory(VM *vm, uint32_t addr, int count) {
+    if (addr >= vm->memory_size) {
         printf("Error: Address out of range\n");
         return;
     }
-    
     if (count <= 0) {
         count = 16;
     }
-    
-    if (addr + count > vm->memory_size) {
-        count = vm->memory_size - addr;
+    if ((uint32_t)count > vm->memory_size - addr) {
+        count = (int)(vm->memory_size - addr);
     }
-    
+
     printf("Memory dump at 0x%04X:\n", addr);
-    
-    // Display memory in hex format
-    for (int i = 0; i < count; i++) {
-        if (i % 16 == 0) {
-            printf("0x%04X: ", addr + i);
-        }
-        
-        printf("%02X ", vm->memory[addr + i]);
-        
-        if (i % 16 == 15 || i == count - 1) {
-            // If at end of line, print ASCII representation
-            int padding = 16 - (i % 16 + 1);
-            for (int p = 0; p < padding; p++) {
-                printf("   ");
-            }
-            
-            printf(" | ");
-            
-            // Print ASCII representation
-            int start = i - (i % 16);
-            int end = (i % 16 == 15) ? i : i;
-            for (int j = start; j <= end; j++) {
-                char c = vm->memory[addr + j];
-                if (c >= 32 && c <= 126) {
-                    printf("%c", c);
-                } else {
-                    printf(".");
-                }
-            }
-            
-            printf("\n");
-        }
-    }
+    disasm_hexdump(vm->memory + addr, addr, (uint32_t)count);
 }
 
 // Print current location with source context
@@ -416,7 +383,7 @@ void debug_execution(VM *vm) {
         Instruction instr;
         if (vm_decode_instruction(vm, vm->registers[R3_PC], &instr) == VM_ERROR_NONE) {
             char instr_text[256];
-            vm_disassemble_instruction(vm, &instr, instr_text, sizeof(instr_text));
+            disasm_format(&instr, vm->debug_info, instr_text, sizeof(instr_text));
             printf("Next instruction: %s\n", instr_text);
         }
         
@@ -641,7 +608,7 @@ int main(int argc, char *argv[]) {
             Instruction instr;
             if (vm_decode_instruction(&vm, error_pc, &instr) == VM_ERROR_NONE) {
                 char disasm[256];
-                vm_disassemble_instruction(&vm, &instr, disasm, sizeof(disasm));
+                disasm_format(&instr, vm.debug_info, disasm, sizeof(disasm));
                 fprintf(stderr, "Error occurred at PC=0x%04X, instruction: %s\n", error_pc, disasm);
             }
             

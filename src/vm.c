@@ -155,6 +155,20 @@ int vm_step(VM *vm) {
     return VM_ERROR_NONE;
 }
 
+// Decode the 32-bit instruction at the specified memory address
+int vm_decode_instruction(VM *vm, uint16_t address, Instruction *instr) {
+    if (!vm || !instr) {
+        return VM_ERROR_INVALID_ADDRESS;
+    }
+
+    if (memory_check_address(vm, address, 4) != VM_ERROR_NONE) {
+        return VM_ERROR_SEGMENTATION_FAULT;
+    }
+
+    isa_decode(memory_read_dword(vm, address), instr);
+    return VM_ERROR_NONE;
+}
+
 // Memory access wrappers
 uint8_t vm_read_byte(VM *vm, uint16_t address) {
     return memory_read_byte(vm, address);

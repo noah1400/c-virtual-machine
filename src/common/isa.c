@@ -158,6 +158,19 @@ int isa_mode_has_wide_immediate(uint8_t mode) {
     return mode == IMM_MODE || mode == MEM_MODE || mode == STK_MODE || mode == BAS_MODE;
 }
 
+// Signed offset of IDX (12-bit), STK and BAS (16-bit) operands
+int32_t isa_displacement(const Instruction *instr) {
+    switch (instr->mode) {
+        case IDX_MODE:
+            return (int32_t)((instr->immediate & 0x0FFF) ^ 0x0800) - 0x0800;
+        case STK_MODE:
+        case BAS_MODE:
+            return (int32_t)(instr->immediate ^ 0x8000) - 0x8000;
+        default:
+            return 0;
+    }
+}
+
 uint32_t isa_encode(const Instruction *instr) {
     uint32_t high = isa_mode_has_wide_immediate(instr->mode) ? (instr->immediate >> 12) & 0x0F
                                                              : instr->reg2 & 0x0F;

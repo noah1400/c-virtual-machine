@@ -152,6 +152,7 @@ const char *isa_register_name(uint8_t reg);
 const char *isa_mode_name(uint8_t mode);
 
 int isa_mode_has_wide_immediate(uint8_t mode);
+int32_t isa_displacement(const Instruction *instr);
 uint32_t isa_encode(const Instruction *instr);
 void isa_decode(uint32_t word, Instruction *instr);
 

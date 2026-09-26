@@ -1,38 +1,18 @@
 #ifndef _DISASSEMBLER_H_
 #define _DISASSEMBLER_H_
 
+#include <stddef.h>
 #include <stdint.h>
+#include "debug.h"
+#include "instruction_set.h"
 
-typedef struct {
-    char **names;      // Symbol names
-    uint32_t *addresses; // Symbol addresses
-    uint8_t *types;      // Symbol types (0=code, 1=data)
-    uint32_t count;      // Number of symbols
-} SymbolTable;
+// Formats an instruction in assembler syntax, naming addresses with symbols when available
+void disasm_format(const Instruction *instr, const DebugInfo *info, char *buffer, size_t size);
 
-// Print register name with optional suffix
-void print_register(uint8_t reg, int with_suffix);
+// Prints bytes as hex and ASCII, 16 per row, labelled with their VM addresses
+void disasm_hexdump(const uint8_t *bytes, uint32_t address, uint32_t count);
 
-// Disassemble a single instruction
-void disassemble_instruction(uint32_t address, uint32_t instruction);
-
-// Disassemble a section of memory
-void disassemble_memory(uint8_t *memory, uint32_t start_addr, uint32_t length, SymbolTable *symbols);;
-
-void disassemble_data(uint8_t *memory, uint32_t start_addr, uint32_t length);
-
-void disassemble_dump_memory(uint8_t *memory, uint32_t addr, uint32_t count);
-
-// Load a binary file for disassembly
-uint8_t* load_binary_file(const char *filename, uint32_t *size);
-
-// Main function for disassembler
+// Prints the header, code listing and data dump of a VM32 binary
 int disassemble_file(const char *filename);
-
-void parse_symbol_table(const uint8_t *data, uint32_t size, SymbolTable *table);
-
-void free_symbol_table(SymbolTable *table);
-
-const char* disassemble_find_symbol_for_address(SymbolTable *table, uint32_t address);
 
 #endif // _DISASSEMBLER_H_

@@ -23,7 +23,6 @@ void vm_write_dword(VM *vm, uint16_t address, uint32_t value);
 
 // Instruction operations
 int vm_decode_instruction(VM *vm, uint16_t address, Instruction *instr);
-uint32_t vm_fetch_instruction(VM *vm);
 
 // Stack operations
 void vm_stack_push(VM *vm, uint32_t value);
