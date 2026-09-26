@@ -1203,10 +1203,13 @@ static int handle_system(VM *vm, Instruction *instr) {
             break;
             
         case INT_OP:
-            {
-                uint16_t vector = instr->immediate;
-                cpu_interrupt(vm, vector);
+            if (instr->immediate > 0xFF) {
+                vm->last_error = VM_ERROR_UNHANDLED_INTERRUPT;
+                snprintf(vm->error_message, sizeof(vm->error_message),
+                         "Invalid interrupt vector: %u", instr->immediate);
+                return VM_ERROR_UNHANDLED_INTERRUPT;
             }
+            cpu_interrupt(vm, (uint8_t)instr->immediate);
             break;
             
         case CLI_OP:

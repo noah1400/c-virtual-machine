@@ -308,32 +308,20 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
         return;
     }
     
-    // Save current interrupt vector
-    vm->interrupt_vector = vector;
-    
-    // Save current execution context
-    vm_push_all_registers(vm);
-    
-    // Disable interrupts while in interrupt handler
-    vm->registers[R4_SR] &= ~INT_FLAG;
-    
-    // Jump to interrupt handler
-    // The base address is at the start of the vector table (0x0100 is a typical location)
-    // Each vector is separated by 4 bytes (32-bit address)
-    uint16_t handler_addr_ptr = 0x0100 + (vector * 4);
-
-    
-    // Load handler address from vector table
-    uint32_t handler_addr = memory_read_dword(vm, handler_addr_ptr);
-    // Check if the handler exists
+    // The vector table holds one 32-bit handler address per vector
+    uint32_t handler_addr = memory_read_dword(vm, INTERRUPT_VECTOR_TABLE + vector * 4);
     if (handler_addr == 0) {
-        // No handler registered for this interrupt
         vm->last_error = VM_ERROR_UNHANDLED_INTERRUPT;
         snprintf(vm->error_message, sizeof(vm->error_message),
                 "Unhandled interrupt: %d", vector);
         return;
     }
-    // Jump to handler
+
+    vm->interrupt_vector = vector;
+
+    // Save the execution context and mask interrupts while the handler runs
+    vm_push_all_registers(vm);
+    vm->registers[R4_SR] &= ~INT_FLAG;
     vm->registers[R3_PC] = handler_addr;
 }
 

@@ -34,6 +34,9 @@
 #define HEAP_SEGMENT_SIZE   0x4000
 #define VM_ADDRESS_SPACE_SIZE 0x10000u
 
+// Interrupt vector table: 256 handler addresses of 4 bytes each
+#define INTERRUPT_VECTOR_TABLE 0x0100
+
 // Special stack frame offsets
 #define FRAME_PREV_BP_OFFSET    0
 #define FRAME_RET_ADDR_OFFSET   4
