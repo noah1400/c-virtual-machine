@@ -54,8 +54,7 @@ typedef struct {
     uint8_t halted;          // VM halted flag
     uint8_t debug_mode;      // Debug mode flag
     
-    // I/O state
-    void *io_devices;        // I/O devices structure (defined in io_devices.h)
+    struct IODevices *io_devices;
     
     // Interrupt state
     

@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "cpu.h"
+#include "io.h"
 #include "memory.h"
 #include "syscalls.h"
 #include "vm.h"
@@ -411,24 +412,15 @@ static int execute_system(VM *vm, const Instruction *instr) {
             cpu_return_from_interrupt(vm);
             break;
         case IN_OP: {
-            uint32_t port = read_operand(vm, instr, instr->reg2, 4);
-            int value = 0;
-            if (port == 0) {
-                value = getchar();
-                if (value == EOF) {
-                    value = 0;
-                }
-            }
-            vm->registers[instr->reg1] = (uint32_t)value;
-            break;
-        }
-        case OUT_OP: {
-            uint32_t port = read_operand(vm, instr, instr->reg2, 4);
-            if (port == 0) {
-                putchar((int)(vm->registers[instr->reg1] & 0xFF));
+            uint32_t value = io_read(vm, read_operand(vm, instr, instr->reg2, 4));
+            if (vm->last_error == VM_ERROR_NONE) {
+                vm->registers[instr->reg1] = value;
             }
             break;
         }
+        case OUT_OP:
+            io_write(vm, read_operand(vm, instr, instr->reg2, 4), vm->registers[instr->reg1]);
+            break;
         case CPUID_OP:
             execute_cpuid(vm);
             break;

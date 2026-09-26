@@ -5,6 +5,7 @@
 #include "binfmt.h"
 #include "cpu.h"
 #include "debug.h"
+#include "io.h"
 #include "memory.h"
 #include "vm.h"
 
@@ -18,15 +19,14 @@ int vm_init(VM *vm, uint32_t memory_size) {
 
     cpu_reset(vm);
     vm->rng_state = VM_RNG_DEFAULT_SEED;
-    return VM_ERROR_NONE;
+    return io_init(vm);
 }
 
 void vm_cleanup(VM *vm) {
     memory_cleanup(vm);
     debug_info_free(vm->debug_info);
     vm->debug_info = NULL;
-    free(vm->io_devices);
-    vm->io_devices = NULL;
+    io_cleanup(vm);
 }
 
 int vm_run(VM *vm) {
@@ -67,7 +67,8 @@ int vm_step(VM *vm) {
     }
 
     vm->instruction_count++;
-    return VM_ERROR_NONE;
+    io_tick(vm);
+    return vm->last_error;
 }
 
 // Decodes the instruction at address without faulting the VM; returns 0 if it is out of range
