@@ -73,7 +73,6 @@ typedef struct {
     void *io_devices;        // I/O devices structure (defined in io_devices.h)
     
     // Interrupt state
-    uint32_t interrupt_vector;  // Current interrupt vector
     
     // Instruction cycle info for debugging
     uint32_t instruction_count; // Number of instructions executed

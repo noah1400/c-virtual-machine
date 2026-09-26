@@ -1,102 +1,35 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "cpu.h"
-#include "memory.h"
-#include "instruction_set.h"
 #include "disassembler.h"
+#include "memory.h"
 #include "vm.h"
 
-// CPU initialization
-int cpu_init(VM *vm) {
-    if (!vm) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-    
-    // Clear all registers
+#define STACK_TOP (STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE)
+
+void cpu_reset(VM *vm) {
     memset(vm->registers, 0, sizeof(vm->registers));
-    
-    // Set up stack pointer to top of stack segment
-    vm->registers[R2_SP] = STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE;
-    
-    // Set up base pointer to the same value initially
-    vm->registers[R1_BP] = vm->registers[R2_SP];
-    
-    // Set program counter to beginning of code segment
+    vm->registers[R2_SP] = STACK_TOP;
+    vm->registers[R1_BP] = STACK_TOP;
     vm->registers[R3_PC] = CODE_SEGMENT_BASE;
-    
-    // Clear status register
-    vm->registers[R4_SR] = 0;
-    
     vm->halted = 0;
-    vm->last_error = VM_ERROR_NONE;
-    
-    return VM_ERROR_NONE;
 }
 
-// Reset CPU to initial state
-int cpu_reset(VM *vm) {
-    return cpu_init(vm);
+uint8_t cpu_get_flag(const VM *vm, uint8_t flag) {
+    return (vm->registers[R4_SR] & flag) != 0;
 }
 
-// Get register value
-uint32_t cpu_get_register(VM *vm, uint8_t reg) {
-    if (!vm || reg >= 16) {
-        return 0;
-    }
-    return vm->registers[reg];
-}
-
-// Set register value
-void cpu_set_register(VM *vm, uint8_t reg, uint32_t value) {
-    if (!vm || reg >= 16) {
-        return;
-    }
-    vm->registers[reg] = value;
-}
-
-// Get a flag from status register
-uint8_t cpu_get_flag(VM *vm, uint8_t flag) {
-    if (!vm) {
-        return 0;
-    }
-    return (vm->registers[R4_SR] & flag) ? 1 : 0;
-}
-
-// Set a flag in status register
-void cpu_set_flag(VM *vm, uint8_t flag, uint8_t value) {
-    if (!vm) {
-        return;
-    }
-    
+void cpu_set_flag(VM *vm, uint8_t flag, int value) {
     if (value) {
         vm->registers[R4_SR] |= flag;
     } else {
-        vm->registers[R4_SR] &= ~flag;
+        vm->registers[R4_SR] &= ~(uint32_t)flag;
     }
 }
 
-// Update flags based on result
-void cpu_update_flags(VM *vm, uint32_t result, uint8_t flags_to_update) {
-    if (!vm) {
-        return;
-    }
-    
-    // Zero flag
-    if (flags_to_update & ZERO_FLAG) {
-        cpu_set_flag(vm, ZERO_FLAG, result == 0);
-    }
-    
-    // Negative flag
-    if (flags_to_update & NEG_FLAG) {
-        cpu_set_flag(vm, NEG_FLAG, (result & 0x80000000) != 0);
-    }
-    
-    // Other flags are handled by specific instructions
-}
-
-// Push value onto stack
 static int stack_pointer_valid(VM *vm, uint32_t sp) {
-    if (sp < STACK_SEGMENT_BASE || sp > STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE) {
+    if (sp < STACK_SEGMENT_BASE || sp > STACK_TOP) {
         vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Stack pointer 0x%08X is outside the stack segment", sp);
         return 0;
     }
@@ -104,10 +37,6 @@ static int stack_pointer_valid(VM *vm, uint32_t sp) {
 }
 
 void cpu_stack_push(VM *vm, uint32_t value) {
-    if (!vm) {
-        return;
-    }
-
     uint32_t sp = vm->registers[R2_SP];
     if (!stack_pointer_valid(vm, sp)) {
         return;
@@ -122,15 +51,11 @@ void cpu_stack_push(VM *vm, uint32_t value) {
 }
 
 uint32_t cpu_stack_pop(VM *vm) {
-    if (!vm) {
-        return 0;
-    }
-
     uint32_t sp = vm->registers[R2_SP];
     if (!stack_pointer_valid(vm, sp)) {
         return 0;
     }
-    if (STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE - sp < 4) {
+    if (STACK_TOP - sp < 4) {
         vm_raise(vm, VM_ERROR_STACK_UNDERFLOW, "Stack underflow");
         return 0;
     }
@@ -139,157 +64,33 @@ uint32_t cpu_stack_pop(VM *vm) {
     return memory_read_dword(vm, sp);
 }
 
-// Create a new stack frame
+// Saves BP, points BP at the saved value and reserves locals_size bytes below it
 void cpu_enter_frame(VM *vm, uint16_t locals_size) {
-    if (!vm) {
+    cpu_stack_push(vm, vm->registers[R1_BP]);
+    if (vm->last_error != VM_ERROR_NONE) {
         return;
     }
-    
-    // Save old base pointer
-    cpu_stack_push(vm, vm->registers[R1_BP]);
-    
-    // Update base pointer to current stack position
-    vm->registers[R1_BP] = vm->registers[R2_SP];
-    
-    // Allocate space for local variables
-    vm->registers[R2_SP] -= locals_size;
-    
-    // Check for stack overflow
-    if (vm->registers[R2_SP] < STACK_SEGMENT_BASE) {
-        // Restore SP and BP
-        vm->registers[R2_SP] = vm->registers[R1_BP];
-        vm->registers[R1_BP] = memory_read_dword(vm, vm->registers[R2_SP]);
-        vm->registers[R2_SP] += 4;
-        
+
+    uint32_t sp = vm->registers[R2_SP];
+    if (locals_size > sp - STACK_SEGMENT_BASE) {
+        vm->registers[R2_SP] = sp + 4;
         vm_raise(vm, VM_ERROR_STACK_OVERFLOW, "Stack overflow during frame creation");
         return;
     }
+
+    vm->registers[R1_BP] = sp;
+    vm->registers[R2_SP] = sp - locals_size;
 }
 
-// Destroy current stack frame
 void cpu_leave_frame(VM *vm) {
-    if (!vm) {
-        return;
-    }
-    
-    // Restore stack pointer from base pointer
     vm->registers[R2_SP] = vm->registers[R1_BP];
-    
-    // Restore previous base pointer
-    vm->registers[R1_BP] = cpu_stack_pop(vm);
+    uint32_t saved_bp = cpu_stack_pop(vm);
+    if (vm->last_error == VM_ERROR_NONE) {
+        vm->registers[R1_BP] = saved_bp;
+    }
 }
 
-// Dump register state for debugging
-void cpu_dump_registers(VM *vm) {
-    if (!vm) {
-        return;
-    }
-    
-    printf("Register Dump:\n");
-    
-    // Print general purpose registers
-    printf("R0(ACC): 0x%08X  R1(BP):  0x%08X  R2(SP):  0x%08X  R3(PC):  0x%08X\n", 
-           vm->registers[R0_ACC], vm->registers[R1_BP], 
-           vm->registers[R2_SP], vm->registers[R3_PC]);
-    
-    printf("R4(SR):  0x%08X  R5:      0x%08X  R6:      0x%08X  R7:      0x%08X\n", 
-           vm->registers[R4_SR], vm->registers[R5], 
-           vm->registers[R6], vm->registers[R7]);
-    
-    printf("R8:      0x%08X  R9:      0x%08X  R10:     0x%08X  R11:     0x%08X\n", 
-           vm->registers[R8], vm->registers[R9], 
-           vm->registers[R10], vm->registers[R11]);
-    
-    printf("R12:     0x%08X  R13:     0x%08X  R14:     0x%08X  R15(LR): 0x%08X\n", 
-           vm->registers[R12], vm->registers[R13], 
-           vm->registers[R14], vm->registers[R15_LR]);
-    
-    // Print flags
-    printf("Flags: [%c%c%c%c%c%c%c%c]\n",
-           (vm->registers[R4_SR] & ZERO_FLAG) ? 'Z' : '-',
-           (vm->registers[R4_SR] & NEG_FLAG) ? 'N' : '-',
-           (vm->registers[R4_SR] & CARRY_FLAG) ? 'C' : '-',
-           (vm->registers[R4_SR] & OVER_FLAG) ? 'O' : '-',
-           (vm->registers[R4_SR] & INT_FLAG) ? 'I' : '-',
-           (vm->registers[R4_SR] & DIR_FLAG) ? 'D' : '-',
-           (vm->registers[R4_SR] & SYS_FLAG) ? 'S' : '-',
-           (vm->registers[R4_SR] & TRAP_FLAG) ? 'T' : '-');
-    
-    // Check registers for literal ASCII characters and potential string pointers
-    // Skip R1(BP), R2(SP), R3(PC), R4(SR) as these have special purposes
-    for (int i = 0; i < 16; i++) {
-        if (i == R1_BP || i == R2_SP || i == R3_PC || i == R4_SR) {
-            continue;
-        }
-        
-        uint32_t value = vm->registers[i];
-        
-        // First check if the value could be a printable ASCII character
-        // Check both the lower byte (common) and the whole value (less common)
-        uint8_t low_byte = value & 0xFF;
-        
-        char register_name[10];
-        if (i == R0_ACC) {
-            strcpy(register_name, "R0(ACC)");
-        } else if (i == R15_LR) {
-            strcpy(register_name, "R15(LR)");
-        } else {
-            sprintf(register_name, "R%-2d    ", i);
-        }
-        
-        // Check if lower byte is a printable ASCII or common control character
-        if ((low_byte >= 32 && low_byte <= 126) || 
-            low_byte == '\n' || low_byte == '\r' || low_byte == '\t') {
-            
-            // Special handling for newline, carriage return, and tab
-            const char* char_repr;
-            if (low_byte == '\n') char_repr = "\\n";
-            else if (low_byte == '\r') char_repr = "\\r";
-            else if (low_byte == '\t') char_repr = "\\t";
-            else {
-                static char single_char[2] = {0, 0};
-                single_char[0] = (char)low_byte;
-                char_repr = single_char;
-            }
-            
-            printf("%s contains ASCII: '%s' (%d)\n", register_name, char_repr, low_byte);
-            
-            // If the value is only a character (higher bytes are 0), continue to next register
-            if (value <= 0xFF) {
-                continue;
-            }
-        }
-        
-        // Then check if it's a pointer to a string
-        uint32_t addr = value;
-        
-        // Check if this register might point to a string
-        if (memory_might_be_string(vm, addr)) {
-            char* str = memory_extract_string(vm, addr, 40);
-            if (str) {
-                // Print string content (truncate long strings)
-                if (strlen(str) > 30) {
-                    str[27] = '.';
-                    str[28] = '.';
-                    str[29] = '.';
-                    str[30] = '\0';
-                }
-                
-                printf("%s points to string: \"%s\"\n", register_name, str);
-                free(str);
-            }
-        }
-    }
-    
-    // Print instruction information
-    printf("Instruction count: %u\n", vm->instruction_count);
-    
-    char text[160];
-    disasm_format(&vm->current_instr, vm->debug_info, text, sizeof(text));
-    printf("Last instruction: %s\n", text);
-}
-
-// Push all registers in reverse order, storing SP as it was before the first push
+// Pushes R15 down to R0, storing SP as it was before the first push
 static void push_all_registers(VM *vm) {
     uint32_t original_sp = vm->registers[R2_SP];
 
@@ -298,7 +99,7 @@ static void push_all_registers(VM *vm) {
     }
 }
 
-// Pop all registers pushed by push_all_registers, discarding the saved SP
+// Pops registers saved by push_all_registers, discarding the saved SP
 static void pop_all_registers(VM *vm) {
     for (int i = 0; i < 16; i++) {
         uint32_t value = cpu_stack_pop(vm);
@@ -309,48 +110,70 @@ static void pop_all_registers(VM *vm) {
 }
 
 void cpu_interrupt(VM *vm, uint8_t vector) {
-    if (!vm) {
+    // The vector table holds one 32-bit handler address per vector
+    uint32_t handler = memory_read_dword(vm, INTERRUPT_VECTOR_TABLE + vector * 4u);
+    if (vm->last_error != VM_ERROR_NONE) {
         return;
     }
-    
-    // The vector table holds one 32-bit handler address per vector
-    uint32_t handler_addr = memory_read_dword(vm, INTERRUPT_VECTOR_TABLE + vector * 4);
-    if (handler_addr == 0) {
+    if (handler == 0) {
         vm_raise(vm, VM_ERROR_UNHANDLED_INTERRUPT, "Unhandled interrupt: %d", vector);
         return;
     }
 
-    vm->interrupt_vector = vector;
-
     // Save the execution context and mask interrupts while the handler runs
     push_all_registers(vm);
-    vm->registers[R4_SR] &= ~INT_FLAG;
-    vm->registers[R3_PC] = handler_addr;
+    vm->registers[R4_SR] &= ~(uint32_t)INT_FLAG;
+    vm->registers[R3_PC] = handler;
 }
 
-
 void cpu_return_from_interrupt(VM *vm) {
-    if (!vm) {
-        return;
-    }
     pop_all_registers(vm);
-    
-    // Clear current interrupt vector
-    vm->interrupt_vector = 0;
 }
 
 void cpu_enable_interrupts(VM *vm) {
-    if (!vm) {
-        return;
-    }
-    
     vm->registers[R4_SR] |= INT_FLAG;
 }
 
 void cpu_disable_interrupts(VM *vm) {
-    if (!vm) {
-        return;
+    vm->registers[R4_SR] &= ~(uint32_t)INT_FLAG;
+}
+
+void cpu_dump_registers(VM *vm) {
+    for (int i = 0; i < 16; i++) {
+        printf("%-3s 0x%08X%s", isa_register_name((uint8_t)i), vm->registers[i], i % 4 == 3 ? "\n" : "   ");
     }
-    
-    vm->registers[R4_SR] &= ~INT_FLAG;
+
+    static const struct {
+        uint8_t flag;
+        char name;
+    } flags[] = {
+        { ZERO_FLAG, 'Z' }, { NEG_FLAG, 'N' }, { CARRY_FLAG, 'C' }, { OVER_FLAG, 'O' },
+        { INT_FLAG, 'I' }, { DIR_FLAG, 'D' }, { SYS_FLAG, 'S' }, { TRAP_FLAG, 'T' },
+    };
+    printf("Flags: [");
+    for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+        putchar(cpu_get_flag(vm, flags[i].flag) ? flags[i].name : '-');
+    }
+    printf("]\n");
+
+    // Point out registers that hold a character or point at a string
+    for (int i = 0; i < 16; i++) {
+        uint32_t value = vm->registers[i];
+        if (i == R1_BP || i == R2_SP || i == R3_PC || i == R4_SR) {
+            continue;
+        }
+        if (value >= 32 && value <= 126) {
+            printf("%s = '%c'\n", isa_register_name((uint8_t)i), (char)value);
+        } else if (memory_might_be_string(vm, value)) {
+            char *str = memory_extract_string(vm, value, 40);
+            if (str) {
+                printf("%s -> \"%s%s\"\n", isa_register_name((uint8_t)i), str, strlen(str) >= 40 ? "..." : "");
+                free(str);
+            }
+        }
+    }
+
+    char text[160];
+    disasm_format(&vm->current_instr, vm->debug_info, text, sizeof(text));
+    printf("Instructions executed: %u, last: %s\n", vm->instruction_count, text);
 }

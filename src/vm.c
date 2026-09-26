@@ -22,12 +22,7 @@ int vm_init(VM *vm, uint32_t memory_size) {
         return result;
     }
     
-    // Initialize CPU (registers and flags)
-    result = cpu_init(vm);
-    if (result != VM_ERROR_NONE) {
-        memory_cleanup(vm);
-        return result;
-    }
+    cpu_reset(vm);
     
     // Initialize I/O devices (if any)
     vm->io_devices = NULL;  // No I/O devices by default
