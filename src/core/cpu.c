@@ -163,7 +163,7 @@ void cpu_dump_registers(VM *vm) {
             continue;
         }
         if (value >= 32 && value <= 126) {
-            printf("%s = '%c'\n", isa_register_name((uint8_t)i), (char)value);
+            printf("%s = %u '%c'\n", isa_register_name((uint8_t)i), value, (char)value);
         } else if (memory_might_be_string(vm, value)) {
             char *str = memory_extract_string(vm, value, 40);
             if (str) {

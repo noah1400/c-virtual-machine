@@ -41,16 +41,6 @@
 #define VM_RNG_DEFAULT_SEED     0x12345678
 
 
-#define MAX_BREAKPOINTS 32
-
-typedef struct {
-    uint32_t address;
-    char *name;          // Optional name (could be a symbol)
-    bool enabled;
-} Breakpoint;
-
-
-
 // Virtual Machine state
 typedef struct {
     // CPU registers
