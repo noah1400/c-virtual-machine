@@ -184,7 +184,7 @@ static int handle_load(VM *vm, Instruction *instr) {
     switch (opcode) {
         case LOAD_OP:
             // Load 32-bit value into register
-            value = get_operand_value(vm, instr, 0);
+            value = get_operand_value(vm, instr, 1);
             vm->registers[dest_reg] = value;
             break;
             
@@ -204,7 +204,7 @@ static int handle_load(VM *vm, Instruction *instr) {
             if (instr->mode == IMM_MODE) {
                 value = instr->immediate & 0xFFFF;
             } else {
-                uint16_t addr = get_store_address(vm, instr, 0);
+                uint16_t addr = get_store_address(vm, instr, 1);
                 value = memory_read_word(vm, addr);
             }
             vm->registers[dest_reg] = value;
@@ -212,7 +212,7 @@ static int handle_load(VM *vm, Instruction *instr) {
             
         case LEA_OP:
             // Load effective address into register
-            vm->registers[dest_reg] = get_store_address(vm, instr, 0);
+            vm->registers[dest_reg] = get_store_address(vm, instr, 1);
             break;
     }
     
