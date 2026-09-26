@@ -98,48 +98,52 @@ void cpu_update_flags(VM *vm, uint32_t result, uint8_t flags_to_update) {
 }
 
 // Push value onto stack
+static int stack_pointer_valid(VM *vm, uint32_t sp) {
+    if (sp < STACK_SEGMENT_BASE || sp > STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE) {
+        vm->last_error = VM_ERROR_SEGMENTATION_FAULT;
+        snprintf(vm->error_message, sizeof(vm->error_message),
+                 "Stack pointer 0x%08X is outside the stack segment", sp);
+        return 0;
+    }
+    return 1;
+}
+
 void cpu_stack_push(VM *vm, uint32_t value) {
     if (!vm) {
         return;
     }
-    
-    // Decrease stack pointer
-    vm->registers[R2_SP] -= 4;
-    
-    // Check for stack overflow
-    if (vm->registers[R2_SP] < STACK_SEGMENT_BASE) {
-        vm->registers[R2_SP] += 4; // Restore SP
-        vm->last_error = VM_ERROR_STACK_OVERFLOW;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Stack overflow");
+
+    uint32_t sp = vm->registers[R2_SP];
+    if (!stack_pointer_valid(vm, sp)) {
         return;
     }
-    
-    // Write value to stack
-    memory_write_dword(vm, vm->registers[R2_SP], value);
+    if (sp - STACK_SEGMENT_BASE < 4) {
+        vm->last_error = VM_ERROR_STACK_OVERFLOW;
+        snprintf(vm->error_message, sizeof(vm->error_message), "Stack overflow");
+        return;
+    }
+
+    vm->registers[R2_SP] = sp - 4;
+    memory_write_dword(vm, sp - 4, value);
 }
 
-// Pop value from stack
 uint32_t cpu_stack_pop(VM *vm) {
     if (!vm) {
         return 0;
     }
-    
-    // Check for stack underflow
-    if (vm->registers[R2_SP] >= STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE) {
-        vm->last_error = VM_ERROR_STACK_UNDERFLOW;
-        snprintf(vm->error_message, sizeof(vm->error_message), 
-                 "Stack underflow");
+
+    uint32_t sp = vm->registers[R2_SP];
+    if (!stack_pointer_valid(vm, sp)) {
         return 0;
     }
-    
-    // Read value from stack
-    uint32_t value = memory_read_dword(vm, vm->registers[R2_SP]);
-    
-    // Increase stack pointer
-    vm->registers[R2_SP] += 4;
-    
-    return value;
+    if (STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE - sp < 4) {
+        vm->last_error = VM_ERROR_STACK_UNDERFLOW;
+        snprintf(vm->error_message, sizeof(vm->error_message), "Stack underflow");
+        return 0;
+    }
+
+    vm->registers[R2_SP] = sp + 4;
+    return memory_read_dword(vm, sp);
 }
 
 // Create a new stack frame
