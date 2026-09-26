@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include "cpu.h"
 #include "disassembler.h"
@@ -138,6 +137,37 @@ void cpu_disable_interrupts(VM *vm) {
     vm->registers[R4_SR] &= ~(uint32_t)INT_FLAG;
 }
 
+// Copies a NUL-terminated run of at least three printable characters in the data or heap segment
+static int describe_string(const VM *vm, uint32_t address, char *out, size_t size) {
+    int in_data = address >= DATA_SEGMENT_BASE && address < DATA_SEGMENT_BASE + DATA_SEGMENT_SIZE;
+    int in_heap = address >= HEAP_SEGMENT_BASE && address < HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE;
+    if (!in_data && !in_heap) {
+        return 0;
+    }
+
+    size_t length = 0;
+    for (uint32_t a = address; a < vm->memory_size && length < 64; a++, length++) {
+        uint8_t c = vm->memory[a];
+        if (c == 0) {
+            break;
+        }
+        if ((c < 32 || c > 126) && c != '\n' && c != '\t') {
+            return 0;
+        }
+    }
+    if (length < 3 || length == 64) {
+        return 0;
+    }
+
+    size_t shown = length < size - 4 ? length : size - 4;
+    for (size_t i = 0; i < shown; i++) {
+        uint8_t c = vm->memory[address + i];
+        out[i] = c == '\n' || c == '\t' ? ' ' : (char)c;
+    }
+    strcpy(out + shown, shown < length ? "..." : "");
+    return 1;
+}
+
 void cpu_dump_registers(VM *vm) {
     for (int i = 0; i < 16; i++) {
         printf("%-3s 0x%08X%s", isa_register_name((uint8_t)i), vm->registers[i], i % 4 == 3 ? "\n" : "   ");
@@ -157,6 +187,7 @@ void cpu_dump_registers(VM *vm) {
     printf("]\n");
 
     // Point out registers that hold a character or point at a string
+    char text[160];
     for (int i = 0; i < 16; i++) {
         uint32_t value = vm->registers[i];
         if (i == R1_BP || i == R2_SP || i == R3_PC || i == R4_SR) {
@@ -164,16 +195,11 @@ void cpu_dump_registers(VM *vm) {
         }
         if (value >= 32 && value <= 126) {
             printf("%s = %u '%c'\n", isa_register_name((uint8_t)i), value, (char)value);
-        } else if (memory_might_be_string(vm, value)) {
-            char *str = memory_extract_string(vm, value, 40);
-            if (str) {
-                printf("%s -> \"%s%s\"\n", isa_register_name((uint8_t)i), str, strlen(str) >= 40 ? "..." : "");
-                free(str);
-            }
+        } else if (describe_string(vm, value, text, 44)) {
+            printf("%s -> \"%s\"\n", isa_register_name((uint8_t)i), text);
         }
     }
 
-    char text[160];
     disasm_format(&vm->current_instr, vm->debug_info, text, sizeof(text));
     printf("Instructions executed: %u, last: %s\n", vm->instruction_count, text);
 }

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "binfmt.h"
 #include "memory.h"
 #include "vm.h"
 
@@ -50,160 +51,95 @@ static uint32_t find_block(const VM *vm, uint32_t address) {
     return 0;
 }
 
-// Initialize memory for the VM
 int memory_init(VM *vm, uint32_t size) {
-    if (!vm) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-
     // The fixed segment layout spans the whole 16-bit address space
     if (size < VM_ADDRESS_SPACE_SIZE) {
         return vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Memory size must be at least %u bytes", VM_ADDRESS_SPACE_SIZE);
     }
 
-    // Allocate memory buffer
-    vm->memory = (uint8_t*)malloc(size);
+    vm->memory = calloc(size, 1);
     if (!vm->memory) {
-        return vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Failed to allocate %d bytes for VM memory", size);
+        return vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Failed to allocate %u bytes for VM memory", size);
     }
-    
-    // Initialize memory to zero
-    memset(vm->memory, 0, size);
     vm->memory_size = size;
-    
+
     write_block(vm, HEAP_SEGMENT_BASE, HEAP_SEGMENT_SIZE, 0, PROT_ALL);
-    
     return VM_ERROR_NONE;
 }
 
-// Clean up memory resources
 void memory_cleanup(VM *vm) {
-    if (vm && vm->memory) {
-        free(vm->memory);
-        vm->memory = NULL;
-        vm->memory_size = 0;
-    }
+    free(vm->memory);
+    vm->memory = NULL;
+    vm->memory_size = 0;
 }
 
-// Check if memory address is valid
 int memory_check_address(VM *vm, uint32_t address, uint32_t size) {
-    if (!vm || !vm->memory) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-
     if (address > vm->memory_size || size > vm->memory_size - address) {
         return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
                         "Memory access violation: address 0x%04X, size %u", address, size);
     }
-
     return VM_ERROR_NONE;
 }
 
 uint8_t memory_read_byte(VM *vm, uint32_t address) {
-    // Check both address validity and read permission
     if (memory_check_address_permissions(vm, address, 1, PROT_READ) != VM_ERROR_NONE) {
         return 0;
     }
-    
     return vm->memory[address];
 }
 
-// Write a byte to memory with permission check
 void memory_write_byte(VM *vm, uint32_t address, uint8_t value) {
-    // Check both address validity and write permission
-    if (memory_check_address_permissions(vm, address, 1, PROT_WRITE) != VM_ERROR_NONE) {
-        return;
+    if (memory_check_address_permissions(vm, address, 1, PROT_WRITE) == VM_ERROR_NONE) {
+        vm->memory[address] = value;
     }
-    
-    vm->memory[address] = value;
 }
 
-// Read a 16-bit word from memory
 uint16_t memory_read_word(VM *vm, uint32_t address) {
-    // Check both address validity and read permission for 2 bytes
     if (memory_check_address_permissions(vm, address, 2, PROT_READ) != VM_ERROR_NONE) {
         return 0;
     }
-    
-    // Little-endian byte order
-    return (uint16_t)(vm->memory[address]) |
-           ((uint16_t)(vm->memory[address + 1]) << 8);
+    return read_le16(vm->memory + address);
 }
 
-// Write a 16-bit word to memory with permission check
 void memory_write_word(VM *vm, uint32_t address, uint16_t value) {
-    // Check both address validity and write permission for 2 bytes
-    if (memory_check_address_permissions(vm, address, 2, PROT_WRITE) != VM_ERROR_NONE) {
-        return;
+    if (memory_check_address_permissions(vm, address, 2, PROT_WRITE) == VM_ERROR_NONE) {
+        write_le16(vm->memory + address, value);
     }
-    
-    // Little-endian byte order
-    vm->memory[address] = (uint8_t)(value & 0xFF);
-    vm->memory[address + 1] = (uint8_t)((value >> 8) & 0xFF);
 }
 
-// Read a 32-bit dword from memory
 uint32_t memory_read_dword(VM *vm, uint32_t address) {
-    // Check both address validity and read permission for 4 bytes
     if (memory_check_address_permissions(vm, address, 4, PROT_READ) != VM_ERROR_NONE) {
         return 0;
     }
-    
-    // Little-endian byte order
-    return (uint32_t)(vm->memory[address]) |
-           ((uint32_t)(vm->memory[address + 1]) << 8) |
-           ((uint32_t)(vm->memory[address + 2]) << 16) |
-           ((uint32_t)(vm->memory[address + 3]) << 24);
+    return read_le32(vm->memory + address);
 }
 
-// Write a 32-bit dword to memory with permission check
 void memory_write_dword(VM *vm, uint32_t address, uint32_t value) {
-    // Check both address validity and write permission for 4 bytes
-    if (memory_check_address_permissions(vm, address, 4, PROT_WRITE) != VM_ERROR_NONE) {
-        return;
+    if (memory_check_address_permissions(vm, address, 4, PROT_WRITE) == VM_ERROR_NONE) {
+        write_le32(vm->memory + address, value);
     }
-    
-    // Little-endian byte order
-    vm->memory[address] = (uint8_t)(value & 0xFF);
-    vm->memory[address + 1] = (uint8_t)((value >> 8) & 0xFF);
-    vm->memory[address + 2] = (uint8_t)((value >> 16) & 0xFF);
-    vm->memory[address + 3] = (uint8_t)((value >> 24) & 0xFF);
 }
 
-// Copy a block of memory
+// Copies with memmove semantics so overlapping ranges are safe
 int memory_copy(VM *vm, uint32_t dest, uint32_t src, uint32_t size) {
-    // Check source has read permission
-    if (memory_check_address_permissions(vm, src, size, PROT_READ) != VM_ERROR_NONE) {
+    if (memory_check_address_permissions(vm, src, size, PROT_READ) != VM_ERROR_NONE ||
+        memory_check_address_permissions(vm, dest, size, PROT_WRITE) != VM_ERROR_NONE) {
         return vm->last_error;
     }
-    
-    // Check destination has write permission
-    if (memory_check_address_permissions(vm, dest, size, PROT_WRITE) != VM_ERROR_NONE) {
-        return vm->last_error;
-    }
-    
-    // Handle overlapping memory blocks
-    memmove(&vm->memory[dest], &vm->memory[src], size);
+    memmove(vm->memory + dest, vm->memory + src, size);
     return VM_ERROR_NONE;
 }
 
-// Set a block of memory to a specific value with permission check
 int memory_set(VM *vm, uint32_t address, uint8_t value, uint32_t size) {
-    // Check destination has write permission
     if (memory_check_address_permissions(vm, address, size, PROT_WRITE) != VM_ERROR_NONE) {
         return vm->last_error;
     }
-    
-    memset(&vm->memory[address], value, size);
+    memset(vm->memory + address, value, size);
     return VM_ERROR_NONE;
 }
 
 // Allocate zero-filled memory from the heap, returning 0 on failure
 uint32_t memory_allocate(VM *vm, uint32_t size) {
-    if (!vm || !vm->memory) {
-        return 0;
-    }
-
     if (size > HEAP_SEGMENT_SIZE - HEAP_HEADER_SIZE) {
         vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Allocation size too large: %u bytes", size);
         return 0;
@@ -237,10 +173,6 @@ uint32_t memory_allocate(VM *vm, uint32_t size) {
 }
 
 int memory_check_address_permissions(VM *vm, uint32_t address, uint32_t size, uint8_t required_perm) {
-    if (!vm || !vm->memory) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-
     if (memory_check_address(vm, address, size) != VM_ERROR_NONE) {
         return VM_ERROR_SEGMENTATION_FAULT;
     }
@@ -309,10 +241,6 @@ static void coalesce(VM *vm, uint32_t block) {
 
 // Free an allocated block given the address returned by memory_allocate
 int memory_free(VM *vm, uint32_t address) {
-    if (!vm || !vm->memory) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-
     if (address < HEAP_SEGMENT_BASE + HEAP_HEADER_SIZE || address >= HEAP_END) {
         return vm_raise(vm, VM_ERROR_INVALID_ADDRESS, "Invalid heap address for free: 0x%04X", address);
     }
@@ -332,10 +260,6 @@ int memory_free(VM *vm, uint32_t address) {
 
 // Set the protection flags of an allocated block
 int memory_protect(VM *vm, uint32_t address, uint8_t flags) {
-    if (!vm || !vm->memory) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-
     uint32_t block = find_block(vm, address);
     if (!block || !block_allocated(vm, block) || block + HEAP_HEADER_SIZE != address) {
         return vm_raise(vm, VM_ERROR_INVALID_ADDRESS,
@@ -344,90 +268,4 @@ int memory_protect(VM *vm, uint32_t address, uint8_t flags) {
 
     vm->memory[block + 5] = flags & PROT_ALL;
     return VM_ERROR_NONE;
-}
-
-int memory_might_be_string(VM *vm, uint32_t addr) {
-    if (!vm || addr >= vm->memory_size) {
-        return 0;
-    }
-    
-    // Check if address is in data or heap segment
-    if ((addr >= DATA_SEGMENT_BASE && addr < DATA_SEGMENT_BASE + DATA_SEGMENT_SIZE) ||
-        (addr >= HEAP_SEGMENT_BASE && addr < HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE)) {
-        
-        // Try to read potential string - limit to reasonable length
-        const int MAX_STRING_CHECK = 64;
-        int printable_chars = 0;
-        int total_chars = 0;
-        
-        for (int i = 0; i < MAX_STRING_CHECK; i++) {
-            if (addr + i >= vm->memory_size) {
-                break;
-            }
-            
-            uint8_t c = vm->memory[addr + i];
-            
-            // If we hit null terminator and have seen some printable chars, it's likely a string
-            if (c == 0 && printable_chars > 0) {
-                return 1;
-            }
-            
-            // Count printable characters (ASCII 32-126 plus common control chars)
-            if ((c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t') {
-                printable_chars++;
-            }
-            
-            total_chars++;
-            
-            // If we've seen some characters but ratio of printable is low, probably not a string
-            if (total_chars > 3 && printable_chars < total_chars / 2) {
-                return 0;
-            }
-        }
-        
-        // If we've found several printable characters, might be a string
-        return (printable_chars > 3);
-    }
-    
-    return 0;
-}
-
-char* memory_extract_string(VM *vm, uint32_t addr, int max_length) {
-    if (!vm || addr >= vm->memory_size) {
-        return NULL;
-    }
-    
-    // Find string length (up to max_length)
-    int length = 0;
-    while (length < max_length) {
-        if (addr + length >= vm->memory_size) {
-            break;
-        }
-        
-        if (vm->memory[addr + length] == 0) {
-            break;
-        }
-        
-        length++;
-    }
-    
-    // Allocate and copy the string
-    char* result = (char*)malloc(length + 1);
-    if (!result) {
-        return NULL;
-    }
-    
-    for (int i = 0; i < length; i++) {
-        char c = (char)vm->memory[addr + i];
-        
-        // Replace control characters with spaces for display
-        if (c < 32 && c != '\n' && c != '\r' && c != '\t') {
-            c = ' ';
-        }
-        
-        result[i] = c;
-    }
-    
-    result[length] = '\0';
-    return result;
 }

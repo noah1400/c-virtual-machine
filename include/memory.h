@@ -36,8 +36,4 @@ int memory_free(VM *vm, uint32_t address);
 int memory_protect(VM *vm, uint32_t address, uint8_t flags);
 void memory_heap_stats(const VM *vm, uint32_t *free_bytes, uint32_t *largest_free);
 
-// String detection for debugging
-int memory_might_be_string(VM *vm, uint32_t addr);
-char* memory_extract_string(VM *vm, uint32_t addr, int max_length);
-
 #endif // _MEMORY_H_
