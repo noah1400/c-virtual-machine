@@ -292,6 +292,25 @@ void cpu_dump_registers(VM *vm) {
     printf("Last instruction: %s\n", text);
 }
 
+// Push all registers in reverse order, storing SP as it was before the first push
+static void push_all_registers(VM *vm) {
+    uint32_t original_sp = vm->registers[R2_SP];
+
+    for (int i = 15; i >= 0; i--) {
+        cpu_stack_push(vm, i == R2_SP ? original_sp : vm->registers[i]);
+    }
+}
+
+// Pop all registers pushed by push_all_registers, discarding the saved SP
+static void pop_all_registers(VM *vm) {
+    for (int i = 0; i < 16; i++) {
+        uint32_t value = cpu_stack_pop(vm);
+        if (i != R2_SP) {
+            vm->registers[i] = value;
+        }
+    }
+}
+
 void cpu_interrupt(VM *vm, uint8_t vector) {
     if (!vm) {
         return;
@@ -307,7 +326,7 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
     vm->interrupt_vector = vector;
 
     // Save the execution context and mask interrupts while the handler runs
-    vm_push_all_registers(vm);
+    push_all_registers(vm);
     vm->registers[R4_SR] &= ~INT_FLAG;
     vm->registers[R3_PC] = handler_addr;
 }
@@ -317,7 +336,7 @@ void cpu_return_from_interrupt(VM *vm) {
     if (!vm) {
         return;
     }
-    vm_pop_all_registers(vm);
+    pop_all_registers(vm);
     
     // Clear current interrupt vector
     vm->interrupt_vector = 0;

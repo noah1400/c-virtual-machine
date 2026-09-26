@@ -61,35 +61,6 @@ void vm_cleanup(VM *vm) {
     }
 }
 
-// Reset the VM to initial state
-int vm_reset(VM *vm) {
-    if (!vm) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-    
-    // Reset CPU state
-    int result = cpu_reset(vm);
-    if (result != VM_ERROR_NONE) {
-        return result;
-    }
-    
-    // Clear memory (optional - this can be expensive)
-    if (vm->memory) {
-        memset(vm->memory, 0, vm->memory_size);
-    }
-    
-    // Reset VM state flags
-    vm->halted = 0;
-    vm->debug_mode = 0;
-    vm->instruction_count = 0;
-    
-    // Clear error state
-    vm->last_error = VM_ERROR_NONE;
-    memset(vm->error_message, 0, sizeof(vm->error_message));
-    
-    return VM_ERROR_NONE;
-}
-
 // Run the VM until halted
 int vm_run(VM *vm) {
     if (!vm) {
@@ -168,46 +139,6 @@ int vm_decode_instruction(VM *vm, uint16_t address, Instruction *instr) {
 
     isa_decode(memory_read_dword(vm, address), instr);
     return VM_ERROR_NONE;
-}
-
-// Memory access wrappers
-uint8_t vm_read_byte(VM *vm, uint16_t address) {
-    return memory_read_byte(vm, address);
-}
-
-void vm_write_byte(VM *vm, uint16_t address, uint8_t value) {
-    memory_write_byte(vm, address, value);
-}
-
-uint16_t vm_read_word(VM *vm, uint16_t address) {
-    return memory_read_word(vm, address);
-}
-
-void vm_write_word(VM *vm, uint16_t address, uint16_t value) {
-    memory_write_word(vm, address, value);
-}
-
-uint32_t vm_read_dword(VM *vm, uint16_t address) {
-    return memory_read_dword(vm, address);
-}
-
-void vm_write_dword(VM *vm, uint16_t address, uint32_t value) {
-    memory_write_dword(vm, address, value);
-}
-
-// I/O operations (placeholder implementations)
-int vm_io_read(VM *vm, uint16_t port) {
-    // Placeholder - implement I/O device reading
-    return 0;
-}
-
-void vm_io_write(VM *vm, uint16_t port, uint32_t value) {
-    // Placeholder - implement I/O device writing
-    
-    // Special case for console output
-    if (port == 0) {
-        printf("%c", (char)value);
-    }
 }
 
 static int segment_fits(uint32_t base, uint32_t size, uint32_t seg_base, uint32_t seg_size) {
@@ -338,49 +269,6 @@ const char* vm_get_error_string(int error_code) {
         default:
             return "Unknown error";
     }
-}
-
-// Get last error code
-int vm_get_last_error(VM *vm) {
-    if (!vm) {
-        return VM_ERROR_INVALID_ADDRESS;
-    }
-    
-    return vm->last_error;
-}
-
-// Get last error message
-const char* vm_get_last_error_message(VM *vm) {
-    if (!vm) {
-        return "Invalid VM pointer";
-    }
-    
-    return vm->error_message;
-}
-
-// Dump VM state for debugging
-void vm_dump_state(VM *vm) {
-    if (!vm) {
-        return;
-    }
-    
-    printf("=== VM State Dump ===\n");
-    printf("Memory size: %u bytes\n", vm->memory_size);
-    printf("Halted: %s\n", vm->halted ? "Yes" : "No");
-    printf("Debug mode: %s\n", vm->debug_mode ? "Yes" : "No");
-    printf("Instruction count: %u\n", vm->instruction_count);
-    
-    if (vm->last_error != VM_ERROR_NONE) {
-        printf("Last error: %s (%d)\n", vm_get_error_string(vm->last_error), vm->last_error);
-        printf("Error message: %s\n", vm->error_message);
-    }
-    
-    printf("\n");
-    
-    // Dump CPU registers
-    cpu_dump_registers(vm);
-    
-    printf("\n");
 }
 
 const char* vm_get_error_message(VM *vm) {
