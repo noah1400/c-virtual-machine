@@ -1,7 +1,7 @@
 #ifndef _DEBUG_H_
 #define _DEBUG_H_
 
-#include <vm_types.h>
+#include "vm_types.h"
 #include <string.h>
 #include <stdlib.h>
 

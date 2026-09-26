@@ -47,6 +47,7 @@ void vm_cleanup(VM *vm) {
     
     // Free memory
     memory_cleanup(vm);
+    free_debug_info(vm);
     
     // Free I/O devices (if any)
     if (vm->io_devices) {

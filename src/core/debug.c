@@ -1,236 +1,108 @@
-#include <debug.h>
 #include <stdio.h>
+#include "debug.h"
+
+typedef struct {
+    const uint8_t *ptr;
+    const uint8_t *end;
+    bool ok;
+} Reader;
+
+static uint32_t read_uint(Reader *r, int bytes) {
+    if (!r->ok || r->end - r->ptr < bytes) {
+        r->ok = false;
+        return 0;
+    }
+    uint32_t value = 0;
+    for (int i = 0; i < bytes; i++) {
+        value |= (uint32_t)r->ptr[i] << (8 * i);
+    }
+    r->ptr += bytes;
+    return value;
+}
+
+static char *read_string(Reader *r) {
+    uint16_t len = (uint16_t)read_uint(r, 2);
+    if (!r->ok || r->end - r->ptr < len) {
+        r->ok = false;
+        return NULL;
+    }
+    char *str = malloc(len + 1u);
+    if (!str) {
+        r->ok = false;
+        return NULL;
+    }
+    memcpy(str, r->ptr, len);
+    str[len] = '\0';
+    r->ptr += len;
+    return str;
+}
 
 void load_debug_symbols(VM *vm, const uint8_t *data, uint32_t size) {
-    if (!vm || !data || size < 4) {
+    if (!vm || !data) {
         return;
     }
-    
-    // Allocate debug info structure
-    vm->debug_info = (DebugInfo*)malloc(sizeof(DebugInfo));
-    if (!vm->debug_info) {
-        return;  // Memory allocation failure
-    }
-    
-    memset(vm->debug_info, 0, sizeof(DebugInfo));
-    
-    const uint8_t *ptr = data;
-    
-    // Read symbol count
-    uint32_t symbol_count = *((uint32_t*)ptr);
-    ptr += 4;
-    
-    printf("Loading %u symbols...\n", symbol_count);
-    
-    // Allocate symbol array
-    vm->debug_info->symbols = (Symbol*)malloc(symbol_count * sizeof(Symbol));
-    if (!vm->debug_info->symbols) {
-        free(vm->debug_info);
-        vm->debug_info = NULL;
+
+    DebugInfo *info = calloc(1, sizeof(DebugInfo));
+    if (!info) {
         return;
     }
-    
-    vm->debug_info->symbol_count = symbol_count;
-    
-    // Read symbols
-    for (uint32_t i = 0; i < symbol_count && ptr < data + size; i++) {
-        // Name length
-        uint16_t name_len = *((uint16_t*)ptr);
-        ptr += 2;
-        
-        if (ptr + name_len >= data + size) {
-            break;  // Bounds check
-        }
-        
-        // Allocate and copy name
-        vm->debug_info->symbols[i].name = (char*)malloc(name_len + 1);
-        if (!vm->debug_info->symbols[i].name) {
-            continue;  // Skip if allocation fails
-        }
-        
-        memcpy(vm->debug_info->symbols[i].name, ptr, name_len);
-        vm->debug_info->symbols[i].name[name_len] = '\0';
-        ptr += name_len;
-        
-        // Address
-        if (ptr + 4 >= data + size) break;
-        vm->debug_info->symbols[i].address = *((uint32_t*)ptr);
-        ptr += 4;
-        
-        // Type
-        if (ptr >= data + size) break;
-        vm->debug_info->symbols[i].type = *ptr++;
-        
-        // Line number
-        if (ptr + 4 >= data + size) break;
-        vm->debug_info->symbols[i].line_num = *((uint32_t*)ptr);
-        ptr += 4;
-        
-        // Source file path length
-        if (ptr + 2 >= data + size) break;
-        uint16_t file_len = *((uint16_t*)ptr);
-        ptr += 2;
-        
-        // Source file path
-        if (file_len > 0) {
-            if (ptr + file_len >= data + size) break;
-            
-            vm->debug_info->symbols[i].source_file = (char*)malloc(file_len + 1);
-            if (vm->debug_info->symbols[i].source_file) {
-                memcpy(vm->debug_info->symbols[i].source_file, ptr, file_len);
-                vm->debug_info->symbols[i].source_file[file_len] = '\0';
-            }
-            ptr += file_len;
-        } else {
-            vm->debug_info->symbols[i].source_file = NULL;
-        }
+    vm->debug_info = info;
+
+    Reader r = { data, data + size, true };
+
+    // Entries have a minimum encoded size, which bounds allocations for corrupt counts
+    uint32_t symbol_count = read_uint(&r, 4);
+    if (!r.ok || symbol_count > size / 13) {
+        return;
     }
-    
-    // Read source line count
-    if (ptr + 4 >= data + size) {
-        return;  // No source line info
+    info->symbols = calloc(symbol_count ? symbol_count : 1, sizeof(Symbol));
+    if (!info->symbols) {
+        return;
     }
-    
-    uint32_t line_count = *((uint32_t*)ptr);
-    ptr += 4;
-    
-    printf("Loading %u source lines...\n", line_count);
-    
-    // Allocate source line array
-    vm->debug_info->source_lines = (SourceLine*)malloc(line_count * sizeof(SourceLine));
-    if (!vm->debug_info->source_lines) {
-        return;  // Partial success - we still have symbols
+    for (uint32_t i = 0; i < symbol_count; i++) {
+        Symbol *sym = &info->symbols[i];
+        sym->name = read_string(&r);
+        sym->address = read_uint(&r, 4);
+        sym->type = (uint8_t)read_uint(&r, 1);
+        sym->line_num = read_uint(&r, 4);
+        sym->source_file = read_string(&r);
+        if (!r.ok) {
+            free(sym->name);
+            free(sym->source_file);
+            return;
+        }
+        if (sym->source_file && sym->source_file[0] == '\0') {
+            free(sym->source_file);
+            sym->source_file = NULL;
+        }
+        info->symbol_count = i + 1;
     }
-    
-    vm->debug_info->source_line_count = line_count;
-    
-    // Create a map of unique file paths to help correct cross-references
-    char *file_paths[100] = {NULL};  // Up to 100 unique source files
-    int file_count = 0;
-    
-    // First pass: collect unique source file paths and properly initialize all entries
-    for (uint32_t i = 0; i < line_count && ptr < data + size; i++) {
-        SourceLine *line = &vm->debug_info->source_lines[i];
-        
-        // Initialize to NULL to prevent issues if we have to exit early
-        line->source = NULL;
-        line->source_file = NULL;
-        
-        // Address
-        if (ptr + 4 >= data + size) break;
-        line->address = *((uint32_t*)ptr);
-        ptr += 4;
-        
-        // Line number
-        if (ptr + 4 >= data + size) break;
-        line->line_num = *((uint32_t*)ptr);
-        ptr += 4;
-        
-        // Source text length
-        if (ptr + 2 >= data + size) break;
-        uint16_t source_len = *((uint16_t*)ptr);
-        ptr += 2;
-        
-        if (ptr + source_len >= data + size) {
-            break;  // Bounds check
+
+    uint32_t line_count = read_uint(&r, 4);
+    if (!r.ok || line_count > size / 12) {
+        return;
+    }
+    info->source_lines = calloc(line_count ? line_count : 1, sizeof(SourceLine));
+    if (!info->source_lines) {
+        return;
+    }
+    for (uint32_t i = 0; i < line_count; i++) {
+        SourceLine *line = &info->source_lines[i];
+        line->address = read_uint(&r, 4);
+        line->line_num = read_uint(&r, 4);
+        line->source = read_string(&r);
+        line->source_file = read_string(&r);
+        if (!r.ok) {
+            free(line->source);
+            free(line->source_file);
+            return;
         }
-        
-        // Allocate and copy source text
-        line->source = (char*)malloc(source_len + 1);
-        if (!line->source) {
-            continue;  // Skip if allocation fails
-        }
-        
-        memcpy(line->source, ptr, source_len);
-        line->source[source_len] = '\0';
-        ptr += source_len;
-        
-        // Source file path length
-        if (ptr + 2 >= data + size) break;
-        uint16_t file_len = *((uint16_t*)ptr);
-        ptr += 2;
-        
-        // Source file path
-        if (file_len > 0) {
-            if (ptr + file_len >= data + size) break;
-            
-            // Check if we've already seen this path
-            char temp_path[512] = {0};
-            memcpy(temp_path, ptr, file_len < 511 ? file_len : 511);
-            
-            // Look for basename within the path
-            char *basename = strrchr(temp_path, '/');
-            if (!basename) {
-                basename = strrchr(temp_path, '\\');
-            }
-            if (basename) {
-                basename++;  // Skip the slash
-            } else {
-                basename = temp_path;  // Use the whole thing if no separator
-            }
-            
-            // See if we already have this file
-            int file_index = -1;
-            for (int j = 0; j < file_count; j++) {
-                char *existing_basename = strrchr(file_paths[j], '/');
-                if (!existing_basename) {
-                    existing_basename = strrchr(file_paths[j], '\\');
-                }
-                if (existing_basename) {
-                    existing_basename++;
-                } else {
-                    existing_basename = file_paths[j];
-                }
-                
-                // If we find a match by basename, use that
-                if (strcmp(basename, existing_basename) == 0) {
-                    file_index = j;
-                    break;
-                }
-            }
-            
-            // If we don't have this file already, add it
-            if (file_index == -1 && file_count < 100) {
-                file_paths[file_count] = strdup(temp_path);
-                file_index = file_count++;
-                printf("New source file %d: %s (basename: %s)\n", 
-                       file_index, file_paths[file_index], basename);
-            }
-            
-            // Now use the consistent path
-            if (file_index >= 0) {
-                line->source_file = strdup(file_paths[file_index]);
-            } else {
-                // Fallback: just use what we have
-                line->source_file = (char*)malloc(file_len + 1);
-                if (line->source_file) {
-                    memcpy(line->source_file, ptr, file_len);
-                    line->source_file[file_len] = '\0';
-                }
-            }
-            
-            ptr += file_len;
-        } else {
+        if (line->source_file && line->source_file[0] == '\0') {
+            free(line->source_file);
             line->source_file = NULL;
         }
-        
-        // Display debug info for every 100th line
-        if (i % 100 == 0) {
-            printf("Source line %d: addr=0x%04X file=%s line=%d src=%s\n", 
-                   i, line->address, 
-                   line->source_file ? line->source_file : "(none)",
-                   line->line_num,
-                   line->source ? (line->source[0] == '.' ? "<directive>" : line->source) : "(none)");
-        }
+        info->source_line_count = i + 1;
     }
-    
-    // Clean up the file path array
-    for (int i = 0; i < file_count; i++) {
-        free(file_paths[i]);
-    }
-    
-    printf("Debug symbols loaded: %u symbols, %u source lines\n", 
-           vm->debug_info->symbol_count, vm->debug_info->source_line_count);
 }
 
 // Function to free debug info
