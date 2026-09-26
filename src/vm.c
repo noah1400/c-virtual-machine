@@ -11,7 +11,9 @@ int vm_init(VM *vm, uint32_t memory_size) {
     if (!vm) {
         return VM_ERROR_INVALID_ADDRESS;
     }
-    
+
+    memset(vm, 0, sizeof(*vm));
+
     // Initialize memory subsystem
     int result = memory_init(vm, memory_size);
     if (result != VM_ERROR_NONE) {
