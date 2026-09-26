@@ -83,7 +83,7 @@ static void source_free(SourceCache *cache) {
     memset(cache, 0, sizeof(*cache));
 }
 
-// Returns line number (1-based) of a source file, or NULL when the file cannot be read
+// Returns the text of a 1-based line of a source file, or NULL when the file cannot be read
 static const char *source_line(SourceCache *cache, const char *path, uint32_t number) {
     if (!cache->path || strcmp(cache->path, path) != 0) {
         uint32_t size;
@@ -165,7 +165,7 @@ static void show_location(Debugger *dbg) {
     }
 
     Instruction instr;
-    if (vm_peek_instruction(vm, pc, &instr)) {
+    if (pc % 4 == 0 && vm_peek_instruction(vm, pc, &instr)) {
         char text[160];
         disasm_format(&instr, vm->debug_info, text, sizeof(text));
         printf("%s: %s\n", faulted ? "Instruction" : "Next instruction", text);
