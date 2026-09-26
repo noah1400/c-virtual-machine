@@ -12,7 +12,7 @@ typedef struct {
 } Buffer;
 
 static void put(Buffer *b, const void *bytes, size_t count) {
-    if (b->failed) {
+    if (b->failed || count == 0) {
         return;
     }
     if (b->size + count > b->capacity) {
