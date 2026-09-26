@@ -34,10 +34,11 @@ for src in "$root"/tests/programs/*.asm; do
 
     input=/dev/null
     [ -f "$base.in" ] && input="$base.in"
-    # Programs run inside the scratch directory so the files they create do not leak
+    # Programs run inside the scratch directory so the files they create do not leak; the
+    # instruction limit turns a runaway program into a failure instead of a hang
     args=$(expectation "$src" vm-args)
     program_args=$(expectation "$src" program-args)
-    (cd "$tmp" && "$vm" $args "$name.bin" $program_args < "$input" > "$name.out" 2> "$name.err")
+    (cd "$tmp" && "$vm" -n 10000000 $args "$name.bin" $program_args < "$input" > "$name.out" 2> "$name.err")
     status=$?
 
     expected_status=$(expectation "$src" expect-exit)

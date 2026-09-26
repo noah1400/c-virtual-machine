@@ -51,6 +51,10 @@ int vm_step(VM *vm) {
     if (vm->last_error != VM_ERROR_NONE) {
         return vm->last_error;
     }
+    if (vm->instruction_limit && vm->instruction_count >= vm->instruction_limit) {
+        vm->error_pc = vm->registers[R3_PC];
+        return vm_raise(vm, VM_ERROR_INSTRUCTION_LIMIT, "Instruction limit of %u reached", vm->instruction_limit);
+    }
 
     if (cpu_deliver_interrupt(vm) && vm->last_error != VM_ERROR_NONE) {
         return vm->last_error;
@@ -216,6 +220,8 @@ const char *vm_get_error_string(int error_code) {
             return "Memory protection fault";
         case VM_ERROR_NESTED_INTERRUPT:
             return "Nested interrupt";
+        case VM_ERROR_INSTRUCTION_LIMIT:
+            return "Instruction limit reached";
         default:
             return "Unknown error";
     }

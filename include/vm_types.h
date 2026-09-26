@@ -65,6 +65,7 @@ typedef struct {
 
     // Instruction cycle info for debugging
     uint32_t instruction_count; // Number of instructions executed
+    uint32_t instruction_limit; // Execution stops with an error after this many, 0 for no limit
     Instruction current_instr;  // Currently executing instruction
     uint32_t error_pc;         // Address of last error
 
@@ -98,5 +99,6 @@ typedef struct {
 #define VM_ERROR_IO_ERROR             11 // I/O operation error
 #define VM_ERROR_PROTECTION_FAULT     12 // Memory protection fault
 #define VM_ERROR_NESTED_INTERRUPT     13 // Nested interrupt
+#define VM_ERROR_INSTRUCTION_LIMIT    14 // Instruction limit reached
 
 #endif // _VM_TYPES_H_

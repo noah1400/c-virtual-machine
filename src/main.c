@@ -14,6 +14,7 @@ typedef struct {
     int arg_count;
     char **args;
     uint32_t memory_size;
+    uint32_t instruction_limit;
     int debug;
     int disassemble;
     int trace;
@@ -26,6 +27,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
     fprintf(out, "  -m KB     Memory size in KB, at least %d (default %d)\n", DEFAULT_MEMORY_KB, DEFAULT_MEMORY_KB);
+    fprintf(out, "  -n COUNT  Stop with an error after COUNT instructions\n");
     fprintf(out, "  -t        Trace every executed instruction on stderr\n");
     fprintf(out, "  -v        Report loading and execution statistics on stderr\n");
     fprintf(out, "  -h        Show this help\n");
@@ -64,6 +66,14 @@ static int parse_options(int argc, char **argv, Options *opts) {
                 return -1;
             }
             opts->memory_size = (uint32_t)kb * 1024;
+        } else if (strcmp(arg, "-n") == 0) {
+            char *end = NULL;
+            unsigned long long count = i + 1 < argc ? strtoull(argv[++i], &end, 10) : 0;
+            if (!end || *end != '\0' || count == 0 || count > UINT32_MAX) {
+                fprintf(stderr, "vm: the instruction limit must be between 1 and %u\n", UINT32_MAX);
+                return -1;
+            }
+            opts->instruction_limit = (uint32_t)count;
         } else {
             fprintf(stderr, "vm: unknown option '%s'\n", arg);
             print_usage(stderr, argv[0]);
@@ -152,6 +162,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     vm.debug_mode = (uint8_t)opts.debug;
+    vm.instruction_limit = opts.instruction_limit;
     vm.arg_count = opts.arg_count;
     vm.args = opts.args;
 
