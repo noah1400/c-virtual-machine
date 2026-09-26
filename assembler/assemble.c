@@ -948,9 +948,13 @@ int asm_assemble(Assembler *as, const char *path) {
     }
 
     const Section *text = &as->sections[SECTION_TEXT];
-    if (as->errors == 0 && as->entry_line && (as->entry < text->base || as->entry >= text->end)) {
+    if (as->errors == 0 && as->entry_line) {
         as->line = as->entry_line;
-        asm_error(as, "entry point 0x%llX is outside the assembled code", (long long)as->entry);
+        if (as->entry < text->base || as->entry >= text->end) {
+            asm_error(as, "entry point 0x%llX is outside the assembled code", (long long)as->entry);
+        } else if (as->entry % 4 != 0) {
+            asm_error(as, "entry point 0x%llX is not instruction aligned", (long long)as->entry);
+        }
         as->line = NULL;
     }
     return as->errors == 0;
