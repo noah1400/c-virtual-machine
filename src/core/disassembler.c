@@ -118,9 +118,10 @@ void disasm_format(const Instruction *instr, const DebugInfo *info, char *buffer
             return;
     }
 
-    // Immediates that equal a label address are most likely pointers to it
+    // Immediates that equal a data label address are most likely pointers to it
     const Symbol *sym;
-    if (annotate && instr->mode == IMM_MODE && (sym = debug_symbol_at(info, instr->immediate))) {
+    if (annotate && instr->mode == IMM_MODE && (sym = debug_symbol_at(info, instr->immediate)) &&
+        sym->type == SYMBOL_DATA) {
         size_t len = strlen(buffer);
         snprintf(buffer + len, size - len, "  ; %s", sym->name);
     }
