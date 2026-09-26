@@ -132,6 +132,21 @@ static int execute_arithmetic(VM *vm, const Instruction *instr) {
             set_zero_negative(vm, result);
             *dest = result;
             break;
+        case IDIV_OP:
+        case IMOD_OP: {
+            int32_t x = (int32_t)a, y = (int32_t)b;
+            if (y == 0) {
+                return vm_raise(vm, VM_ERROR_DIVISION_BY_ZERO,
+                                instr->opcode == IDIV_OP ? "Division by zero" : "Modulo by zero");
+            }
+            if (x == INT32_MIN && y == -1) {
+                return vm_raise(vm, VM_ERROR_DIVISION_BY_ZERO, "Signed division overflow");
+            }
+            result = (uint32_t)(instr->opcode == IDIV_OP ? x / y : x % y);
+            set_zero_negative(vm, result);
+            *dest = result;
+            break;
+        }
     }
     return VM_ERROR_NONE;
 }

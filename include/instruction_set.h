@@ -41,6 +41,8 @@
 #define CMP_OP      (uint8_t)0x28 // CMP | Reg1, Reg2/Imm | Compare values (set flags) | Z, N, C, O
 #define ADDC_OP     (uint8_t)0x2A // ADDC | Reg1, Reg2/Imm | Add with carry | Z, N, C, O
 #define SUBC_OP     (uint8_t)0x2B // SUBC | Reg1, Reg2/Imm | Subtract with carry | Z, N, C, O
+#define IDIV_OP     (uint8_t)0x2C // IDIV | Reg1, Reg2/Imm | Signed divide | Z, N
+#define IMOD_OP     (uint8_t)0x2D // IMOD | Reg1, Reg2/Imm | Signed remainder | Z, N
 
 // Logical Instructions (0x40-0x5F)
 #define AND_OP      (uint8_t)0x40 // AND | Reg1, Reg2/Imm | Bitwise AND | Z, N

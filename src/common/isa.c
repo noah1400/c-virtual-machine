@@ -24,6 +24,8 @@ static const InstructionInfo instruction_table[] = {
     { "CMP",     CMP_OP,     FMT_REG_OPERAND,  MODES_SRC },
     { "ADDC",    ADDC_OP,    FMT_REG_OPERAND,  MODES_SRC },
     { "SUBC",    SUBC_OP,    FMT_REG_OPERAND,  MODES_SRC },
+    { "IDIV",    IDIV_OP,    FMT_REG_OPERAND,  MODES_SRC },
+    { "IMOD",    IMOD_OP,    FMT_REG_OPERAND,  MODES_SRC },
 
     { "AND",     AND_OP,     FMT_REG_OPERAND,  MODES_SRC },
     { "OR",      OR_OP,      FMT_REG_OPERAND,  MODES_SRC },
