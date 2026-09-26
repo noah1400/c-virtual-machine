@@ -68,6 +68,11 @@
 #define RET_OP      (uint8_t)0x6B // RET | - | Return from subroutine | None
 #define SYSCALL_OP  (uint8_t)0x6C // SYSCALL | Number | System call | Varies
 #define LOOP_OP     (uint8_t)0x6F // LOOP | Reg, Target | Decrement and jump if not zero | None
+#define JL_OP       (uint8_t)0x70 // JL | Target | Jump if less (signed) | None
+#define JGE_OP      (uint8_t)0x71 // JGE | Target | Jump if greater or equal (signed) | None
+#define JLE_OP      (uint8_t)0x72 // JLE | Target | Jump if less or equal (signed) | None
+#define JG_OP       (uint8_t)0x73 // JG | Target | Jump if greater (signed) | None
+#define JAE_OP      (uint8_t)0x74 // JAE | Target | Jump if above or equal (unsigned) | None
 
 // Stack Instructions (0x80-0x9F)
 #define PUSH_OP     (uint8_t)0x80 // PUSH | Reg/Imm | Push value onto stack | None

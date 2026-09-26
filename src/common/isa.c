@@ -49,6 +49,11 @@ static const InstructionInfo instruction_table[] = {
     { "RET",     RET_OP,     FMT_OPT_IMM,      MODE_BIT(IMM_MODE) },
     { "SYSCALL", SYSCALL_OP, FMT_IMM,          MODE_BIT(IMM_MODE) },
     { "LOOP",    LOOP_OP,    FMT_REG_OPERAND,  MODES_SRC },
+    { "JL",      JL_OP,      FMT_OPERAND,      MODES_SRC },
+    { "JGE",     JGE_OP,     FMT_OPERAND,      MODES_SRC },
+    { "JLE",     JLE_OP,     FMT_OPERAND,      MODES_SRC },
+    { "JG",      JG_OP,      FMT_OPERAND,      MODES_SRC },
+    { "JAE",     JAE_OP,     FMT_OPERAND,      MODES_SRC },
 
     { "PUSH",    PUSH_OP,    FMT_OPERAND,      MODES_SRC },
     { "POP",     POP_OP,     FMT_REG,          0 },

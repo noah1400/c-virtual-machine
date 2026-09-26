@@ -555,9 +555,24 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
     }
 }
 
+// Alternative names for conditional jumps
+static const InstructionInfo *find_instruction(const char *mnemonic) {
+    static const char *const aliases[][2] = {
+        { "JE", "JZ" }, { "JNE", "JNZ" }, { "JB", "JC" }, { "JNAE", "JC" }, { "JNB", "JAE" },
+        { "JNC", "JAE" }, { "JNA", "JBE" }, { "JNBE", "JA" }, { "JNGE", "JL" }, { "JNL", "JGE" },
+        { "JNG", "JLE" }, { "JNLE", "JG" },
+    };
+    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
+        if (name_equals(mnemonic, aliases[i][0])) {
+            return isa_by_mnemonic(aliases[i][1]);
+        }
+    }
+    return isa_by_mnemonic(mnemonic);
+}
+
 static void instruction(Assembler *as, Parser *p, LineResult *result) {
     Token *t = peek(p);
-    const InstructionInfo *info = isa_by_mnemonic(t->text);
+    const InstructionInfo *info = find_instruction(t->text);
 
     if (!info) {
         asm_error(as, "unknown instruction '%s'", t->text);

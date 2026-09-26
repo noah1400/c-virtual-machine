@@ -235,6 +235,7 @@ static int branch_taken(VM *vm, uint8_t opcode) {
     int zero = cpu_get_flag(vm, ZERO_FLAG);
     int negative = cpu_get_flag(vm, NEG_FLAG);
     int carry = cpu_get_flag(vm, CARRY_FLAG);
+    int less = negative != cpu_get_flag(vm, OVER_FLAG);
 
     switch (opcode) {
         case JZ_OP:
@@ -253,6 +254,16 @@ static int branch_taken(VM *vm, uint8_t opcode) {
             return carry || zero;
         case JA_OP:
             return !carry && !zero;
+        case JAE_OP:
+            return !carry;
+        case JL_OP:
+            return less;
+        case JGE_OP:
+            return !less;
+        case JLE_OP:
+            return less || zero;
+        case JG_OP:
+            return !less && !zero;
         default:
             return 1;
     }
@@ -531,20 +542,19 @@ int cpu_execute_instruction(VM *vm, const Instruction *instr) {
             break;
     }
 
-    if (instr->opcode >= ADD_OP && instr->opcode <= SUBC_OP) {
-        return execute_arithmetic(vm, instr);
+    // The top three opcode bits select the instruction group
+    switch (instr->opcode >> 5) {
+        case 1:
+            return execute_arithmetic(vm, instr);
+        case 2:
+            return execute_logical(vm, instr);
+        case 3:
+            return execute_control(vm, instr);
+        case 4:
+            return execute_stack(vm, instr);
+        case 5:
+            return execute_system(vm, instr);
+        default:
+            return execute_memory(vm, instr);
     }
-    if (instr->opcode >= AND_OP && instr->opcode <= TEST_OP) {
-        return execute_logical(vm, instr);
-    }
-    if (instr->opcode >= JMP_OP && instr->opcode <= LOOP_OP) {
-        return execute_control(vm, instr);
-    }
-    if (instr->opcode >= PUSH_OP && instr->opcode <= LEAVE_OP) {
-        return execute_stack(vm, instr);
-    }
-    if (instr->opcode >= HALT_OP && instr->opcode <= DEBUG_OP) {
-        return execute_system(vm, instr);
-    }
-    return execute_memory(vm, instr);
 }

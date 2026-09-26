@@ -5,8 +5,9 @@
 #include "disassembler.h"
 #include "vm_types.h"
 
+// Control flow opcodes take code addresses as operands
 static int is_branch(uint8_t opcode) {
-    return (opcode >= JMP_OP && opcode <= CALL_OP) || opcode == LOOP_OP;
+    return (opcode >> 5) == (JMP_OP >> 5);
 }
 
 static void format_displacement(char *out, size_t size, const char *base, int32_t displacement) {
