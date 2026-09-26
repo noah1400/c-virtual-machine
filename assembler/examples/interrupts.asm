@@ -2,8 +2,9 @@
 
 .equ VECTOR, 0x10
 
+.entry main
+
 .text
-    JMP main
 
 ; The interrupt vector table starts at 0x0100 with one handler address per vector
 .org 0x0100 + VECTOR * 4

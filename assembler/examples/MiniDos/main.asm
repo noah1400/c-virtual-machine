@@ -1,9 +1,9 @@
 ; main.asm - Main entry point for MiniDOS
 ; Contains initialization and main command loop
 
+.entry main
+
 .text
-    ; Initialize the OS
-    JMP main
 
 ; ----- Main Program -----
 main:
