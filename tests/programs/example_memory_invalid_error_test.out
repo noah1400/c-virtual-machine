@@ -1,0 +1,4 @@
+Invalid Address Error Test
+
+Test 1: Freeing a non-heap addressAddress to free: 0x1000
+Attempting to free non-heap address... 

@@ -1,0 +1,26 @@
+Welcome to Command Processor
+
+$ Available commands:
+  help - Show help
+  exit - Quit
+  echo [text] - Output the text
+  clear - Clear the screen
+  time - Show system time
+  calc [expr] - Calculate expression (supports +,-,*,/)
+  mem - Show memory information
+
+$ hello there
+
+$ Result: 42
+
+$ Error: Division by zero
+
+$ Invalid expression format
+
+$ Total memory: 65536 bytes
+Free heap: 16376 bytes
+Largest free heap block: 16376 bytes
+
+$ Unknown command. Type 'help' for help.
+
+$ Goodbye!

@@ -1,0 +1,8 @@
+help
+ver
+echo hello world
+mem
+color 2
+color
+foo
+exit

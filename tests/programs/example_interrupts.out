@@ -1,0 +1,3 @@
+Raising interrupt 0x10 with R8=0x55 R9=0x66
+Inside the handler, overwriting R8 and R9
+Back from the handler: 0x55 0x66

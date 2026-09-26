@@ -1,0 +1,8 @@
+help
+echo  hello there
+calc 6 * 7
+calc 100 / 0
+calc 12 -
+mem
+nope
+exit

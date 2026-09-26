@@ -1,0 +1,8 @@
+Memory Protection Test
+
+Allocating memory block... Allocated address: 0xc008
+Writing data to block... Done
+Reading data from block: ABC
+Setting memory to read-only... Done
+Testing read operation (should succeed): A
+Testing write operation (should fail): 

@@ -1,0 +1,6 @@
+Double Free Error Test
+
+Allocating memory block... Allocated address: 0xc008
+Writing data to block... Success
+Freeing block (first time)... Success
+Freeing block (second time)... 

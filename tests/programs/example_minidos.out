@@ -1,0 +1,31 @@
+MiniDOS v1.0
+Copyright (c) 2025
+Type 'help' for commands
+
+A:\> Available commands:
+  help - Show this help
+  cls - Clear screen
+  echo [text] - Display text
+  exit - Quit OS
+  time - Show system time
+  mem - Show memory info
+  ver - Show version
+  pause - Wait for key press
+  color [num] - Change text color (0-7)
+
+A:\> MiniDOS Version 1.0
+Copyright (c) 2025
+
+A:\> hello world
+
+A:\> Total memory: 65536 bytes
+Code segment: 0x0000-0x3FFF (16KB)
+Data segment: 0x4000-0x7FFF (16KB)
+Stack segment: 0x8000-0xBFFF (16KB)
+Heap segment: 0xC000-0xFFFF (16KB)
+
+A:\> [0;32;40m
+A:\> [0;39;49m
+A:\> Bad command or file name
+
+A:\> 

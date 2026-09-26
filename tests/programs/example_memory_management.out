@@ -1,0 +1,6 @@
+Minimal Memory Allocation Test
+Allocating 100 bytes... Address: 0xc008
+Writing string to memory... Done
+Reading string from memory: ABC
+Freeing memory... Done
+Test completed successfully!
