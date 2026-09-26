@@ -5,6 +5,7 @@
 #include "cpu.h"
 #include "memory.h"
 #include "debug.h"
+#include "binfmt.h"
 
 // Initialize the VM with the specified memory size
 int vm_init(VM *vm, uint32_t memory_size) {
@@ -194,10 +195,6 @@ void vm_io_write(VM *vm, uint16_t port, uint32_t value) {
     }
 }
 
-static uint32_t read_le32(const uint8_t *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
 static int load_error(VM *vm, int code, const char *message) {
     vm->last_error = code;
     snprintf(vm->error_message, sizeof(vm->error_message), "%s", message);
@@ -209,25 +206,15 @@ static int segment_fits(uint32_t base, uint32_t size, uint32_t seg_base, uint32_
 }
 
 static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
-    if (size < 32) {
-        return load_error(vm, VM_ERROR_IO_ERROR, "Truncated VM32 header");
+    Vm32Image bin;
+    const char *problem = vm32_parse(image, size, &bin);
+    if (problem) {
+        return load_error(vm, VM_ERROR_IO_ERROR, problem);
     }
 
-    uint16_t version_major = (uint16_t)(image[4] | (image[5] << 8));
-    uint16_t version_minor = (uint16_t)(image[6] | (image[7] << 8));
-    uint32_t header_size = read_le32(image + 8);
-    uint32_t code_base = read_le32(image + 12);
-    uint32_t code_size = read_le32(image + 16);
-    uint32_t data_base = read_le32(image + 20);
-    uint32_t data_size = read_le32(image + 24);
-    uint32_t symbol_size = read_le32(image + 28);
+    uint32_t code_base = bin.code_base, code_size = bin.code_size;
+    uint32_t data_base = bin.data_base, data_size = bin.data_size;
 
-    if (header_size < 32 || header_size > size) {
-        return load_error(vm, VM_ERROR_IO_ERROR, "Invalid header size in program file");
-    }
-    if ((uint64_t)header_size + code_size + data_size + symbol_size > size) {
-        return load_error(vm, VM_ERROR_IO_ERROR, "Segment sizes exceed program file size");
-    }
     if (!segment_fits(code_base, code_size, CODE_SEGMENT_BASE, CODE_SEGMENT_SIZE)) {
         return load_error(vm, VM_ERROR_SEGMENTATION_FAULT, "Code segment does not fit the code segment range");
     }
@@ -235,20 +222,16 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
         return load_error(vm, VM_ERROR_SEGMENTATION_FAULT, "Data segment does not fit the data segment range");
     }
 
-    printf("Loading optimized format binary (v%d.%d)\n", version_major, version_minor);
+    printf("Loading optimized format binary (v%d.%d)\n", bin.version_major, bin.version_minor);
     printf("  Code segment: 0x%04X - %u bytes\n", code_base, code_size);
     printf("  Data segment: 0x%04X - %u bytes\n", data_base, data_size);
 
-    const uint8_t *code = image + header_size;
-    const uint8_t *data = code + code_size;
-    const uint8_t *symbols = data + data_size;
+    memcpy(vm->memory + code_base, bin.code, code_size);
+    memcpy(vm->memory + data_base, bin.data, data_size);
 
-    memcpy(vm->memory + code_base, code, code_size);
-    memcpy(vm->memory + data_base, data, data_size);
-
-    if (symbol_size > 0 && vm->debug_mode) {
+    if (bin.symbol_size > 0 && vm->debug_mode) {
         debug_info_free(vm->debug_info);
-        vm->debug_info = debug_info_parse(symbols, symbol_size);
+        vm->debug_info = debug_info_parse(bin.symbols, bin.symbol_size);
     }
 
     vm->registers[R3_PC] = code_base;
@@ -273,7 +256,7 @@ int vm_load_program(VM *vm, const uint8_t *program, uint32_t size) {
         return VM_ERROR_INVALID_ADDRESS;
     }
 
-    if (size >= 4 && memcmp(program, "VM32", 4) == 0) {
+    if (vm32_is_image(program, size)) {
         return load_vm32_image(vm, program, size);
     }
     return load_raw_image(vm, program, size);
@@ -285,41 +268,16 @@ int vm_load_program_file(VM *vm, const char *filename) {
         return VM_ERROR_INVALID_ADDRESS;
     }
 
-    FILE *file = fopen(filename, "rb");
-    if (!file) {
-        vm->last_error = VM_ERROR_IO_ERROR;
-        snprintf(vm->error_message, sizeof(vm->error_message),
-                 "Failed to open program file: %s", filename);
-        return VM_ERROR_IO_ERROR;
-    }
-
-    long file_size = -1;
-    if (fseek(file, 0, SEEK_END) == 0) {
-        file_size = ftell(file);
-        rewind(file);
-    }
-    if (file_size < 0 || file_size > VM_MAX_PROGRAM_FILE_SIZE) {
-        fclose(file);
-        return load_error(vm, VM_ERROR_IO_ERROR, "Program file is unreadable or too large");
-    }
-
-    uint8_t *buffer = malloc(file_size > 0 ? (size_t)file_size : 1);
+    uint32_t size;
+    const char *problem;
+    uint8_t *buffer = read_binary_file(filename, &size, &problem);
     if (!buffer) {
-        fclose(file);
-        return load_error(vm, VM_ERROR_MEMORY_ALLOCATION, "Failed to allocate program buffer");
-    }
-
-    size_t bytes_read = fread(buffer, 1, (size_t)file_size, file);
-    fclose(file);
-    if (bytes_read != (size_t)file_size) {
-        free(buffer);
         vm->last_error = VM_ERROR_IO_ERROR;
-        snprintf(vm->error_message, sizeof(vm->error_message),
-                 "Failed to read program file: %s", filename);
+        snprintf(vm->error_message, sizeof(vm->error_message), "%s: %s", problem, filename);
         return VM_ERROR_IO_ERROR;
     }
 
-    int result = vm_load_program(vm, buffer, (uint32_t)file_size);
+    int result = vm_load_program(vm, buffer, size);
     free(buffer);
     return result;
 }
