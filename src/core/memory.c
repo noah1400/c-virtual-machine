@@ -86,28 +86,20 @@ void memory_cleanup(VM *vm) {
 }
 
 // Check if memory address is valid
-int memory_check_address(VM *vm, uint16_t address, uint16_t size) {
-    // Basic bounds check without permission check
+int memory_check_address(VM *vm, uint32_t address, uint32_t size) {
     if (!vm || !vm->memory) {
         return VM_ERROR_INVALID_ADDRESS;
     }
-    
-    if (address + size > vm->memory_size) {
-        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Memory access violation: address 0x%04X, size %d", address, size);
+
+    if (address > vm->memory_size || size > vm->memory_size - address) {
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
+                        "Memory access violation: address 0x%04X, size %u", address, size);
     }
-    
+
     return VM_ERROR_NONE;
 }
 
-// Get memory pointer with bounds checking
-uint8_t* memory_get_ptr(VM *vm, uint16_t address) {
-    if (memory_check_address(vm, address, 1) != VM_ERROR_NONE) {
-        return NULL;
-    }
-    return &vm->memory[address];
-}
-
-uint8_t memory_read_byte(VM *vm, uint16_t address) {
+uint8_t memory_read_byte(VM *vm, uint32_t address) {
     // Check both address validity and read permission
     if (memory_check_address_permissions(vm, address, 1, PROT_READ) != VM_ERROR_NONE) {
         return 0;
@@ -117,7 +109,7 @@ uint8_t memory_read_byte(VM *vm, uint16_t address) {
 }
 
 // Write a byte to memory with permission check
-void memory_write_byte(VM *vm, uint16_t address, uint8_t value) {
+void memory_write_byte(VM *vm, uint32_t address, uint8_t value) {
     // Check both address validity and write permission
     if (memory_check_address_permissions(vm, address, 1, PROT_WRITE) != VM_ERROR_NONE) {
         return;
@@ -127,7 +119,7 @@ void memory_write_byte(VM *vm, uint16_t address, uint8_t value) {
 }
 
 // Read a 16-bit word from memory
-uint16_t memory_read_word(VM *vm, uint16_t address) {
+uint16_t memory_read_word(VM *vm, uint32_t address) {
     // Check both address validity and read permission for 2 bytes
     if (memory_check_address_permissions(vm, address, 2, PROT_READ) != VM_ERROR_NONE) {
         return 0;
@@ -139,7 +131,7 @@ uint16_t memory_read_word(VM *vm, uint16_t address) {
 }
 
 // Write a 16-bit word to memory with permission check
-void memory_write_word(VM *vm, uint16_t address, uint16_t value) {
+void memory_write_word(VM *vm, uint32_t address, uint16_t value) {
     // Check both address validity and write permission for 2 bytes
     if (memory_check_address_permissions(vm, address, 2, PROT_WRITE) != VM_ERROR_NONE) {
         return;
@@ -151,7 +143,7 @@ void memory_write_word(VM *vm, uint16_t address, uint16_t value) {
 }
 
 // Read a 32-bit dword from memory
-uint32_t memory_read_dword(VM *vm, uint16_t address) {
+uint32_t memory_read_dword(VM *vm, uint32_t address) {
     // Check both address validity and read permission for 4 bytes
     if (memory_check_address_permissions(vm, address, 4, PROT_READ) != VM_ERROR_NONE) {
         return 0;
@@ -165,7 +157,7 @@ uint32_t memory_read_dword(VM *vm, uint16_t address) {
 }
 
 // Write a 32-bit dword to memory with permission check
-void memory_write_dword(VM *vm, uint16_t address, uint32_t value) {
+void memory_write_dword(VM *vm, uint32_t address, uint32_t value) {
     // Check both address validity and write permission for 4 bytes
     if (memory_check_address_permissions(vm, address, 4, PROT_WRITE) != VM_ERROR_NONE) {
         return;
@@ -179,7 +171,7 @@ void memory_write_dword(VM *vm, uint16_t address, uint32_t value) {
 }
 
 // Copy a block of memory
-int memory_copy(VM *vm, uint16_t dest, uint16_t src, uint16_t size) {
+int memory_copy(VM *vm, uint32_t dest, uint32_t src, uint32_t size) {
     // Check source has read permission
     if (memory_check_address_permissions(vm, src, size, PROT_READ) != VM_ERROR_NONE) {
         return vm->last_error;
@@ -196,7 +188,7 @@ int memory_copy(VM *vm, uint16_t dest, uint16_t src, uint16_t size) {
 }
 
 // Set a block of memory to a specific value with permission check
-int memory_set(VM *vm, uint16_t address, uint8_t value, uint16_t size) {
+int memory_set(VM *vm, uint32_t address, uint8_t value, uint32_t size) {
     // Check destination has write permission
     if (memory_check_address_permissions(vm, address, size, PROT_WRITE) != VM_ERROR_NONE) {
         return vm->last_error;
@@ -207,7 +199,7 @@ int memory_set(VM *vm, uint16_t address, uint8_t value, uint16_t size) {
 }
 
 // Allocate zero-filled memory from the heap, returning 0 on failure
-uint16_t memory_allocate(VM *vm, uint32_t size) {
+uint32_t memory_allocate(VM *vm, uint32_t size) {
     if (!vm || !vm->memory) {
         return 0;
     }
@@ -237,23 +229,22 @@ uint16_t memory_allocate(VM *vm, uint32_t size) {
 
         write_block(vm, block, available, 1, PROT_ALL);
         memset(vm->memory + block + HEAP_HEADER_SIZE, 0, available - HEAP_HEADER_SIZE);
-        return (uint16_t)(block + HEAP_HEADER_SIZE);
+        return block + HEAP_HEADER_SIZE;
     }
 
     vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Out of heap memory allocating %u bytes", size);
     return 0;
 }
 
-int memory_check_address_permissions(VM *vm, uint16_t address, uint16_t size, uint8_t required_perm) {
+int memory_check_address_permissions(VM *vm, uint32_t address, uint32_t size, uint8_t required_perm) {
     if (!vm || !vm->memory) {
         return VM_ERROR_INVALID_ADDRESS;
     }
 
-    uint32_t end = (uint32_t)address + size;
-    if (end > vm->memory_size) {
-        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
-                            "Memory access violation: address 0x%04X, size %d", address, size);
+    if (memory_check_address(vm, address, size) != VM_ERROR_NONE) {
+        return VM_ERROR_SEGMENTATION_FAULT;
     }
+    uint32_t end = address + size;
 
     // Any access touching the heap must stay inside one allocated block
     if (end > HEAP_SEGMENT_BASE && address < HEAP_END) {
@@ -265,7 +256,7 @@ int memory_check_address_permissions(VM *vm, uint16_t address, uint16_t size, ui
         }
         if (end > block + block_size(vm, block)) {
             return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
-                                "Memory access past end of heap block: address 0x%04X, size %d", address, size);
+                                "Memory access past end of heap block: address 0x%04X, size %u", address, size);
         }
 
         uint8_t protection = vm->memory[block + 5];
@@ -301,7 +292,7 @@ static void coalesce(VM *vm, uint32_t block) {
 }
 
 // Free an allocated block given the address returned by memory_allocate
-int memory_free(VM *vm, uint16_t address) {
+int memory_free(VM *vm, uint32_t address) {
     if (!vm || !vm->memory) {
         return VM_ERROR_INVALID_ADDRESS;
     }
@@ -324,7 +315,7 @@ int memory_free(VM *vm, uint16_t address) {
 }
 
 // Set the protection flags of an allocated block
-int memory_protect(VM *vm, uint16_t address, uint8_t flags) {
+int memory_protect(VM *vm, uint32_t address, uint8_t flags) {
     if (!vm || !vm->memory) {
         return VM_ERROR_INVALID_ADDRESS;
     }
@@ -339,7 +330,7 @@ int memory_protect(VM *vm, uint16_t address, uint8_t flags) {
     return VM_ERROR_NONE;
 }
 
-int memory_might_be_string(VM *vm, uint16_t addr) {
+int memory_might_be_string(VM *vm, uint32_t addr) {
     if (!vm || addr >= vm->memory_size) {
         return 0;
     }
@@ -385,7 +376,7 @@ int memory_might_be_string(VM *vm, uint16_t addr) {
     return 0;
 }
 
-char* memory_extract_string(VM *vm, uint16_t addr, int max_length) {
+char* memory_extract_string(VM *vm, uint32_t addr, int max_length) {
     if (!vm || addr >= vm->memory_size) {
         return NULL;
     }

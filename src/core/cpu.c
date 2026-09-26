@@ -264,7 +264,7 @@ void cpu_dump_registers(VM *vm) {
         }
         
         // Then check if it's a pointer to a string
-        uint16_t addr = (uint16_t)(value & 0xFFFF);
+        uint32_t addr = value;
         
         // Check if this register might point to a string
         if (memory_might_be_string(vm, addr)) {

@@ -602,7 +602,7 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Program terminated after %u instructions\n", vm.instruction_count);
             
             // Use the saved error PC
-            uint16_t error_pc = vm.error_pc;
+            uint32_t error_pc = vm.error_pc;
             
             // Decode and display the instruction
             Instruction instr;

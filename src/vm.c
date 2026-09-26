@@ -94,7 +94,7 @@ int vm_step(VM *vm) {
     }
 
     // Record the current PC (before execution)
-    uint16_t current_pc = vm->registers[R3_PC];
+    uint32_t current_pc = vm->registers[R3_PC];
     vm->error_pc = current_pc;
     
     // Fetch and decode instruction
@@ -128,7 +128,7 @@ int vm_step(VM *vm) {
 }
 
 // Decode the 32-bit instruction at the specified memory address
-int vm_decode_instruction(VM *vm, uint16_t address, Instruction *instr) {
+int vm_decode_instruction(VM *vm, uint32_t address, Instruction *instr) {
     if (!vm || !instr) {
         return VM_ERROR_INVALID_ADDRESS;
     }

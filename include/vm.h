@@ -13,7 +13,7 @@ int vm_run(VM *vm);                       // Run until halted
 int vm_step(VM *vm);                      // Execute single instruction
 
 // Instruction operations
-int vm_decode_instruction(VM *vm, uint16_t address, Instruction *instr);
+int vm_decode_instruction(VM *vm, uint32_t address, Instruction *instr);
 
 // Program loading
 int vm_load_program(VM *vm, const uint8_t *program, uint32_t size);

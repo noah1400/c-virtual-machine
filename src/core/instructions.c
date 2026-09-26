@@ -63,7 +63,7 @@ static uint32_t get_operand_value(VM *vm, Instruction *instr, int is_second_oper
 }
 
 // Helper function to get target address for store operations
-static uint16_t get_store_address(VM *vm, Instruction *instr, int is_second_operand) {
+static uint32_t get_store_address(VM *vm, Instruction *instr, int is_second_operand) {
     uint8_t mode = instr->mode;
     uint8_t reg = is_second_operand ? instr->reg2 : instr->reg1;
     uint16_t imm = instr->immediate;
@@ -191,7 +191,7 @@ static int handle_load(VM *vm, Instruction *instr) {
             if (instr->mode == IMM_MODE) {
                 value = instr->immediate & 0xFF;
             } else {
-                uint16_t addr = get_store_address(vm, instr, 1);
+                uint32_t addr = get_store_address(vm, instr, 1);
                 value = memory_read_byte(vm, addr);
             }
             vm->registers[dest_reg] = value;
@@ -202,7 +202,7 @@ static int handle_load(VM *vm, Instruction *instr) {
             if (instr->mode == IMM_MODE) {
                 value = instr->immediate & 0xFFFF;
             } else {
-                uint16_t addr = get_store_address(vm, instr, 1);
+                uint32_t addr = get_store_address(vm, instr, 1);
                 value = memory_read_word(vm, addr);
             }
             vm->registers[dest_reg] = value;
@@ -222,7 +222,7 @@ static int handle_store(VM *vm, Instruction *instr) {
     uint8_t opcode = instr->opcode;
     uint8_t src_reg = instr->reg1;
     uint32_t value = vm->registers[src_reg];
-    uint16_t addr = get_store_address(vm, instr, 1);
+    uint32_t addr = get_store_address(vm, instr, 1);
     
     switch (opcode) {
         case STORE_OP:
@@ -984,7 +984,7 @@ static int handle_memory(VM *vm, Instruction *instr) {
     uint8_t opcode = instr->opcode;
     uint8_t dest_reg = instr->reg1;
     uint8_t src_reg = instr->reg2;
-    uint16_t size, src, dst;
+    uint32_t size, src, dst;
     uint8_t value;
     int result;
     
@@ -994,7 +994,7 @@ static int handle_memory(VM *vm, Instruction *instr) {
             // Format: ALLOC Rdest, Rsize/IMM
             
             // Perform allocation with the size from a register or immediate
-            uint16_t addr = memory_allocate(vm, instr->mode == REG_MODE ? vm->registers[src_reg]
+            uint32_t addr = memory_allocate(vm, instr->mode == REG_MODE ? vm->registers[src_reg]
                                                                          : instr->immediate);
             
             // Check for allocation error

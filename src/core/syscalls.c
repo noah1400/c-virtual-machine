@@ -65,7 +65,7 @@ int syscall_dispatch(VM *vm, uint16_t syscall_num) {
                 
             case 2:  // Print string
                 {
-                    uint16_t addr = param1;
+                    uint32_t addr = param1;
                     char c;
                     
                     while ((c = memory_read_byte(vm, addr)) != 0) {
@@ -85,9 +85,9 @@ int syscall_dispatch(VM *vm, uint16_t syscall_num) {
                 
             case 4:  // Read string (up to param2 chars)
                 {
-                    uint16_t addr = param1;
-                    uint16_t max_len = param2;
-                    uint16_t i = 0;
+                    uint32_t addr = param1;
+                    uint32_t max_len = param2;
+                    uint32_t i = 0;
                     int c;
                     
                     if (max_len == 0) {
@@ -213,7 +213,7 @@ int syscall_dispatch(VM *vm, uint16_t syscall_num) {
             case 10:  // File open (param1=filename addr, param2=mode)
                 {
                     // Extract filename
-                    uint16_t addr = param1;
+                    uint32_t addr = param1;
                     uint8_t mode = param2 & 0xFF;
                     char filename[256] = {0};
                     int i = 0;
@@ -297,14 +297,14 @@ int syscall_dispatch(VM *vm, uint16_t syscall_num) {
                 break;
 
             case 21:  // Free memory (param1=address)
-                memory_free(vm, (uint16_t)param1);
+                memory_free(vm, param1);
                 vm->registers[R0_ACC] = vm->last_error;
                 syscall_status(vm);
                 break;
 
             case 22:  // Copy memory (param1=dest, param2=src, param3=count)
                 {
-                    uint16_t count = param3;
+                    uint32_t count = param3;
                     int result = memory_copy(vm, param1, param2, count);
                     vm->registers[R0_ACC] = result == VM_ERROR_NONE ? count : 0;
                     syscall_status(vm);
