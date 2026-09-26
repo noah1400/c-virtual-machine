@@ -258,7 +258,6 @@ void debug_print_current_context(VM *vm) {
         
         // Find source line
         SourceLine *line = find_source_line_by_address(vm, pc);
-        printf("line: %d %s %s", line->line_num, line->source, line->source_file);
         if (line) {
             // Extract filename from line's source_file
             char *filename = NULL;
