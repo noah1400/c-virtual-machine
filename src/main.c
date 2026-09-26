@@ -14,6 +14,7 @@ typedef struct {
     uint32_t memory_size;
     int debug;
     int disassemble;
+    int trace;
     int verbose;
 } Options;
 
@@ -23,6 +24,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
     fprintf(out, "  -m KB     Memory size in KB, at least %d (default %d)\n", DEFAULT_MEMORY_KB, DEFAULT_MEMORY_KB);
+    fprintf(out, "  -t        Trace every executed instruction on stderr\n");
     fprintf(out, "  -v        Report loading and execution statistics on stderr\n");
     fprintf(out, "  -h        Show this help\n");
 }
@@ -45,6 +47,8 @@ static int parse_options(int argc, char **argv, Options *opts) {
             opts->debug = 1;
         } else if (strcmp(arg, "-D") == 0) {
             opts->disassemble = 1;
+        } else if (strcmp(arg, "-t") == 0) {
+            opts->trace = 1;
         } else if (strcmp(arg, "-v") == 0) {
             opts->verbose = 1;
         } else if (strcmp(arg, "-h") == 0) {
@@ -72,16 +76,15 @@ static int parse_options(int argc, char **argv, Options *opts) {
     return 1;
 }
 
+static void describe_address(const VM *vm, uint32_t address, char *out, size_t size);
+
 static void report_fault(const VM *vm) {
     uint32_t pc = vm->error_pc;
 
     fprintf(stderr, "vm: error: %s\n", vm_get_error_message(vm));
-    fprintf(stderr, "vm: at 0x%04X", pc);
-
-    const Symbol *sym = debug_symbol_near(vm->debug_info, pc);
-    if (sym) {
-        fprintf(stderr, " <%s+%u>", sym->name, pc - sym->address);
-    }
+    char where[80];
+    describe_address(vm, pc, where, sizeof(where));
+    fprintf(stderr, "vm: at 0x%04X%s%s", pc, where[0] ? " " : "", where);
     const SourceLine *line = debug_line_at(vm->debug_info, pc);
     if (line && line->address == pc) {
         fprintf(stderr, " %s:%u", line->source_file ? line->source_file : "?", line->line_num);
@@ -94,6 +97,39 @@ static void report_fault(const VM *vm) {
         fprintf(stderr, ": %s", text);
     }
     fprintf(stderr, "\n");
+}
+
+static void describe_address(const VM *vm, uint32_t address, char *out, size_t size) {
+    const Symbol *sym = debug_symbol_near(vm->debug_info, address);
+    if (!sym) {
+        out[0] = '\0';
+    } else if (sym->address == address) {
+        snprintf(out, size, "<%s>", sym->name);
+    } else {
+        snprintf(out, size, "<%s+%u>", sym->name, address - sym->address);
+    }
+}
+
+// Runs like vm_run but prints each instruction on stderr before executing it
+static int run_traced(VM *vm) {
+    while (!vm->halted) {
+        uint32_t pc = vm->registers[R3_PC];
+        Instruction instr;
+        char where[80], text[160] = "?";
+
+        if (vm_peek_instruction(vm, pc, &instr)) {
+            disasm_format(&instr, vm->debug_info, text, sizeof(text));
+        }
+        describe_address(vm, pc, where, sizeof(where));
+        fflush(stdout);
+        fprintf(stderr, "0x%04X %-20s %s\n", pc, where, text);
+
+        int result = vm_step(vm);
+        if (result != VM_ERROR_NONE) {
+            return result;
+        }
+    }
+    return VM_ERROR_NONE;
 }
 
 int main(int argc, char *argv[]) {
@@ -125,7 +161,7 @@ int main(int argc, char *argv[]) {
                 vm.memory_size / 1024, vm.registers[R3_PC], vm.debug_info ? vm.debug_info->symbol_count : 0);
     }
 
-    int result = opts.debug ? debugger_run(&vm) : vm_run(&vm);
+    int result = opts.debug ? debugger_run(&vm) : opts.trace ? run_traced(&vm) : vm_run(&vm);
     fflush(stdout);
 
     if (result != VM_ERROR_NONE && !opts.debug) {
