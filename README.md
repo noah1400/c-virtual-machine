@@ -92,6 +92,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-d` | Start the interactive [debugger](#debugger) |
 | `-D` | Disassemble the program instead of running it |
 | `-m KB` | Memory size in KB, 64 to 65536 (default 64) |
+| `-n COUNT` | Stop with an error after COUNT instructions |
 | `-t` | Print each instruction on stderr before it executes |
 | `-v` | Print loading and execution statistics on stderr |
 | `-h` | Show help |
@@ -597,6 +598,7 @@ These codes appear in R5 after syscalls and in `CPUID` function 4.
 | 10 | Unhandled interrupt |
 | 11 | I/O error or end of input |
 | 12 | Memory protection fault |
+| 14 | Instruction limit reached |
 
 ## Debugger
 
@@ -675,7 +677,7 @@ Comment lines in a test adjust the checks:
 | `; vm-args: ...` | Extra options for the VM |
 | `; program-args: ...` | Arguments passed to the program |
 
-Programs run inside a temporary directory, so any files they create are discarded. The `example_*` tests include the programs from `assembler/examples`.
+Programs run inside a temporary directory, so any files they create are discarded. They also run with a limit of 10 million instructions, so a program stuck in a loop fails instead of hanging the suite. The `example_*` tests include the programs from `assembler/examples`.
 
 ## Source layout
 
