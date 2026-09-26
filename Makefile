@@ -1,43 +1,25 @@
-CC = gcc
-CFLAGS = -Iinclude -g
-LDFLAGS =
+CC       ?= gcc
+CFLAGS   ?= -O2 -g
+BUILD    := build
 
-# Source directories
-SRC_DIRS = src src/core src/io src/util
+ALL_CFLAGS   := -std=c11 -Wall -Wextra $(CFLAGS)
+ALL_CPPFLAGS := -Iinclude -D_POSIX_C_SOURCE=200809L -MMD -MP $(CPPFLAGS)
 
-# Source files
-SRC_FILES = $(wildcard src/*.c) \
-            $(wildcard src/core/*.c) \
-            $(wildcard src/io/*.c) \
-            $(wildcard src/util/*.c)
+VM_SRC := $(wildcard src/*.c src/core/*.c src/io/*.c)
+VM_OBJ := $(VM_SRC:%.c=$(BUILD)/%.o)
 
-# Object files
-OBJ_FILES = $(SRC_FILES:.c=.o)
+all: vm
 
-# Executable name
-TARGET = vm
-
-# Default target
-all: directories $(TARGET)
-
-# Create directories if they don't exist
-directories:
-	@mkdir -p src/core
-	@mkdir -p src/io
-	@mkdir -p src/util
-	@mkdir -p include
-	@mkdir -p bin
-
-# Main executable
-$(TARGET): $(OBJ_FILES)
+vm: $(VM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^
 
-# Compile source files
-%.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) -c -o $@ $<
 
-# Clean build artifacts
 clean:
-	rm -f $(OBJ_FILES) $(TARGET)
+	rm -rf $(BUILD) vm
 
-.PHONY: all clean install run debug disasm test_program newfile help directories
+-include $(VM_OBJ:.o=.d)
+
+.PHONY: all clean
