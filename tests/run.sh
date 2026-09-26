@@ -1,6 +1,7 @@
 #!/bin/sh
 # Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble.
-# Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:" and "; expect-error:" lines.
+# Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:"
+# and "; vm-args:" lines.
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 vm="$root/vm"
@@ -24,7 +25,8 @@ for src in "$root"/tests/programs/*.asm; do
     name=$(basename "$src" .asm)
     base=${src%.asm}
 
-    if ! "$asm" "$src" -o "$tmp/$name.bin" 2> "$tmp/$name.log"; then
+    # Assemble with a relative path so debug info does not depend on the checkout location
+    if ! (cd "$root" && "$asm" "tests/programs/$name.asm" -o "$tmp/$name.bin" 2> "$tmp/$name.log"); then
         fail "$name" "does not assemble: $(head -n 1 "$tmp/$name.log")"
         continue
     fi
@@ -32,7 +34,8 @@ for src in "$root"/tests/programs/*.asm; do
     input=/dev/null
     [ -f "$base.in" ] && input="$base.in"
     # Programs run inside the scratch directory so the files they create do not leak
-    (cd "$tmp" && "$vm" "$name.bin" < "$input" > "$name.out" 2> "$name.err")
+    args=$(expectation "$src" vm-args)
+    (cd "$tmp" && "$vm" $args "$name.bin" < "$input" > "$name.out" 2> "$name.err")
     status=$?
 
     expected_status=$(expectation "$src" expect-exit)
