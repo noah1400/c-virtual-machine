@@ -12,6 +12,10 @@
     SYSCALL #2
 .endm
 
+.ifndef VERBOSE
+.error "VERBOSE must be defined"
+.endif
+
 .text
 .ifdef VERBOSE
     LOAD R8, #1

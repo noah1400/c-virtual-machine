@@ -395,6 +395,16 @@ static void directive(Assembler *as, Parser *p) {
         directive_equ(as, p);
     } else if (name_equals(name, ".entry")) {
         directive_entry(as, p);
+    } else if (name_equals(name, ".error")) {
+        Token *message = peek(p);
+        if (message->kind != TOK_STRING) {
+            asm_error(as, "expected a message in quotes");
+            return;
+        }
+        p->pos++;
+        if (expect_end(p) && as->pass == 1) {
+            asm_error(as, "%s", message->text);
+        }
     } else if (name_equals(name, ".include")) {
         // The source reader already spliced the file in after this line
         if (peek(p)->kind != TOK_STRING) {
