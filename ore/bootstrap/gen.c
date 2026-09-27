@@ -741,7 +741,7 @@ static void gen_expr(Gen *g, Expr *e) {
             gen_new(g, e);
             return;
         default:
-            fail(g->m, e->line, "vmc0 cannot generate code for this expression (internal error)");
+            fail(g->m, e->line, "cannot generate code for this expression (internal error)");
     }
 }
 

@@ -130,7 +130,7 @@ static void number(Lexer *lx, Token *t) {
         digits++;
     }
     if ((*lx->p == '.' && isdigit((unsigned char)lx->p[1])) || (base == 10 && (*lx->p == 'e' || *lx->p == 'E'))) {
-        fail(lx->m, lx->line, "vmc0 does not support floating-point numbers");
+        fail(lx->m, lx->line, "floating-point numbers are not supported yet");
     }
     if (digits == 0 || lx->p[-1] == '_' || isalnum((unsigned char)*lx->p) || *lx->p == '_') {
         const char *end = lx->p;

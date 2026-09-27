@@ -1,2 +1,2 @@
-// expect-error: vmc0 does not support floating-point numbers
+// expect-error: floating-point numbers are not supported yet
 const HALF = 0.5;

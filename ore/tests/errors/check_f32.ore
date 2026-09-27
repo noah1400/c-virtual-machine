@@ -1,4 +1,4 @@
-// expect-error: vmc0 does not support f32
+// expect-error: f32 is not supported yet
 fn main() {
     var x: f32;
 }

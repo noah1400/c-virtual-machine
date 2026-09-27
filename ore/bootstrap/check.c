@@ -261,7 +261,7 @@ static Symbol *type_symbol(Checker *c, TypeExpr *t) {
         s = lookup(c, t->name);
     }
     if (!s && strcmp(t->name, "f32") == 0) {
-        error(c, t->line, "vmc0 does not support f32");
+        error(c, t->line, "f32 is not supported yet");
     }
     if (!s || s->kind != SYM_TYPE) {
         error(c, t->line, "%s is not a type", t->name);
