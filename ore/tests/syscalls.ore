@@ -1,0 +1,18 @@
+// syscall reaches the VM directly, with its value and status
+fn write(handle: int, text: []u8) int {
+    return syscall(13, handle, text.ptr, text.len).value;
+}
+
+fn main() {
+    var n = write(1, "written with syscall 13\n");
+    print("wrote ", n, " bytes\n");
+    var info = syscall(23);
+    print("memory info status ", info.status, "\n");
+    var bad = syscall(11, 99);
+    print("closing handle 99 gives status ", bad.status, "\n");
+    syscall(41, 7);
+    var first = syscall(40, 1000).value;
+    syscall(41, 7);
+    assert(syscall(40, 1000).value == first);
+    print("reseeding repeats the numbers\n");
+}

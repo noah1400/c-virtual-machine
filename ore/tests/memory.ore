@@ -1,0 +1,65 @@
+// new and free: a linked list, a growing buffer and a struct on the heap
+struct Node {
+    value: int;
+    next: *Node;
+}
+
+struct Stack {
+    items: []int;
+    used: int;
+}
+
+fn push(s: *Stack, value: int) {
+    if (s.used == s.items.len) {
+        var larger = new(int, s.items.len * 2 + 1);
+        for (var i = 0; i < s.used; i += 1) {
+            larger[i] = s.items[i];
+        }
+        free(s.items);
+        s.items = larger;
+    }
+    s.items[s.used] = value;
+    s.used += 1;
+}
+
+fn main() {
+    var head: *Node = null;
+    for (var i = 1; i <= 5; i += 1) {
+        var n = new(Node);
+        n.value = i * i;
+        n.next = head;
+        head = n;
+    }
+    var total = 0;
+    while (head != null) {
+        total += head.value;
+        var next = head.next;
+        free(head);
+        head = next;
+    }
+    print("list total ", total, "\n");
+
+    var s = new(Stack);
+    for (var i = 0; i < 100; i += 1) {
+        push(s, i);
+    }
+    var sum = 0;
+    for (var i = 0; i < s.used; i += 1) {
+        sum += s.items[i];
+    }
+    print("stack of ", s.used, " in room for ", s.items.len, ", sum ", sum, "\n");
+    free(s.items);
+    free(s);
+
+    var zeros = new(u8, 10);
+    var nonzero = 0;
+    for (var i = 0; i < zeros.len; i += 1) {
+        if (zeros[i] != 0) {
+            nonzero += 1;
+        }
+    }
+    print("fresh memory holds ", nonzero, " nonzero bytes\n");
+    var nothing: *Node = null;
+    free(nothing);
+    free(new(int, 0));
+}

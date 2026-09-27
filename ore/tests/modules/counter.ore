@@ -1,0 +1,21 @@
+// A module with state of its own, for the import tests
+import "shapes";
+
+pub var count: int;
+var hidden = 5;
+
+pub fn next() int {
+    count += 1;
+    return count * hidden;
+}
+
+pub fn corner_name(c: shapes.Corner) []u8 {
+    switch (c) {
+        case shapes.Corner.top_left, shapes.Corner.top_right {
+            return "top";
+        }
+        default {
+            return "bottom";
+        }
+    }
+}

@@ -1,0 +1,9 @@
+// main can take the program path and arguments
+// program-args: first second 3
+// expect-exit: 4
+fn main(args: [][]u8) int {
+    for (var i = 1; i < args.len; i += 1) {
+        print(i, ": ", args[i], " (", args[i].len, ")\n");
+    }
+    return args.len;
+}

@@ -1,0 +1,65 @@
+// Structs, pointers to them, nested structs and arrays of structs
+struct Point {
+    x: int;
+    y: int;
+}
+
+struct Rect {
+    origin: Point;
+    size: Point;
+    name: []u8;
+    visible: bool;
+}
+
+struct Small {
+    a: u8;
+    b: i16;
+    c: u8;
+}
+
+fn area(r: *Rect) int {
+    return r.size.x * r.size.y;
+}
+
+fn move(p: *Point, dx: int, dy: int) {
+    p.x += dx;
+    p.y += dy;
+}
+
+fn main() {
+    var r = Rect { origin: Point { x: 1, y: 2 }, size: Point { x: 10, y: 20 }, name: "box" };
+    print(r.name, " at ", r.origin.x, ",", r.origin.y, " area ", area(&r), " visible ", r.visible, "\n");
+
+    move(&r.origin, 5, -1);
+    var copy = r;
+    copy.origin.x = 100;
+    print("moved to ", r.origin.x, ",", r.origin.y, "; the copy is at ", copy.origin.x, "\n");
+
+    var p = &r.size;
+    (*p).x = 3;
+    p.y = 4;
+    print("area ", area(&r), ", size through the pointer ", (*p).x, "x", p.y, "\n");
+
+    var grid: [3]Point;
+    for (var i = 0; i < grid.len; i += 1) {
+        grid[i] = Point { x: i, y: i * i };
+    }
+    grid[1].y += 10;
+    var sum = 0;
+    for (var i = 0; i < grid.len; i += 1) {
+        sum += grid[i].x + grid[i].y;
+    }
+    print("grid sum ", sum, "\n");
+
+    print("sizes ", sizeof(Point), " ", sizeof(Rect), " ", sizeof(Small), " ", sizeof([3]Small), "\n");
+    var s = Small { a: 255, b: -2, c: 7 };
+    var t = s;
+    t.a += 1;
+    print("small ", s.a, " ", s.b, " ", s.c, " then ", t.a, "\n");
+
+    var pp = &p;
+    (*pp).x = 9;
+    print("through two pointers ", r.size.x, " ", *pp == p, "\n");
+    var none: *Point = null;
+    print("null is ", none == null, "\n");
+}

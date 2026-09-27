@@ -1,0 +1,76 @@
+// Arrays, slices, slicing and strings
+fn count(text: []u8, c: u8) int {
+    var n = 0;
+    for (var i = 0; i < text.len; i += 1) {
+        if (text[i] == c) {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+fn reverse(values: []int) {
+    var i = 0;
+    var j = values.len - 1;
+    while (i < j) {
+        var t = values[i];
+        values[i] = values[j];
+        values[j] = t;
+        i += 1;
+        j -= 1;
+    }
+}
+
+fn show(values: []int) {
+    print("[");
+    for (var i = 0; i < values.len; i += 1) {
+        if (i > 0) {
+            print(" ");
+        }
+        print(values[i]);
+    }
+    print("]\n");
+}
+
+fn digits(n: int, buffer: []u8) []u8 {
+    var i = buffer.len;
+    for (;;) {
+        i -= 1;
+        buffer[i] = '0' + (n % 10) as u8;
+        n /= 10;
+        if (n == 0) {
+            return buffer[i:];
+        }
+    }
+}
+
+fn main() {
+    var text = "mississippi";
+    print(text, " has ", text.len, " letters, ", count(text, 's'), " s and ", count(text[4:], 'i'), " i after the fourth\n");
+
+    var numbers = [6]int { 1, 2, 3, 4, 5, 6 };
+    reverse(numbers);
+    show(numbers);
+    reverse(numbers[1:4]);
+    show(numbers);
+    show(numbers[:2]);
+    show(numbers[4:]);
+    show(numbers[3:3]);
+
+    var primes = []int { 2, 3, 5, 7, 11 };
+    show(primes);
+    var buffer: [12]u8;
+    print("digits: ", digits(90210, buffer), " and ", digits(7, buffer[:3]), "\n");
+
+    var p = numbers[2:].ptr;
+    print("pointer steps: ", p[0], " ", *(p + 2), " ", (p + 3) - p, "\n");
+    var raw = p[1:3];
+    show(raw);
+
+    var grid: [3][4]u8;
+    grid[2][3] = 7;
+    grid[1] = grid[2];
+    print("rows: ", grid[1][3], " ", grid[0][3], " ", grid.len, "x", grid[0].len, "\n");
+    var empty: []u8;
+    print("empty: ", empty.len, " '", empty, "'\n");
+}

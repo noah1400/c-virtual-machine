@@ -1,0 +1,8 @@
+box at 1,2 area 200 visible false
+moved to 6,1; the copy is at 100
+area 12, size through the pointer 3x4
+grid sum 18
+sizes 8 28 6 18
+small 255 -2 7 then 0
+through two pointers 9 true
+null is true

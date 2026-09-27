@@ -1,0 +1,40 @@
+// Modules share their pub declarations through import, under their own name or another one
+import "modules/shapes";
+import "modules/counter" as tally;
+
+enum Weekday { monday = 1, tuesday, wednesday, thursday = 10, friday }
+
+fn describe(p: shapes.Point) {
+    print("(", p.x, ", ", p.y, ")");
+}
+
+fn main() {
+    var p = shapes.origin();
+    p.x = shapes.SIDES * 2;
+    var q = shapes.Point { x: -1, y: shapes.SIDES };
+    describe(p);
+    print(" ");
+    describe(q);
+    print("\n");
+
+    print(tally.next(), " ", tally.next(), " count ", tally.count, "\n");
+    tally.count = 10;
+    print(tally.next(), "\n");
+
+    var c = shapes.Corner.bottom_right;
+    print(tally.corner_name(shapes.Corner.top_right), " ", tally.corner_name(c), " ", c as int, "\n");
+
+    var d = Weekday.friday;
+    print("friday is ", d as int, ", tuesday ", Weekday.tuesday as int, "\n");
+    switch (d) {
+        case Weekday.monday {
+            print("start\n");
+        }
+        case Weekday.friday {
+            print("end of the week\n");
+        }
+    }
+    if (d != Weekday.monday && (3 as Weekday) == Weekday.wednesday) {
+        print("numbers convert to enums\n");
+    }
+}

@@ -1,0 +1,45 @@
+// Global variables start out with values known before the program runs
+struct Entry {
+    key: u8;
+    weight: i16;
+    name: []u8;
+    next: *Entry;
+}
+
+const GREETING = "hello";
+
+var counter: int;
+var limit: u32 = 4000000000;
+var ratio: i8 = -100;
+var enabled = true;
+var table = [5]u16 { 1, 10, 100, 1000 };
+var names = [][]u8 { "zero", "one", GREETING };
+var message: []u8 = GREETING;
+var first = Entry { name: "first", key: 'a', weight: -3 };
+var second = Entry { key: 'b', weight: 300, name: "second", next: &first };
+var list: *Entry = &second;
+var handler: fn(int) int = triple;
+var no_handler: fn(int) int;
+var buffer: [16]u8;
+var whole: []u8 = buffer;
+
+fn triple(x: int) int {
+    return 3 * x;
+}
+
+fn main() {
+    counter += 1;
+    print(counter, " ", limit, " ", ratio, " ", enabled, "\n");
+    print(table[0], " ", table[3], " ", table[4], " ", table.len, "\n");
+    for (var i = 0; i < names.len; i += 1) {
+        print(names[i], " ");
+    }
+    print(message, "\n");
+    for (var e = list; e != null; e = e.next) {
+        print(e.name, " ", e.key, " ", e.weight, "\n");
+    }
+    print(handler(14), " ", no_handler == null, " ", whole.len, "\n");
+    whole[0] = 'X';
+    buffer[1] = 'Y';
+    print(whole[:2], "\n");
+}
