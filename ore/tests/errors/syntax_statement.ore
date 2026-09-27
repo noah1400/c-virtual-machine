@@ -1,0 +1,5 @@
+// expect-error: only calls and assignments can be statements
+fn main() {
+    var x = 1;
+    x + 1;
+}

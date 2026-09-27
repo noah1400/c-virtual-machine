@@ -1,0 +1,2 @@
+// expect-error: a character literal holds one character
+const C = 'ab';

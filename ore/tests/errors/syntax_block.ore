@@ -1,0 +1,3 @@
+// expect-error: the block is missing its '}'
+fn main() {
+    var x = 1;

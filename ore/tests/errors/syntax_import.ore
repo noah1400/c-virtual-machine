@@ -1,0 +1,2 @@
+// expect-error: cannot find the module "missing"
+import "missing";

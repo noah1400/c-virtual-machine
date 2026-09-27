@@ -1,0 +1,4 @@
+// expect-error: comparisons cannot be chained
+fn main() {
+    var ok = 1 < 2 < 3;
+}

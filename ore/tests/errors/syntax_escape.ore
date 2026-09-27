@@ -1,0 +1,2 @@
+// expect-error: unknown escape sequence \q
+const NAME = "\q";

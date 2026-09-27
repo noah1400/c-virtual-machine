@@ -1,0 +1,2 @@
+// expect-error: invalid number 12ab
+const N = 12ab;

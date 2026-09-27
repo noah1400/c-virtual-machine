@@ -1,8 +1,9 @@
 #!/bin/sh
 # Usage: tests/run.sh [-u] [NAME...]
-# Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble, or only the
-# tests named. Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:",
-# "; expect-error:", "; expect-warning:", "; asm-args:", "; vm-args:" and "; program-args:" lines.
+# Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble and
+# ore/tests/errors/*.ore fail to compile, or only the tests named. Expectations come from NAME.out,
+# NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:", "; expect-warning:",
+# "; asm-args:", "; vm-args:" and "; program-args:" lines, written with // in Ore.
 # Programs are assembled with -W, and every warning needs an "; expect-warning:" line of its own.
 # "; disk-sectors:" attaches an empty disk image, NAME.x holds debugger commands, NAME.keys a key script
 # and NAME.err, if present, the whole expected stderr. "; link:" names modules in tests/programs to
@@ -35,11 +36,13 @@ wanted() {
 }
 
 for name in $names; do
-    [ -f "$root/tests/programs/$name.asm" ] || [ -f "$root/tests/errors/$name.asm" ] || fail "$name" "there is no such test"
+    [ -f "$root/tests/programs/$name.asm" ] || [ -f "$root/tests/errors/$name.asm" ] ||
+        [ -f "$root/ore/tests/errors/$name.ore" ] || fail "$name" "there is no such test"
 done
 
+# Assembly tests write their expectations in ; comments, Ore tests in // comments
 expectation() {
-    sed -n "s/^; $2: //p" "$1" | head -n 1
+    sed -n -e "s/^; $2: //p" -e "s|^// $2: ||p" "$1" | head -n 1
 }
 
 for src in "$root"/tests/programs/*.asm; do
@@ -167,6 +170,21 @@ for src in "$root"/tests/errors/*.asm; do
 
     if "$asm" $asm_args "$src" -o "$tmp/$name.bin" 2> "$tmp/$name.log"; then
         fail "$name" "assembled although it should not"
+    elif ! grep -qF -- "$expected" "$tmp/$name.log"; then
+        fail "$name" "expected '$expected', got: $(head -n 1 "$tmp/$name.log")"
+    else
+        passed=$((passed + 1))
+    fi
+done
+
+for src in "$root"/ore/tests/errors/*.ore; do
+    [ -e "$src" ] || continue
+    name=$(basename "$src" .ore)
+    wanted "$name" || continue
+    expected=$(expectation "$src" expect-error)
+
+    if (cd "$root" && ./vmc0 "ore/tests/errors/$name.ore" 2> "$tmp/$name.log"); then
+        fail "$name" "compiled although it should not"
     elif ! grep -qF -- "$expected" "$tmp/$name.log"; then
         fail "$name" "expected '$expected', got: $(head -n 1 "$tmp/$name.log")"
     else

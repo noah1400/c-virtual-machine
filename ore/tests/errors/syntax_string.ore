@@ -1,0 +1,2 @@
+// expect-error: unterminated string
+const NAME = "vm;

@@ -1,0 +1,4 @@
+// expect-error: expected ';' after the statement, found '}'
+fn main() {
+    var x = 1
+}

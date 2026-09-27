@@ -1,0 +1,4 @@
+// expect-error: unterminated comment
+/* the end is missing
+fn main() {
+}

@@ -1,0 +1,7 @@
+// expect-error: the switch already has a default
+fn main() {
+    switch (1) {
+        default { }
+        default { }
+    }
+}

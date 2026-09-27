@@ -1,0 +1,2 @@
+// expect-error: vmc0 does not support floating-point numbers
+const HALF = 0.5;
