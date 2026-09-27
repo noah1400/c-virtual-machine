@@ -14,6 +14,7 @@
 #define MIN_MEMORY_KB     (VM_MIN_MEMORY_SIZE / 1024)
 #define MAX_MEMORY_KB     1048576
 #define MAX_HISTORY       1000000
+#define MAX_LOGPOINTS     32
 
 typedef struct {
     const char *program;
@@ -21,6 +22,8 @@ typedef struct {
     const char *commands;
     uint32_t history;
     int text_display;
+    const char *logpoints[MAX_LOGPOINTS];
+    int logpoint_count;
     int arg_count;
     char **args;
     uint32_t memory_size;
@@ -38,6 +41,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -b FILE   Attach FILE as the disk image\n");
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
+    fprintf(out, "  -L SPEC   Print values each time execution reaches a location, as in -L 'loop:R8,[count]:d'\n");
     fprintf(out, "  -m KB     Memory size in KB, %d to %d (default %d)\n", MIN_MEMORY_KB, MAX_MEMORY_KB,
             DEFAULT_MEMORY_KB);
     fprintf(out, "  -n COUNT  Stop with an error after COUNT instructions\n");
@@ -108,6 +112,12 @@ static int parse_options(int argc, char **argv, Options *opts) {
                 return -1;
             }
             opts->history = (uint32_t)count;
+        } else if (strcmp(arg, "-L") == 0) {
+            if (i + 1 >= argc || opts->logpoint_count == MAX_LOGPOINTS) {
+                fprintf(stderr, "vm: -L needs a location and takes up to %d of them\n", MAX_LOGPOINTS);
+                return -1;
+            }
+            opts->logpoints[opts->logpoint_count++] = argv[++i];
         } else if (strcmp(arg, "-n") == 0) {
             char *end = NULL;
             unsigned long long count = i + 1 < argc ? strtoull(argv[++i], &end, 10) : 0;
@@ -185,6 +195,15 @@ int main(int argc, char *argv[]) {
     if (opts.history && !opts.debug) {
         monitor.history = calloc(opts.history, sizeof(HistoryEntry));
     }
+    for (int i = 0; i < opts.logpoint_count; i++) {
+        char error[160];
+        if (monitor_add_logpoint(&monitor, &vm, opts.logpoints[i], error, sizeof(error))) {
+            fprintf(stderr, "vm: bad logpoint '%s': %s\n", opts.logpoints[i], error);
+            monitor_free(&monitor);
+            vm_cleanup(&vm);
+            return 1;
+        }
+    }
     if (!opts.debug) {
         vm_catch_signals();
     }
@@ -193,6 +212,7 @@ int main(int argc, char *argv[]) {
         FILE *commands = fopen(opts.commands, "r");
         if (!commands) {
             fprintf(stderr, "vm: cannot open %s: %s\n", opts.commands, strerror(errno));
+            monitor_free(&monitor);
             vm_cleanup(&vm);
             return 1;
         }
@@ -209,11 +229,10 @@ int main(int argc, char *argv[]) {
         monitor_report_history(&vm, &monitor);
         report_fault(&vm);
     }
-    free(monitor.history);
     if (monitor.counts) {
         monitor_report_profile(&vm, &monitor);
-        free(monitor.counts);
     }
+    monitor_free(&monitor);
     if (opts.verbose) {
         fprintf(stderr, "vm: %s after %u instructions\n", result == VM_ERROR_NONE ? "stopped" : "faulted",
                 vm.instruction_count);

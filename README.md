@@ -93,6 +93,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-d` | Start the interactive [debugger](#debugger) |
 | `-D` | Disassemble the program instead of running it |
 | `-H COUNT` | When the program stops with an error, first show the last COUNT instructions and the registers they changed |
+| `-L SPEC` | Print values each time execution reaches a location (see below). Can be given up to 32 times |
 | `-m KB` | Memory size in KB, 128 to 1048576 (default 1024) |
 | `-n COUNT` | Stop with an error after COUNT instructions |
 | `-p` | Print an execution profile on stderr when the program stops |
@@ -160,6 +161,18 @@ vm: profile of 29 instructions
        count   share  location
           25   86.2%  0x0010 <main.loop>
            4   13.8%  0x0000 <main>
+```
+
+A logpoint prints registers and memory on stderr each time execution reaches its location, without stopping the program. It is written as `LOCATION:ITEM,ITEM...`, where the location is a label or an address and each item is one of these:
+
+- A register, such as `R6` or `SP`.
+- `[ADDRESS]`, the memory at an address that adds up at most one register, numbers and symbols, as in `[count]`, `[R8+24]` or `[buffer+R5]`.
+
+An item can end in `:` and a format: `x` for hex (the default), `d` for signed and `u` for unsigned decimal, `c` for a character, `s` for a string and `f` for a float. For memory, `b` or `w` reads a byte or a 16-bit word instead of 32 bits. With `s`, a register is taken as the address of the string, while `[ADDRESS]` names the string itself:
+
+```console
+$ ./vm -L 'find_file:R6:s,[R7+24]:d' minidos.bin
+log 0x0674 <find_file> R6="a.txt" [R7+24]=0
 ```
 
 `-D` prints the header, then the code with its labels, then a hex dump of the data. A file without a VM32 header is treated as raw code and loaded at address 0.

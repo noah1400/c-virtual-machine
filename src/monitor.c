@@ -1,10 +1,15 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "binfmt.h"
 #include "debug.h"
 #include "disassembler.h"
+#include "memory.h"
 #include "monitor.h"
 #include "vm.h"
+
+#define LOG_STRING 64
 
 // Prints the address, its label and the instruction there the way a trace shows them, padding the
 // instruction to width columns
@@ -32,12 +37,217 @@ static void record_history(const VM *vm, Monitor *monitor, const uint32_t *befor
     }
 }
 
+// Prints up to LOG_STRING characters of the NUL-terminated string at address, escaping the rest
+static void print_string(const VM *vm, uint32_t address) {
+    char bytes[LOG_STRING];
+    uint32_t length = memory_peek(vm, address, bytes, sizeof(bytes));
+    fputc('"', stderr);
+    for (uint32_t i = 0; i < length && bytes[i]; i++) {
+        unsigned char c = (unsigned char)bytes[i];
+        if (c == '"' || c == '\\') {
+            fprintf(stderr, "\\%c", c);
+        } else if (c == '\n') {
+            fprintf(stderr, "\\n");
+        } else if (c >= 32 && c < 127) {
+            fputc(c, stderr);
+        } else {
+            fprintf(stderr, "\\x%02X", c);
+        }
+    }
+    fputc('"', stderr);
+    if (length == sizeof(bytes) && memchr(bytes, 0, sizeof(bytes)) == NULL) {
+        fprintf(stderr, "...");
+    }
+}
+
+static void print_item(const VM *vm, const LogItem *item) {
+    uint32_t value = item->reg >= 0 ? vm->registers[item->reg] : 0;
+    uint32_t size = item->memory ? item->size : 4;
+
+    fprintf(stderr, " %s=", item->text);
+    if (item->memory) {
+        uint8_t bytes[4] = { 0 };
+        if (item->format == 's') {
+            print_string(vm, value + item->offset);
+            return;
+        }
+        if (memory_peek(vm, value + item->offset, bytes, size) < size) {
+            fprintf(stderr, "?");
+            return;
+        }
+        value = read_le32(bytes);
+    }
+    switch (item->format) {
+        case 'd':
+            fprintf(stderr, "%d", size == 1 ? (int8_t)value : size == 2 ? (int16_t)value : (int32_t)value);
+            break;
+        case 'u':
+            fprintf(stderr, "%u", value);
+            break;
+        case 'c':
+            fprintf(stderr, value >= 32 && value < 127 ? "'%c'" : "'\\x%02X'", value);
+            break;
+        case 's':
+            print_string(vm, value);
+            break;
+        case 'f': {
+            float number;
+            memcpy(&number, &value, sizeof(number));
+            fprintf(stderr, "%g", (double)number);
+            break;
+        }
+        default:
+            fprintf(stderr, "0x%0*X", (int)size * 2, value);
+            break;
+    }
+}
+
+static void print_logpoint(const VM *vm, const Logpoint *logpoint) {
+    char where[80];
+    debug_describe(vm->debug_info, logpoint->address, where, sizeof(where));
+    fflush(stdout);
+    fprintf(stderr, "log 0x%04X%s%s", logpoint->address, where[0] ? " " : "", where);
+    for (int i = 0; i < logpoint->item_count; i++) {
+        print_item(vm, &logpoint->items[i]);
+    }
+    fprintf(stderr, "\n");
+}
+
+// A term is a register, a number or a symbol; returns 1 for a register, 0 for a value, -1 if unknown
+static int parse_term(const VM *vm, const char *text, size_t length, int *reg, uint32_t *value) {
+    char term[64];
+    if (length == 0 || length >= sizeof(term)) {
+        return -1;
+    }
+    memcpy(term, text, length);
+    term[length] = '\0';
+
+    if ((*reg = isa_register_index(term)) >= 0) {
+        return 1;
+    }
+    char *end;
+    unsigned long number = strtoul(term, &end, 0);
+    if (isdigit((unsigned char)term[0]) && *end == '\0' && number <= 0xFFFFFFFFul) {
+        *value = (uint32_t)number;
+        return 0;
+    }
+    const Symbol *sym = debug_symbol_named(vm->debug_info, term);
+    if (sym) {
+        *value = sym->address;
+        return 0;
+    }
+    return -1;
+}
+
+// An item is a register or [ADDRESS], where the address adds and subtracts one register, numbers
+// and symbols, followed by :FORMAT with an optional size b or w and one of x, d, u, c, s and f
+static int parse_item(const VM *vm, const char *text, size_t length, LogItem *item, char *error, size_t size) {
+    const char *colon = memchr(text, ':', length);
+    size_t body = colon ? (size_t)(colon - text) : length;
+
+    memset(item, 0, sizeof(*item));
+    item->reg = -1;
+    item->size = 4;
+    item->format = 'x';
+    snprintf(item->text, sizeof(item->text), "%.*s", (int)body, text);
+
+    for (const char *f = colon ? colon + 1 : text + length; f < text + length; f++) {
+        if (*f == 'b' || *f == 'w') {
+            item->size = *f == 'b' ? 1 : 2;
+        } else if (strchr("xducsf", *f)) {
+            item->format = *f;
+        } else {
+            snprintf(error, size, "unknown format '%c' in %.*s", *f, (int)length, text);
+            return 1;
+        }
+    }
+
+    if (body < 2 || text[0] != '[' || text[body - 1] != ']') {
+        if (parse_term(vm, text, body, &item->reg, &item->offset) != 1) {
+            snprintf(error, size, "%s is not a register or a [memory] operand", item->text);
+            return 1;
+        }
+        return 0;
+    }
+
+    item->memory = 1;
+    const char *p = text + 1, *end = text + body - 1;
+    int sign = 1;
+    while (p < end) {
+        const char *next = p;
+        while (next < end && *next != '+' && *next != '-') {
+            next++;
+        }
+        int reg;
+        uint32_t value = 0;
+        int kind = parse_term(vm, p, (size_t)(next - p), &reg, &value);
+        if (kind < 0 || (kind == 1 && (sign < 0 || item->reg >= 0))) {
+            snprintf(error, size, "cannot read the address in %s", item->text);
+            return 1;
+        }
+        if (kind == 1) {
+            item->reg = reg;
+        } else {
+            item->offset += sign > 0 ? value : 0u - value;
+        }
+        sign = next < end && *next == '-' ? -1 : 1;
+        p = next < end ? next + 1 : end;
+    }
+    return 0;
+}
+
+int monitor_add_logpoint(Monitor *monitor, const VM *vm, const char *spec, char *error, size_t size) {
+    const char *colon = strchr(spec, ':');
+    size_t length = colon ? (size_t)(colon - spec) : strlen(spec);
+    Logpoint logpoint = { 0 };
+    int reg;
+
+    if (parse_term(vm, spec, length, &reg, &logpoint.address) != 0) {
+        snprintf(error, size, "unknown location %.*s", (int)length, spec);
+        return 1;
+    }
+    for (const char *item = colon ? colon + 1 : NULL; item && *item;) {
+        const char *comma = strchr(item, ',');
+        size_t item_length = comma ? (size_t)(comma - item) : strlen(item);
+        if (logpoint.item_count == LOG_ITEMS) {
+            snprintf(error, size, "more than %d items", LOG_ITEMS);
+            return 1;
+        }
+        if (parse_item(vm, item, item_length, &logpoint.items[logpoint.item_count++], error, size)) {
+            return 1;
+        }
+        item = comma ? comma + 1 : NULL;
+    }
+
+    Logpoint *grown = realloc(monitor->logpoints, (size_t)(monitor->logpoint_count + 1) * sizeof(Logpoint));
+    if (!grown) {
+        snprintf(error, size, "out of memory");
+        return 1;
+    }
+    monitor->logpoints = grown;
+    monitor->logpoints[monitor->logpoint_count++] = logpoint;
+    return 0;
+}
+
+void monitor_free(Monitor *monitor) {
+    free(monitor->counts);
+    free(monitor->history);
+    free(monitor->logpoints);
+    memset(monitor, 0, sizeof(*monitor));
+}
+
 // Runs like vm_run, optionally printing each instruction on stderr before executing it, counting
-// how often each instruction of the loaded code executes and remembering the last instructions
+// how often each instruction of the loaded code executes, remembering the last instructions and
+// printing the values that logpoints ask for
 int monitor_run(VM *vm, Monitor *monitor) {
     uint32_t before[16];
 
     while (!vm->halted) {
+        for (int i = 0; i < monitor->logpoint_count; i++) {
+            if (monitor->logpoints[i].address == vm->registers[R3_PC]) {
+                print_logpoint(vm, &monitor->logpoints[i]);
+            }
+        }
         if (monitor->trace) {
             fflush(stdout);
             print_instruction(vm, vm->registers[R3_PC], 0);

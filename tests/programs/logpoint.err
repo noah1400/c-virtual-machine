@@ -1,0 +1,4 @@
+log 0x0004 <count> R8=3 [total]=0 [name]="sum" [name+1]='u'
+log 0x0004 <count> R8=2 [total]=3 [name]="sum" [name+1]='u'
+log 0x0004 <count> R8=1 [total]=5 [name]="sum" [name+1]='u'
+log 0x0018 <done> R8=0x00000000
