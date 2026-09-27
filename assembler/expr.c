@@ -46,9 +46,10 @@ static Value plain(int64_t value) {
     return (Value){ value, BASE_NONE, 0 };
 }
 
-// Operators other than + and - only take plain numbers
+// Operators other than + and - only take plain numbers, which forward references are until the
+// symbols are known
 static int plain_operands(Parser *p, Value a, Value b, const char *op) {
-    if (a.weight || b.weight) {
+    if ((a.weight || b.weight) && !p->unresolved) {
         fail(p, "an address in an object file cannot be used with '%s'", op);
         return 0;
     }
@@ -60,7 +61,7 @@ static Value combine(Parser *p, Value a, Value b, int sign) {
     Value result = { (int64_t)sum, a.base, a.weight };
     if (b.weight) {
         if (result.weight && result.base != b.base) {
-            return fail(p, "addresses from different sections or symbols cannot be combined");
+            return p->unresolved ? plain(0) : fail(p, "addresses from different sections or symbols cannot be combined");
         }
         result.base = b.base;
         result.weight += sign * b.weight;
@@ -336,16 +337,19 @@ static Value parse_logical_or(Parser *p) {
 
 // Float literals may only stand alone, with an optional sign, since expressions use integer arithmetic.
 // The base of the value is left in p->base; only callers that set p->relocatable take an address
-// of an object file.
+// of an object file. Whether an address can be stored is only known once its symbols are.
 int64_t parse_expression(Parser *p) {
-    int floats = p->floats, operators = p->operators;
+    int floats = p->floats, operators = p->operators, unresolved = p->unresolved;
+    p->unresolved = 0;
     Value value = parse_logical_or(p);
+    int incomplete = p->unresolved;
+    p->unresolved |= unresolved;
 
     p->base = BASE_NONE;
     if (p->floats > floats && (p->floats - floats > 1 || p->operators > operators)) {
         return fail(p, "floating-point constants cannot be combined with operators").value;
     }
-    if (value.weight != 0 && !p->failed) {
+    if (value.weight != 0 && !p->failed && !incomplete) {
         if (value.weight != 1) {
             return fail(p, "this address expression cannot be stored in an object file").value;
         }

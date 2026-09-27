@@ -23,6 +23,13 @@ main:
     CALL print_number
     LOAD R0, farewell
     CALL [handlers]
+
+    ; The difference of two labels is a number, even before they are defined
+    LOAD R8, #farewell_end - farewell
+    CALL print_number
+    LOAD R8, #1 << (after_shift - $)
+after_shift:
+    CALL print_number
     HALT
 
 print_number:
@@ -37,3 +44,4 @@ greeting:
     .asciiz "linked"
 farewell:
     .asciiz "done"
+farewell_end:
