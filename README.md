@@ -886,7 +886,8 @@ Programs run inside a temporary directory, so any files they create are discarde
 
 | Path | Contents |
 |---|---|
-| `src/main.c` | The `vm` command line, tracing and fault reports |
+| `src/main.c` | The `vm` command line and fault reports |
+| `src/monitor.c` | Tracing and profiling while a program runs |
 | `src/vm.c` | Machine setup, program loading and the fetch-execute step |
 | `src/debugger.c` | The interactive debugger |
 | `src/core/` | CPU helpers, instruction execution, memory and heap, syscalls, disassembler, debug info |
