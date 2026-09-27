@@ -1,0 +1,36 @@
+// Arguments are evaluated from left to right, also where a call among them changes what the others read
+var counter = 0;
+
+fn next() int {
+    counter += 1;
+    return counter;
+}
+
+fn change(s: []int) int {
+    s[0] = 9;
+    return 0;
+}
+
+fn swap(p: *int, q: *int) int {
+    var t = *p;
+    *p = *q;
+    *q = t;
+    return t;
+}
+
+fn show(a: int, b: int, c: int) {
+    print(a, " ", b, " ", c, "\n");
+}
+
+fn main() {
+    show(counter, next(), counter);
+    var local = 5;
+    show(local, next(), local);
+    var numbers = [2]int { 7, 8 };
+    var s = numbers[:];
+    show(numbers[0], change(s), numbers[0]);
+    var x = 1;
+    var y = 2;
+    show(x, swap(&x, &y), y);
+    show(s.len, next() * 10, s[1]);
+}

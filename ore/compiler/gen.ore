@@ -856,6 +856,44 @@ fn push_argument(g: *Gen, arg: *ast.Expr, emitting: bool) bool {
     return true;
 }
 
+// A value that no call can change: a constant, a string, or a scalar or slice in a local whose address
+// is never taken
+fn is_stable(e: *ast.Expr) bool {
+    if (e.is_const || e.kind == ast.ExprKind.NULL || e.kind == ast.ExprKind.STRING ||
+        e.kind == ast.ExprKind.NAME && e.symbol.kind == ast.SymbolKind.CONST) {
+        return true;
+    }
+    var x = e;
+    if (x.kind == ast.ExprKind.LEN || x.kind == ast.ExprKind.PTR) {
+        x = x.left;
+    }
+    return unshared(x) && (check.is_scalar(x.type) || x.type.kind == ast.TypeKind.SLICE);
+}
+
+// The one argument of a call that needs code, when the others can go on the stack before and after it
+// without a change to what they are or to the order of their null checks, or -1
+fn computed_argument(g: *Gen, e: *ast.Expr) int {
+    var computed = -1;
+    for (var i = 0; i < e.args.len; i += 1) {
+        if (!push_argument(g, e.args[i], false)) {
+            if (computed >= 0) {
+                return -1;
+            }
+            computed = i;
+        }
+    }
+    if (computed < 0 || is_aggregate(e.args[computed].type)) {
+        return -1;
+    }
+    var calls = has_call(e.args[computed]);
+    for (var i = 0; i < e.args.len; i += 1) {
+        if (i > computed && in_register(e.args[i]) || i != computed && calls && !is_stable(e.args[i])) {
+            return -1;
+        }
+    }
+    return computed;
+}
+
 fn gen_call(g: *Gen, e: *ast.Expr) {
     var function = e.left.type;
     var result = function.base;
@@ -870,20 +908,35 @@ fn gen_call(g: *Gen, e: *ast.Expr) {
     for (var i = 0; i < function.params.len; i += 1) {
         size += words(function.params[i].size);
     }
-    // Arguments that need no code go on the stack with PUSH, from the last one to the first
+    // Arguments that need no code go on the stack with PUSH, from the last one to the first, and so can
+    // the others around one that does
     var pushed = direct;
     for (var i = 0; i < e.args.len && pushed; i += 1) {
         pushed = push_argument(g, e.args[i], false);
     }
-    if (pushed) {
+    var computed = -1;
+    if (direct && !pushed) {
+        computed = computed_argument(g, e);
+    }
+    if (pushed || computed >= 0) {
         // The pointers that arguments go through are checked in the order of the arguments
         for (var i = 0; i < e.args.len; i += 1) {
             if (in_register(e.args[i])) {
                 fixed_place(g, e.args[i]);
             }
         }
-        for (var i = e.args.len - 1; i >= 0; i -= 1) {
+        for (var i = e.args.len - 1; i > computed; i -= 1) {
             push_argument(g, e.args[i], true);
+        }
+        if (computed >= 0) {
+            gen_expr(g, e.args[computed]);
+            if (e.args[computed].type.kind == ast.TypeKind.SLICE) {
+                emit(g, "    PUSH R5\n");
+            }
+            emit(g, "    PUSH R0\n");
+            for (var i = computed - 1; i >= 0; i -= 1) {
+                push_argument(g, e.args[i], true);
+            }
         }
         if (hidden) {
             temp = alloc_frame(g, result.size);
