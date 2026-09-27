@@ -1,0 +1,35 @@
+// The VM's disk: whole sectors between the disk and memory
+import "std/cpu";
+
+pub const SECTOR = 512;
+
+const SECTOR_PORT = 0x70;
+const BUFFER_PORT = 0x71;
+const COUNT_PORT = 0x72;
+const COMMAND_PORT = 0x73;
+const SIZE_PORT = 0x74;
+
+const READ: u32 = 1;
+const WRITE: u32 = 2;
+
+// The number of sectors, 0 without a disk
+pub fn sectors() int {
+    return cpu.read_port(SIZE_PORT) as int;
+}
+
+// Moves as many whole sectors as fit in buffer, from sector on, and tells whether that worked
+fn transfer(command: u32, sector: int, buffer: []u8) bool {
+    cpu.write_port(SECTOR_PORT, sector as u32);
+    cpu.write_port(BUFFER_PORT, buffer.ptr as u32);
+    cpu.write_port(COUNT_PORT, (buffer.len / SECTOR) as u32);
+    cpu.write_port(COMMAND_PORT, command);
+    return cpu.read_port(COMMAND_PORT) == 0;
+}
+
+pub fn read(sector: int, buffer: []u8) bool {
+    return transfer(READ, sector, buffer);
+}
+
+pub fn write(sector: int, buffer: []u8) bool {
+    return transfer(WRITE, sector, buffer);
+}
