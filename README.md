@@ -255,7 +255,7 @@ Memory is flat, byte-addressed and little-endian. It is 1 MB by default, and `-m
 
 | Region | Contents |
 |---|---|
-| From 0 | Code, from `.text` |
+| From 0, or where `vmasm -b` put it | Code, from `.text` |
 | From the next page boundary | Data, from `.data` |
 | From the end of the data up to SLO | Heap |
 | The top 64 KB, or what `-S` sets | Stack, growing down from the top of memory |
@@ -651,7 +651,7 @@ label:  MNEMONIC operand, operand   ; comment
 - Each line holds at most one statement, which can follow a label. Comments start with `;`.
 - Mnemonics, registers and directives are case-insensitive. Symbols are case-sensitive.
 - A label that starts with a dot is local to the global label before it. For example, `.loop` after `main:` defines `main.loop`, and other code can reach it under that full name.
-- Instructions go in `.text`, which starts at 0x0000. Data goes in `.data`, which starts on the first page boundary after the code. You can switch between the two sections as often as you like.
+- Instructions go in `.text`, which starts at 0x0000 unless `-b` gives another address. Data goes in `.data`, which starts on the first page boundary after the code. You can switch between the two sections as often as you like.
 - An instruction gets an extension word when an operand needs one. For operands that refer to later symbols, the assembler repeats its layout pass until no address moves.
 
 ### Expressions
@@ -801,6 +801,7 @@ Includes and macro definitions are processed even inside a false block. The incl
 |---|---|
 | `-o FILE` | Output file (default: the input with a `.bin` extension, or `.o` with `-c`) |
 | `-c` | Write an object file for [vmld](#linking) instead of a program |
+| `-b ADDR` | Put the code at ADDR, a multiple of 4096 below 0x80000000, for a program that shares memory with another one at 0 |
 | `-l FILE` | Write a listing: line number, address, encoded bytes and source. Lines from macros are marked with `+` |
 | `-I DIR` | Also search DIR for included files |
 | `-D NAME[=VALUE]` | Define a constant, 1 unless a value is given |

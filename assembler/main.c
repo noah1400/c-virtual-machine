@@ -2,12 +2,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include "asm.h"
+#include "vm_types.h"
 
 static void print_usage(FILE *out, const char *name) {
     fprintf(out, "Usage: %s [options] input.asm\n", name);
     fprintf(out, "Options:\n");
     fprintf(out, "  -o FILE   Write the binary to FILE (default: input with a .bin extension)\n");
     fprintf(out, "  -c        Write an object file for vmld instead (default extension .o)\n");
+    fprintf(out, "  -b ADDR   Put the code at ADDR, a multiple of 4096 below 0x80000000, and the data after it\n");
     fprintf(out, "  -l FILE   Write a listing to FILE\n");
     fprintf(out, "  -I DIR    Also search DIR for included files\n");
     fprintf(out, "  -D NAME[=VALUE]  Define a constant, 1 unless a value is given\n");
@@ -33,13 +35,14 @@ static char *default_output(const char *input, const char *extension) {
 int main(int argc, char *argv[]) {
     const char *input = NULL, *output = NULL, *listing = NULL;
     int show_symbols = 0, with_debug = 1, check = 0;
+    uint32_t base = 0;
     Assembler as;
 
     asm_init(&as);
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
-        int takes_value = strcmp(arg, "-o") == 0 || strcmp(arg, "-l") == 0 ||
+        int takes_value = strcmp(arg, "-o") == 0 || strcmp(arg, "-l") == 0 || strcmp(arg, "-b") == 0 ||
                           strncmp(arg, "-I", 2) == 0 || strncmp(arg, "-D", 2) == 0;
         // -I and -D also accept their value attached, as in -DNAME
         const char *value = takes_value && arg[2] != '\0' ? arg + 2 : NULL;
@@ -55,6 +58,14 @@ int main(int argc, char *argv[]) {
             output = value;
         } else if (strcmp(arg, "-l") == 0) {
             listing = value;
+        } else if (strcmp(arg, "-b") == 0) {
+            char *end;
+            unsigned long address = strtoul(value, &end, 0);
+            if (*value == '\0' || *end != '\0' || address % VM_PAGE_SIZE != 0 || address >= 0x80000000ul) {
+                fprintf(stderr, "vmasm: error: the base address must be a multiple of 4096 below 0x80000000\n");
+                return 1;
+            }
+            base = (uint32_t)address;
         } else if (strncmp(arg, "-I", 2) == 0) {
             if (as.include_dir_count == ASM_MAX_INCLUDE_DIRS) {
                 fprintf(stderr, "vmasm: error: too many include directories\n");
@@ -94,6 +105,11 @@ int main(int argc, char *argv[]) {
         print_usage(stderr, argv[0]);
         return 1;
     }
+    if (base && as.object) {
+        fprintf(stderr, "vmasm: error: -b places a program, not an object file; give it to vmld instead\n");
+        return 1;
+    }
+    as.sections[SECTION_TEXT].base = base;
 
     char *output_path = output ? NULL : default_output(input, as.object ? ".o" : ".bin");
     const char *path = output ? output : output_path;
