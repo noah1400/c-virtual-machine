@@ -1,0 +1,4 @@
+vm: error: null pointer
+vm: at 0x02E0 <null_error.main+96> ore/tests/null_error.ore:11: CALL rt.null_error
+vm: #1 0x0274 <main> ore/tests/null_error.ore:8: CALL null_error.main
+vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main

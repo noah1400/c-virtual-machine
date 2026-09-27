@@ -1,0 +1,10 @@
+// A failed assert stops the program where it was called
+// expect-exit: 1
+fn check(ok: bool) {
+    assert(ok);
+}
+
+fn main() {
+    check(1 < 2);
+    check(2 < 1);
+}

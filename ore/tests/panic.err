@@ -1,0 +1,4 @@
+vm: error: gave up
+vm: at 0x02AC <panic.main+44> ore/tests/panic.ore:5: CALL rt.panic
+vm: #1 0x0274 <main> ore/tests/panic.ore:3: CALL panic.main
+vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main

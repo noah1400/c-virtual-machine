@@ -1,0 +1,5 @@
+vm: error: Stack overflow at 0x000EFFFC
+vm: at 0x0294 <recursion_error.down+20> ore/tests/recursion_error.ore:4: CALL recursion_error.down
+vm: #1 0x0294 <recursion_error.down+20> ore/tests/recursion_error.ore:4: CALL recursion_error.down
+vm: ... the same 1023 more times
+vm: ... outer frames were not kept

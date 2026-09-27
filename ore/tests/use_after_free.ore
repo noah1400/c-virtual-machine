@@ -1,0 +1,8 @@
+// The VM catches memory used after it was freed
+// expect-exit: 1
+fn main() {
+    var values = new(int, 4);
+    values[0] = 1;
+    free(values);
+    values[1] = 2;
+}

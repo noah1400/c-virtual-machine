@@ -1,0 +1,9 @@
+// Endless recursion overflows the stack, and the backtrace folds the repeated calls
+// expect-exit: 1
+fn down(n: int) int {
+    return down(n + 1) + 1;
+}
+
+fn main() {
+    print(down(0));
+}

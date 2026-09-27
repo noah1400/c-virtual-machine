@@ -1,0 +1,7 @@
+// Freeing memory twice stops the program
+// expect-exit: 1
+fn main() {
+    var p = new(int);
+    free(p);
+    free(p);
+}

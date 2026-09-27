@@ -1,0 +1,6 @@
+// panic stops the program with its message
+// expect-exit: 1
+fn main() {
+    print("before\n");
+    panic("gave up");
+}

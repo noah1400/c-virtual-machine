@@ -1,0 +1,10 @@
+// Dividing by zero faults at the Ore line
+// expect-exit: 1
+fn ratio(a: int, b: int) int {
+    return a / b;
+}
+
+fn main() {
+    print(ratio(10, 2), "\n");
+    print(ratio(1, 0), "\n");
+}

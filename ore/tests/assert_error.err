@@ -1,0 +1,5 @@
+vm: error: assertion failed
+vm: at 0x0290 <assert_error.check+16> ore/tests/assert_error.ore:4: CALL rt.assert_error
+vm: #1 0x02C0 <assert_error.main+36> ore/tests/assert_error.ore:9: CALL assert_error.check
+vm: #2 0x0274 <main> ore/tests/assert_error.ore:7: CALL assert_error.main
+vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main

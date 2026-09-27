@@ -1,0 +1,9 @@
+// Slicing checks both ends
+// expect-exit: 1
+fn main() {
+    var numbers: [8]int;
+    var from = 6;
+    var part = numbers[2:from];
+    print(part.len, "\n");
+    part = numbers[from:12];
+}

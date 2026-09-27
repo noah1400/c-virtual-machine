@@ -1,0 +1,10 @@
+// An index outside a slice stops the program at the line that used it
+// expect-exit: 1
+fn digit(n: int) u8 {
+    return "0123456789"[n];
+}
+
+fn main() {
+    print(digit(3), "\n");
+    print(digit(10), "\n");
+}
