@@ -4,6 +4,7 @@
 #include "debug.h"
 #include "debugger.h"
 #include "disassembler.h"
+#include "io.h"
 #include "vm.h"
 
 #define DEFAULT_MEMORY_KB 1024
@@ -250,6 +251,8 @@ int main(int argc, char *argv[]) {
     uint32_t *counts = opts.profile && !opts.debug ? calloc(vm.code_end / 4 + 1, sizeof(uint32_t)) : NULL;
     int result = opts.debug ? debugger_run(&vm) : run(&vm, opts.trace, counts);
     fflush(stdout);
+    // Devices give the terminal back before anything is reported
+    io_cleanup(&vm);
 
     if (result != VM_ERROR_NONE && !opts.debug) {
         report_fault(&vm);
