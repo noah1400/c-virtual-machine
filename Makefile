@@ -9,8 +9,10 @@ VM_SRC  := $(wildcard src/*.c src/core/*.c src/io/*.c src/common/*.c)
 VM_OBJ  := $(VM_SRC:%.c=$(BUILD)/%.o)
 ASM_SRC := $(wildcard assembler/*.c src/common/*.c)
 ASM_OBJ := $(ASM_SRC:%.c=$(BUILD)/%.o)
+LD_SRC  := $(wildcard linker/*.c src/common/*.c)
+LD_OBJ  := $(LD_SRC:%.c=$(BUILD)/%.o)
 
-all: vm vmasm
+all: vm vmasm vmld
 
 vm: $(VM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ -lm
@@ -18,16 +20,19 @@ vm: $(VM_OBJ)
 vmasm: $(ASM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^
 
+vmld: $(LD_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^
+
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) -c -o $@ $<
 
-test: vm vmasm
+test: vm vmasm vmld
 	sh tests/run.sh $(T)
 
 clean:
-	rm -rf $(BUILD) vm vmasm
+	rm -rf $(BUILD) vm vmasm vmld
 
--include $(VM_OBJ:.o=.d) $(ASM_OBJ:.o=.d)
+-include $(VM_OBJ:.o=.d) $(ASM_OBJ:.o=.d) $(LD_OBJ:.o=.d)
 
 .PHONY: all test clean
