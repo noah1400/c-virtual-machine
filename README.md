@@ -72,7 +72,7 @@ $ ./vm hello.bin
 Hello from VM32! Sum: 55
 ```
 
-`assembler/examples` has more programs. They range from a Fibonacci printer to `MiniDos`, a small command shell that you assemble from `MiniDos/main.asm`. `kernel.asm` runs a user program under paging, `mandelbrot.asm` draws with floats, and `cat.asm` prints the files named on its command line:
+`assembler/examples` has more programs. They range from a Fibonacci printer to `MiniDos`, a small command shell with a file system on the [disk](#disk), which you assemble from `MiniDos/main.asm`. `kernel.asm` runs a user program under paging, `mandelbrot.asm` draws with floats, `snake.asm` is a game for the [display](#display) and [keyboard](#keyboard), and `cat.asm` prints the files named on its command line:
 
 ```console
 $ ./vmasm assembler/examples/cat.asm -o cat.bin
@@ -89,6 +89,7 @@ Everything after the program path is passed to the program, which reads it with 
 
 | Option | Effect |
 |---|---|
+| `-b FILE` | Attach FILE as the [disk](#disk) image |
 | `-d` | Start the interactive [debugger](#debugger) |
 | `-D` | Disassemble the program instead of running it |
 | `-m KB` | Memory size in KB, 128 to 1048576 (default 1024) |
@@ -103,6 +104,9 @@ The exit status is:
 - 0 after `HALT`.
 - The low 8 bits of the code passed to [syscall 30](#process-and-random-numbers).
 - 1 when the program faults or cannot be loaded.
+- 128 plus the signal number when SIGINT, SIGTERM or SIGHUP stops it.
+
+Outside the debugger, a signal stops the machine before its next instruction, so the report shows where the program was and the devices restore the terminal. A second signal ends `vm` at once.
 
 A fault stops the machine. The report names the faulting instruction, and its source line too when the binary carries debug information:
 
@@ -286,8 +290,65 @@ Syscall buffers and heap blocks are virtual addresses too. The vector table is r
 | 0x40 | Timer interval | Current interval | Sets the number of instructions between timer interrupts; 0 stops the timer |
 | 0x41 | Timer vector | Current vector | Sets the vector raised on expiry (0–255) |
 | 0x42 | Timer ticks | Expirations so far | Sets the counter |
+| 0x50 | Display buffer | Buffer address | Sets the address of the character buffer and clears the terminal; 0 turns the display off |
+| 0x51 | Display refresh | 0 | Draws the cells that changed since the last refresh |
+| 0x52 | Display columns | 80 | Ignored |
+| 0x53 | Display rows | 25 | Ignored |
+| 0x60 | Keyboard status | Bit 0: a key is waiting. Bit 1: the input has ended | Ignored |
+| 0x61 | Keyboard data | The next key, or 0 if none is waiting | Ignored |
+| 0x62 | Keyboard vector | Current vector | Sets the vector requested while keys wait; 0 turns it off |
+| 0x70 | Disk sector | First sector | Sets the first sector of the next transfer |
+| 0x71 | Disk buffer | Buffer address | Sets the address of the transfer buffer |
+| 0x72 | Disk count | Sector count | Sets the number of sectors per transfer (default 1) |
+| 0x73 | Disk command | Result of the last command | 1 reads sectors into memory, 2 writes memory to sectors |
+| 0x74 | Disk size | Sectors on the disk, 0 without an image | Ignored |
 
-`assembler/examples/timer.asm` drives a main loop from timer interrupts.
+`assembler/examples/timer.asm` drives a main loop from timer interrupts. The display and the disk take physical addresses, which do not go through [paging](#paging).
+
+#### Display
+
+The display shows an 80×25 buffer of cells in memory. A cell is two bytes: the character, then an attribute with the foreground color in the low nibble and the background color in the high nibble. Colors 0 to 7 are black, red, green, yellow, blue, magenta, cyan and white, and 8 to 15 are their bright versions. Characters outside printable ASCII show as spaces.
+
+Setting the buffer address clears the terminal and hides the cursor. Each write to the refresh port then draws the cells that changed with ANSI escape sequences, so a program updates its buffer and refreshes once per frame. When the display is turned off or the program ends, the cursor reappears below the display.
+
+#### Keyboard
+
+The keyboard reads stdin directly. The first access to one of its ports switches a terminal to unbuffered input without echo, and `vm` restores the terminal when the program ends. Ctrl-C still stops the machine. Keys are the bytes typed, except for the arrow keys:
+
+| Key | Code |
+|---|---|
+| Up | 0x100 |
+| Down | 0x101 |
+| Right | 0x102 |
+| Left | 0x103 |
+
+Other escape sequences are dropped, and up to 64 keys wait in a queue. Reading the status or the data port checks for new input. While the vector port holds a vector, the keyboard also checks every 10000 instructions and requests the interrupt for as long as keys wait.
+
+When stdin is a file or a pipe, its bytes arrive as keys and the status reports the end of input. Reading the console as well can split the input, because the console reads ahead into a buffer.
+
+#### Disk
+
+`vm -b FILE` attaches a disk image of 512-byte sectors; a partial sector at the end of FILE is left out. Writing a command to port 0x73 moves the given number of sectors, starting at the first sector, between the image and the buffer. The transfer is done when `OUT` returns, and reading the port gives the result:
+
+| Result | Meaning |
+|---|---|
+| 0 | Done |
+| 1 | No disk image is attached |
+| 2 | The sectors reach past the end of the disk |
+| 3 | The buffer reaches past the end of memory |
+| 4 | Unknown command |
+| 5 | The image is read-only |
+| 6 | The host reported an error |
+
+An image that `vm` may not write is attached read-only. MiniDOS keeps up to 32 files of 4 KB on a disk of at least 259 sectors:
+
+```console
+$ dd if=/dev/zero of=disk.img bs=512 count=300
+$ ./vmasm assembler/examples/MiniDos/main.asm -o minidos.bin
+$ ./vm -b disk.img minidos.bin
+```
+
+Its `format` command creates an empty file system, and `dir`, `type`, `write`, `append` and `del` work with the files.
 
 ## Instruction set
 
@@ -482,7 +543,7 @@ After `CALL` and `ENTER`, `[BP+4]` is the return address and `[BP+8]` is the las
 | R0 | `CPUID` result |
 |---|---|
 | 0 | R0 = highest function (4). R5 and R6 = the vendor string "VM32CPU" |
-| 1 | R0 = version, 0x00020000. R5 and R6 = feature bits |
+| 1 | R0 = version, 0x00020000. R5 and R6 = feature bits. In R6, bits 1 to 4 stand for the timer, display, keyboard and disk |
 | 2 | R0 = memory size. R5 = page size. R6 = stack size |
 | 3 | R0 = number of instructions. R5 = mask of addressing modes. R6 = mask of instruction groups |
 | 4 | R0 = instructions executed. R5 = 2 under the debugger, plus 4 while I is set, 8 in supervisor mode and 16 while paging is on. R6 = the last error code |
@@ -717,6 +778,7 @@ These codes appear in R5 after syscalls and in `CPUID` function 4. Codes 1 to 14
 | 14 | Page fault |
 | 15 | Single-step trap (a vector only) |
 | 16 | Instruction limit reached (never delivered to the program) |
+| 17 | Stopped by a signal (never delivered to the program) |
 
 ## Debugger
 
@@ -795,6 +857,7 @@ Comment lines in a test adjust the checks:
 | `; asm-args: ...` | Extra arguments for the assembler |
 | `; vm-args: ...` | Extra options for the VM |
 | `; program-args: ...` | Arguments passed to the program |
+| `; disk-sectors: N` | Attach an empty disk image of N sectors |
 
 Programs run inside a temporary directory, so any files they create are discarded. They also run with a limit of 10 million instructions, so a program stuck in a loop fails instead of hanging the suite. The `example_*` tests include the programs from `assembler/examples`.
 
@@ -806,7 +869,7 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `src/vm.c` | Machine setup, program loading and the fetch-execute step |
 | `src/debugger.c` | The interactive debugger |
 | `src/core/` | CPU helpers, instruction execution, memory and heap, syscalls, disassembler, debug info |
-| `src/io/` | The I/O devices: console and timer |
+| `src/io/` | The I/O devices: console, timer, display, keyboard and disk |
 | `src/common/` | Instruction table, encoding and binary format, shared with the assembler |
 | `assembler/` | `vmasm`: lexer, expressions, symbols, includes and macros, the two passes, output |
 | `assembler/examples/` | Example programs |
