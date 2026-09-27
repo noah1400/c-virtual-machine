@@ -194,19 +194,36 @@ int cpu_exception(VM *vm) {
     return VM_ERROR_NONE;
 }
 
-// Latches a device interrupt; requests made while one is pending are merged
+// Latches a device interrupt; a request for a vector that is already waiting is merged with it
 void cpu_request_interrupt(VM *vm, uint8_t vector) {
+    vm->irq_mask[vector / 32] |= 1u << (vector % 32);
     vm->irq_pending = 1;
-    vm->irq_vector = vector;
 }
 
-// Enters the handler of a pending device interrupt if interrupts are enabled; returns 1 if it did
+// Enters the handler of the lowest waiting device interrupt if interrupts are enabled; returns 1 if it did
 int cpu_deliver_interrupt(VM *vm) {
     if (!vm->irq_pending || !cpu_get_flag(vm, INT_FLAG)) {
         return 0;
     }
+
+    int vector = -1;
     vm->irq_pending = 0;
-    cpu_interrupt(vm, vm->irq_vector);
+    for (int word = 0; word < 8; word++) {
+        uint32_t bits = vm->irq_mask[word];
+        if (bits && vector < 0) {
+            int bit = 0;
+            while (!(bits & (1u << bit))) {
+                bit++;
+            }
+            vm->irq_mask[word] = bits & ~(1u << bit);
+            vector = word * 32 + bit;
+        }
+        vm->irq_pending |= vm->irq_mask[word] != 0;
+    }
+    if (vector < 0) {
+        return 0;
+    }
+    cpu_interrupt(vm, (uint8_t)vector);
     return 1;
 }
 
