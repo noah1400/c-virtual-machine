@@ -1,0 +1,25 @@
+// Arguments pushed straight from fields check their pointers in the order of the arguments, before the call
+// expect-exit: 1
+struct Pair {
+    left: int;
+    right: int;
+}
+
+fn show(a: int, b: int, c: int) {
+    print(a, " ", b, " ", c, "\n");
+}
+
+fn both(p: *Pair, q: *Pair) {
+    for (var i = 0; i < p.left; i += 1) {
+        show(p.left, p.right, q.left);
+        show(q.right, p.left, p.right);
+    }
+}
+
+fn main() {
+    var p = new(Pair);
+    p.left = 1;
+    p.right = 2;
+    both(p, p);
+    both(p, null);
+}

@@ -520,10 +520,9 @@ fn simple_operand(e: *ast.Expr) []u8 {
 
 // Leaves the left operand in R0 and puts the right one where the instruction can take it
 fn operands(g: *Gen, e: *ast.Expr) []u8 {
-    var right = simple_operand(e.right);
-    if (right.ptr != null) {
+    if (is_operand(e.right)) {
         gen_expr(g, e.left);
-        return right;
+        return gen_operand(g, e.right);
     }
     gen_expr(g, e.left);
     emit(g, "    PUSH R0\n");
@@ -624,8 +623,8 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
 
     if (is_comparison(e)) {
         var register = register_of(e.left);
-        var operand = simple_operand(e.right);
-        if (register.ptr != null && operand.ptr != null) {
+        if (register.ptr != null && is_operand(e.right)) {
+            var operand = gen_operand(g, e.right);
             emits(g, "    CMP %s, %s\n    SET%s R0\n", [][]u8 { register, operand, condition(e.op, left, false) });
             return;
         }
@@ -671,8 +670,8 @@ fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
     if (is_comparison(e) && check.is_scalar(e.left.type)) {
         var code = condition(e.op, e.left.type, !when);
         var register = register_of(e.left);
-        var operand = simple_operand(e.right);
-        if (register.ptr != null && operand.ptr != null) {
+        if (register.ptr != null && is_operand(e.right)) {
+            var operand = gen_operand(g, e.right);
             emitf(g, "    CMP %s, %s\n    J%s .L%d\n", [][]u8 { register, operand, code }, []int { target });
             return;
         }
@@ -724,17 +723,22 @@ fn push_argument(g: *Gen, arg: *ast.Expr, emitting: bool) bool {
         return true;
     }
     if (arg.type.kind == ast.TypeKind.SLICE) {
-        var at = place(arg);
-        if (at.ptr != null && emitting) {
+        if (!in_register(arg) && place(arg).ptr == null) {
+            return false;
+        }
+        if (emitting) {
+            var at = fixed_place(g, arg);
             emits(g, "    PUSH [%s+4]\n    PUSH [%s]\n", [][]u8 { at, at });
         }
-        return at.ptr != null;
+        return true;
     }
-    var operand = simple_operand(arg);
-    if (operand.ptr != null && emitting) {
-        emits(g, "    PUSH %s\n", [][]u8 { operand });
+    if (!is_operand(arg)) {
+        return false;
     }
-    return operand.ptr != null;
+    if (emitting) {
+        emits(g, "    PUSH %s\n", [][]u8 { gen_operand(g, arg) });
+    }
+    return true;
 }
 
 fn gen_call(g: *Gen, e: *ast.Expr) {
@@ -757,6 +761,12 @@ fn gen_call(g: *Gen, e: *ast.Expr) {
         pushed = push_argument(g, e.args[i], false);
     }
     if (pushed) {
+        // The pointers that arguments go through are checked in the order of the arguments
+        for (var i = 0; i < e.args.len; i += 1) {
+            if (in_register(e.args[i])) {
+                fixed_place(g, e.args[i]);
+            }
+        }
         for (var i = e.args.len - 1; i >= 0; i -= 1) {
             push_argument(g, e.args[i], true);
         }
@@ -888,11 +898,13 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
     var size = t.base.size;
     var ok = label(g);
 
-    // An array or slice in a variable lets the index come first, where that cannot change the variable,
+    // An array or slice at a fixed place lets the index come first, where that cannot change the variable,
     // and then serves as a memory operand
-    var at = place(e.left);
-    if (at.ptr != null && (t.kind == ast.TypeKind.ARRAY ||
-        t.kind == ast.TypeKind.SLICE && (!has_call(e.right) || unshared(e.left)))) {
+    var base: []u8;
+    var offset = 0;
+    if ((t.kind == ast.TypeKind.ARRAY || t.kind == ast.TypeKind.SLICE && (!has_call(e.right) || unshared(e.left))) &&
+        fixed_base(g, e.left, &base, &offset)) {
+        var at = relative(base, offset);
         gen_expr(g, e.right);
         if (t.kind == ast.TypeKind.SLICE) {
             emitf(g, "    CMP R0, [%s+4]\n    JB .L%d\n    PUSH [%s+4]\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
@@ -906,20 +918,16 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
                 []int { t.length, ok, t.length, ok });
         }
         scale(g, size, "R0");
-        var base: []u8;
-        var offset = 0;
-        find_place(e.left, &base, &offset);
-        if (ast.same(base, "BP")) {
-            emit(g, "    ADD R0, BP\n");
+        if (ast.same(base, "BP") || in_register(e.left)) {
+            emits(g, "    ADD R0, %s\n", [][]u8 { base });
             return offset;
         }
-        emits(g, "    ADD R0, %s\n", [][]u8 { relative(base, offset) });
+        emits(g, "    ADD R0, %s\n", [][]u8 { at });
         return 0;
     }
 
     // An index that needs no code can go into R6 without saving the base
-    var index = simple_operand(e.right);
-    if (index.ptr != null) {
+    if (is_operand(e.right)) {
         gen_expr(g, e.left);
         if (t.kind == ast.TypeKind.POINTER) {
             check_pointer(g, e.left, "R0");
@@ -927,7 +935,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
         if (t.kind == ast.TypeKind.ARRAY && e.right.is_const) {
             return wide.low(e.right.value) * size;
         }
-        set_register(g, "R6", index);
+        set_register(g, "R6", gen_operand(g, e.right));
         if (t.kind == ast.TypeKind.SLICE) {
             emitd(g, "    CMP R6, R5\n    JB .L%d\n    PUSH R5\n    PUSH R6\n    CALL rt.index_error\n.L%d:\n", []int { ok, ok });
         } else if (t.kind == ast.TypeKind.ARRAY) {
@@ -964,7 +972,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
 }
 
 fn is_bound(e: *ast.Expr) bool {
-    return e == null || simple_operand(e).ptr != null;
+    return e == null || is_operand(e);
 }
 
 // Leaves the pointer in R0 and the length in R5
@@ -985,10 +993,10 @@ fn gen_slice(g: *Gen, e: *ast.Expr) {
         }
         var low = "#0";
         if (e.right != null) {
-            low = simple_operand(e.right);
+            low = gen_operand(g, e.right);
         }
         if (e.third != null) {
-            set_register(g, "R0", simple_operand(e.third));
+            set_register(g, "R0", gen_operand(g, e.third));
         } else {
             set_register(g, "R0", length);
         }
@@ -1126,6 +1134,9 @@ fn in_register(e: *ast.Expr) bool {
         case ast.ExprKind.UNARY {
             return e.op == ast.TokenKind.STAR && register_of(e.left).ptr != null;
         }
+        case ast.ExprKind.INDEX {
+            return e.left.type.kind == ast.TypeKind.ARRAY && e.right.is_const && in_register(e.left);
+        }
         case ast.ExprKind.LEN, ast.ExprKind.PTR {
             return in_register(e.left);
         }
@@ -1133,23 +1144,45 @@ fn in_register(e: *ast.Expr) bool {
     return false;
 }
 
-// Where instructions can address e without code: a variable, or a place through a pointer in a register
-// once the pointer is checked, which this emits. Nothing when code has to compute the address.
-fn fixed_place(g: *Gen, e: *ast.Expr) []u8 {
+// Finds where instructions can address e without code: in a variable, or through a pointer in a register
+// once the pointer is checked, which this emits
+fn fixed_base(g: *Gen, e: *ast.Expr, base: *[]u8, offset: *int) bool {
     if (!in_register(e)) {
-        return place(e);
+        return find_place(e, base, offset);
     }
-    var x = e;
-    var extra = 0;
     if (e.kind == ast.ExprKind.LEN || e.kind == ast.ExprKind.PTR) {
-        x = e.left;
+        *offset = gen_address(g, e.left, base);
         if (e.kind == ast.ExprKind.LEN) {
-            extra = 4;
+            *offset += 4;
         }
+        return true;
     }
+    *offset = gen_address(g, e, base);
+    return true;
+}
+
+fn fixed_place(g: *Gen, e: *ast.Expr) []u8 {
+    var none: []u8;
     var base: []u8;
-    var offset = gen_address(g, x, &base);
-    return relative(base, offset + extra);
+    var offset = 0;
+    if (!fixed_base(g, e, &base, &offset)) {
+        return none;
+    }
+    return relative(base, offset);
+}
+
+// A value that an instruction can take, if need be once the pointer it goes through is checked
+fn is_operand(e: *ast.Expr) bool {
+    return simple_operand(e).ptr != null || in_register(e) && check.is_scalar(e.type) && e.type.size == 4;
+}
+
+// The operand for a value that is_operand accepts, after the null check it needs
+fn gen_operand(g: *Gen, e: *ast.Expr) []u8 {
+    var simple = simple_operand(e);
+    if (simple.ptr != null) {
+        return simple;
+    }
+    return ast.cat([][]u8 { "[", fixed_place(g, e), "]" });
 }
 
 // Leaves the pointer x in a register, R0 unless a local holds it, and checks it
@@ -1179,6 +1212,9 @@ fn gen_address(g: *Gen, e: *ast.Expr, base: *[]u8) int {
         return 0;
     }
     if (e.kind == ast.ExprKind.INDEX) {
+        if (in_register(e)) {
+            return gen_address(g, e.left, base) + wide.low(e.right.value) * e.left.type.base.size;
+        }
         return gen_index(g, e);
     }
     if (e.kind == ast.ExprKind.NAME) {
@@ -1256,7 +1292,7 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
             }
         }
         case ast.ExprKind.LEN {
-            var at = place(e);
+            var at = fixed_place(g, e);
             if (at.ptr != null) {
                 emits(g, "    LOAD R0, [%s]\n", [][]u8 { at });
                 return;
@@ -1265,7 +1301,7 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
             emit(g, "    MOVE R0, R5\n");
         }
         case ast.ExprKind.PTR {
-            var at = place(e);
+            var at = fixed_place(g, e);
             if (at.ptr != null) {
                 emits(g, "    LOAD R0, [%s]\n", [][]u8 { at });
                 return;
@@ -1368,7 +1404,10 @@ fn gen_register_assign(g: *Gen, s: *ast.Stmt, register: []u8) {
         op = value.op;
         value = value.right;
     }
-    var operand = simple_operand(value);
+    var operand: []u8;
+    if (is_operand(value)) {
+        operand = gen_operand(g, value);
+    }
     if (op == ast.TokenKind.ASSIGN) {
         if (operand.ptr != null) {
             set_register(g, register, operand);
@@ -1409,8 +1448,7 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
     }
 
     // x op= y with a y that needs no code works on x directly, as scaled for a pointer
-    var operand = simple_operand(s.value);
-    var simple = s.op != ast.TokenKind.ASSIGN && operand.ptr != null && (t.kind != ast.TypeKind.POINTER || s.value.is_const);
+    var simple = s.op != ast.TokenKind.ASSIGN && is_operand(s.value) && (t.kind != ast.TypeKind.POINTER || s.value.is_const);
 
     // An address computed in R0 moves to R6, or to the stack while code computes the value
     var target = place(s.target);
@@ -1430,6 +1468,7 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
         target = relative(base, offset);
     }
     if (simple) {
+        var operand = gen_operand(g, s.value);
         if (t.kind == ast.TypeKind.POINTER) {
             operand = ast.cat([][]u8 { "#", ast.number(wide.low(s.value.value) * t.base.size) });
         }
@@ -1476,9 +1515,8 @@ fn gen_declared(g: *Gen, s: *ast.Stmt) {
             emits(g, "    LOAD %s, #0\n", [][]u8 { register });
             return;
         }
-        var operand = simple_operand(s.value);
-        if (operand.ptr != null) {
-            set_register(g, register, operand);
+        if (is_operand(s.value)) {
+            set_register(g, register, gen_operand(g, s.value));
             return;
         }
         gen_expr(g, s.value);

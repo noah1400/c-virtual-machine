@@ -1,0 +1,27 @@
+// A field that an instruction takes as an operand through a pointer in a register still needs the pointer
+// checked first
+// expect-exit: 1
+struct List {
+    items: []int;
+    count: int;
+}
+
+fn total(a: *List, b: *List) int {
+    var sum = 0;
+    for (var i = 0; i < a.items.len; i += 1) {
+        sum += a.items[i];
+    }
+    for (var i = 0; i < b.count; i += 1) {
+        sum += b.items[i];
+    }
+    return sum;
+}
+
+fn main() {
+    var a = new(List);
+    a.items = new(int, 3);
+    a.items[1] = 5;
+    a.count = 3;
+    print(total(a, a), "\n");
+    print(total(a, null), "\n");
+}
