@@ -4,5 +4,6 @@ echo hello world
 mem
 color 2
 color
+dir
 foo
 exit

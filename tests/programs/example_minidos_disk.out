@@ -1,0 +1,31 @@
+MiniDOS v1.0
+Copyright (c) 2025
+Type 'help' for commands
+
+A:\> Disk not formatted
+
+A:\> Disk formatted
+
+A:\> 0 file(s)
+
+A:\> 
+A:\> 
+A:\> 
+A:\> Hello, disk!
+Second line
+
+A:\> hello.txt               25 bytes
+notes.txt               1 bytes
+2 file(s)
+
+A:\> 
+A:\> hello.txt               25 bytes
+1 file(s)
+
+A:\> File not found
+
+A:\> File name missing
+
+A:\> File name too long
+
+A:\> 

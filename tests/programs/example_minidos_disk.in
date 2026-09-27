@@ -1,0 +1,14 @@
+dir
+format
+dir
+write hello.txt Hello, disk!
+append hello.txt Second line
+write notes.txt
+type hello.txt
+dir
+del notes.txt
+dir
+type notes.txt
+type
+write averyveryverylongfilename.txt x
+exit

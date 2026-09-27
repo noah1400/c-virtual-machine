@@ -13,18 +13,28 @@ A:\> Available commands:
   pause - Wait for key press
   color [num] - Change text color (0-7)
 
+With a disk image (vm -b FILE):
+  format - Create an empty file system
+  dir - List files
+  type [file] - Show a file
+  write [file] [text] - Replace a file with a line of text
+  append [file] [text] - Add a line of text to a file
+  del [file] - Delete a file
+
 A:\> MiniDOS Version 1.0
 Copyright (c) 2025
 
 A:\> hello world
 
 A:\> Total memory: 1048576 bytes
-Free heap: 978008 bytes
-Largest free block: 978008 bytes
+Free heap: 971864 bytes
+Largest free block: 971864 bytes
 Stack size: 65536 bytes
 
 A:\> [0;32;40m
 A:\> [0;39;49m
+A:\> No disk
+
 A:\> Bad command or file name
 
 A:\> 

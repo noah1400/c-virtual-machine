@@ -37,3 +37,4 @@ end_of_input:
 .include "utils.asm"   ; Include utility functions
 .include "parser.asm"  ; Include command parser
 .include "commands.asm"; Include command handlers
+.include "disk.asm"    ; Include the file system commands
