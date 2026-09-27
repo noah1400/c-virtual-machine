@@ -236,19 +236,19 @@ int disassemble_file(const char *filename) {
         for (uint32_t offset = 0; offset + 4 <= bin.code_size;) {
             uint32_t address = bin.code_base + offset;
             uint32_t word = read_le32(bin.code + offset);
-            uint32_t size = isa_instruction_size(word);
+            uint32_t length = isa_instruction_size(word);
             Instruction instr;
             char text[160], extension[12] = "";
 
-            if (offset + size > bin.code_size) {
-                size = 4;
+            if (offset + length > bin.code_size) {
+                length = 4;
                 word &= ~((uint32_t)MODE_EXTENDED << 20);
             }
-            if (size > 4) {
+            if (length > 4) {
                 snprintf(extension, sizeof(extension), "%08X", read_le32(bin.code + offset + 4));
             }
             print_label(info, address);
-            isa_decode(word, size > 4 ? read_le32(bin.code + offset + 4) : 0, &instr);
+            isa_decode(word, length > 4 ? read_le32(bin.code + offset + 4) : 0, &instr);
             disasm_format(&instr, address, info, text, sizeof(text));
 
             char *operands = strchr(text, ' ');
@@ -260,7 +260,7 @@ int disassemble_file(const char *filename) {
             } else {
                 printf("  %04X  %08X %-8s  %s\n", address, word, extension, text);
             }
-            offset += size;
+            offset += length;
         }
     }
 
