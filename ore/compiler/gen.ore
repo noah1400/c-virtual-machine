@@ -223,19 +223,42 @@ fn load_from(g: *Gen, t: *ast.Type, place: []u8) {
                 emits(g, "    LOAD R0, %s\n", [][]u8 { place });
             }
         }
-    } else if (t.size == 1) {
-        emits(g, "    LOADB R0, [%s]\n", [][]u8 { place });
-        if (t.is_signed) {
-            normalize(g, t);
-        }
-    } else if (t.size == 2) {
-        emits(g, "    LOADW R0, [%s]\n", [][]u8 { place });
-        if (t.is_signed) {
-            normalize(g, t);
-        }
     } else {
-        emits(g, "    LOAD R0, [%s]\n", [][]u8 { place });
+        load_into(g, t, place, "R0");
     }
+}
+
+// Loads a scalar into a register, which keeps it as 32 bits
+fn load_into(g: *Gen, t: *ast.Type, place: []u8, register: []u8) {
+    var load = "LOAD";
+    if (t.size == 1) {
+        load = "LOADB";
+    } else if (t.size == 2) {
+        load = "LOADW";
+    }
+    emits(g, "    %s %s, [%s]\n", [][]u8 { load, register, place });
+    if (t.is_signed) {
+        normalize_register(g, t, register);
+    }
+}
+
+// Loads a scalar that code finds in memory straight into a register; tells whether e was one
+fn load_value(g: *Gen, e: *ast.Expr, register: []u8) bool {
+    if (!check.is_scalar(e.type) || e.is_const) {
+        return false;
+    }
+    var at = place(e);
+    if (at.ptr == null) {
+        if (e.kind != ast.ExprKind.FIELD && e.kind != ast.ExprKind.INDEX &&
+            (e.kind != ast.ExprKind.UNARY || e.op != ast.TokenKind.STAR)) {
+            return false;
+        }
+        var base: []u8;
+        var offset = gen_address(g, e, &base);
+        at = relative(base, offset);
+    }
+    load_into(g, e.type, at, register);
+    return true;
 }
 
 // Stores the value in R0 (and R5), or the aggregate R0 points at, to place
@@ -1503,10 +1526,10 @@ fn gen_register_assign(g: *Gen, s: *ast.Stmt, register: []u8) {
     if (op == ast.TokenKind.ASSIGN) {
         if (operand.ptr != null) {
             set_register(g, register, operand);
-            return;
+        } else if (!load_value(g, value, register)) {
+            gen_expr(g, value);
+            emits(g, "    MOVE %s, R0\n", [][]u8 { register });
         }
-        gen_expr(g, value);
-        emits(g, "    MOVE %s, R0\n", [][]u8 { register });
         return;
     }
     if (t.kind == ast.TypeKind.POINTER) {
@@ -1609,10 +1632,10 @@ fn gen_declared(g: *Gen, s: *ast.Stmt) {
         }
         if (is_operand(s.value)) {
             set_register(g, register, gen_operand(g, s.value));
-            return;
+        } else if (!load_value(g, s.value, register)) {
+            gen_expr(g, s.value);
+            emits(g, "    MOVE %s, R0\n", [][]u8 { register });
         }
-        gen_expr(g, s.value);
-        emits(g, "    MOVE %s, R0\n", [][]u8 { register });
         return;
     }
     sym.offset = alloc_frame(g, sym.type.size);
