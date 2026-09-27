@@ -3,9 +3,10 @@
 
 #include "vm_types.h"
 
-#define IO_PORT_CONSOLE 0x00
-#define IO_PORT_TIMER   0x40
-#define IO_PORT_DISPLAY 0x50
+#define IO_PORT_CONSOLE  0x00
+#define IO_PORT_TIMER    0x40
+#define IO_PORT_DISPLAY  0x50
+#define IO_PORT_KEYBOARD 0x60
 
 typedef struct IODevice IODevice;
 

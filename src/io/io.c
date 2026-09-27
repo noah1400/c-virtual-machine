@@ -30,7 +30,9 @@ static int add_device(VM *vm, IODevice device) {
 }
 
 int io_init(VM *vm) {
-    static int (*const constructors[])(VM *, IODevice *) = { console_device, timer_device, display_device };
+    static int (*const constructors[])(VM *, IODevice *) = {
+        console_device, timer_device, display_device, keyboard_device,
+    };
 
     vm->io_devices = calloc(1, sizeof(struct IODevices));
     if (!vm->io_devices) {
