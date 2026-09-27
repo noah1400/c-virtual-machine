@@ -527,10 +527,10 @@ static void execute_cpuid(VM *vm) {
             vm->registers[R7] = 0;
             break;
         case 2:
-            // Memory size, page size and default stack size
+            // Memory size, page size and stack size
             vm->registers[R0_ACC] = vm->memory_size;
             vm->registers[R5] = VM_PAGE_SIZE;
-            vm->registers[R6] = VM_STACK_SIZE;
+            vm->registers[R6] = vm->stack_size;
             vm->registers[R7] = 0;
             break;
         case 3:

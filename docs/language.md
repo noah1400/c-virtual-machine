@@ -280,7 +280,7 @@ fn main() int {
 
 ## Memory
 
-- Global variables live in the data section. Local variables live on the stack, which holds 64 KB.
+- Global variables live in the data section. Local variables live on the stack, which holds 64 KB unless `vm -S` gives it another size.
 - `new(T)` allocates a zeroed `T` on the heap and returns a `*T`. `new(T, n)` allocates *n* of them and returns a `[]T`. `free(x)` gives either back, and does nothing for `null`.
 - Nothing is freed automatically.
 

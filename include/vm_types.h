@@ -56,6 +56,7 @@ typedef struct {
     // Memory
     uint8_t *memory;         // Main memory array
     uint32_t memory_size;    // Total size of memory
+    uint32_t stack_size;     // Room for the stack at the top of memory
 
     // VM state flags
     uint8_t halted;          // VM halted flag

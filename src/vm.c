@@ -11,8 +11,9 @@
 #include "syscalls.h"
 #include "vm.h"
 
-int vm_init(VM *vm, uint32_t memory_size) {
+int vm_init(VM *vm, uint32_t memory_size, uint32_t stack_size) {
     memset(vm, 0, sizeof(*vm));
+    vm->stack_size = stack_size;
 
     int result = memory_init(vm, memory_size);
     if (result != VM_ERROR_NONE) {
@@ -172,7 +173,7 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
     // The program has to leave room for the stack at the top of memory
     uint64_t code_end = (uint64_t)bin.code_base + bin.code_size;
     uint64_t data_end = (uint64_t)bin.data_base + bin.data_size;
-    uint32_t limit = vm->memory_size - VM_STACK_SIZE;
+    uint32_t limit = vm->memory_size - vm->stack_size;
     if (code_end > limit || data_end > limit) {
         return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Program does not fit below the stack in %u KB of memory",
                         vm->memory_size / 1024);
@@ -201,7 +202,7 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
 
 // Raw images without a header are loaded as code at address 0
 static int load_raw_image(VM *vm, const uint8_t *image, uint32_t size) {
-    if (size > vm->memory_size - VM_STACK_SIZE) {
+    if (size > vm->memory_size - vm->stack_size) {
         return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Raw program image does not fit below the stack");
     }
 

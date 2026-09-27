@@ -11,6 +11,7 @@
 #include "vm.h"
 
 #define DEFAULT_MEMORY_KB 1024
+#define DEFAULT_STACK_KB  (VM_STACK_SIZE / 1024)
 #define MIN_MEMORY_KB     (VM_MIN_MEMORY_SIZE / 1024)
 #define MAX_MEMORY_KB     1048576
 #define MAX_HISTORY       1000000
@@ -29,6 +30,7 @@ typedef struct {
     int arg_count;
     char **args;
     uint32_t memory_size;
+    uint32_t stack_size;
     uint32_t instruction_limit;
     int debug;
     int disassemble;
@@ -52,6 +54,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -n COUNT  Stop with an error after COUNT instructions\n");
     fprintf(out, "  -p        Print an execution profile by label on stderr\n");
     fprintf(out, "  -s        Print display frames as plain text instead of drawing them\n");
+    fprintf(out, "  -S KB     Stack size in KB, at least 4 and less than the memory (default %d)\n", DEFAULT_STACK_KB);
     fprintf(out, "  -t        Trace every executed instruction on stderr\n");
     fprintf(out, "  -v        Report loading and execution statistics on stderr\n");
     fprintf(out, "  -x FILE   Start the debugger and run its commands from FILE\n");
@@ -62,6 +65,7 @@ static void print_usage(FILE *out, const char *name) {
 static int parse_options(int argc, char **argv, Options *opts) {
     memset(opts, 0, sizeof(*opts));
     opts->memory_size = DEFAULT_MEMORY_KB * 1024;
+    opts->stack_size = DEFAULT_STACK_KB * 1024;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -114,6 +118,14 @@ static int parse_options(int argc, char **argv, Options *opts) {
                 return -1;
             }
             opts->memory_size = (uint32_t)kb * 1024;
+        } else if (strcmp(arg, "-S") == 0) {
+            char *end = NULL;
+            long kb = i + 1 < argc ? strtol(argv[++i], &end, 10) : 0;
+            if (!end || *end != '\0' || kb < 4 || kb >= MAX_MEMORY_KB) {
+                fprintf(stderr, "vm: the stack size must be at least 4 KB and less than the memory\n");
+                return -1;
+            }
+            opts->stack_size = (uint32_t)kb * 1024;
         } else if (strcmp(arg, "-H") == 0) {
             char *end = NULL;
             unsigned long count = i + 1 < argc ? strtoul(argv[++i], &end, 10) : 0;
@@ -153,6 +165,10 @@ static int parse_options(int argc, char **argv, Options *opts) {
         print_usage(stderr, argv[0]);
         return -1;
     }
+    if (opts->stack_size >= opts->memory_size) {
+        fprintf(stderr, "vm: the stack size must be at least 4 KB and less than the memory\n");
+        return -1;
+    }
     return 1;
 }
 
@@ -176,7 +192,7 @@ int main(int argc, char *argv[]) {
     }
 
     VM vm;
-    if (vm_init(&vm, opts.memory_size) != VM_ERROR_NONE) {
+    if (vm_init(&vm, opts.memory_size, opts.stack_size) != VM_ERROR_NONE) {
         fprintf(stderr, "vm: cannot initialize: %s\n", vm_get_error_message(&vm));
         vm_cleanup(&vm);
         return 1;

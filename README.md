@@ -104,6 +104,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-n COUNT` | Stop with an error after COUNT instructions |
 | `-p` | Print an execution profile on stderr when the program stops |
 | `-s` | Print [display](#display) frames as plain text instead of drawing them |
+| `-S KB` | Stack size in KB, at least 4 and less than the memory (default 64) |
 | `-t` | Print each instruction on stderr before it executes |
 | `-v` | Print loading and execution statistics on stderr |
 | `-x FILE` | Start the debugger and run its commands from FILE |
@@ -240,7 +241,7 @@ Status register bits:
 | 2 | PTB | Physical address of the page directory; 0 turns [paging](#paging) off | 0 |
 | 3 | FADDR | Address that caused the last memory fault | 0 |
 | 4 | ECODE | Details of the last page fault | 0 |
-| 5 | SLO | Lowest address the stack may grow to | Memory size − 64 KB |
+| 5 | SLO | Lowest address the stack may grow to | Memory size − the stack size |
 | 6 | SHI | Highest stack address, where SP and BP start | Memory size |
 | 7 | HEAPLO | Start of the heap | End of the program, rounded up to 16 |
 | 8 | HEAPHI | End of the heap | SLO |
@@ -249,14 +250,14 @@ Status register bits:
 
 ### Memory
 
-Memory is flat, byte-addressed and little-endian. It is 1 MB by default, and `-m` sets any size from 128 KB to 1 GB. Unaligned data accesses are allowed.
+Memory is flat, byte-addressed and little-endian. It is 1 MB by default, and `-m` sets any size from 128 KB to 1 GB. The stack takes 64 KB of it unless `-S` gives it more or less. Unaligned data accesses are allowed.
 
 | Region | Contents |
 |---|---|
 | From 0 | Code, from `.text` |
 | From the next page boundary | Data, from `.data` |
 | From the end of the data up to SLO | Heap |
-| The top 64 KB | Stack, growing down from the top of memory |
+| The top 64 KB, or what `-S` sets | Stack, growing down from the top of memory |
 
 Every access is checked:
 
@@ -1049,7 +1050,7 @@ All fields are little-endian.
 | 28 | 4 | Size of the debug information |
 | 32 | 4 | Entry point |
 
-The VM loads code and data at their bases, which must leave the top 64 KB for the stack. It rejects other major versions, since their instruction encoding differs.
+The VM loads code and data at their bases, which must leave room for the stack at the top of memory. It rejects other major versions, since their instruction encoding differs.
 
 The debug information holds the symbols, then the source lines. Each string is stored as a 16-bit length followed by its bytes:
 

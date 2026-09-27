@@ -5,7 +5,7 @@
 #include "instruction_set.h"
 
 // VM lifecycle functions
-int vm_init(VM *vm, uint32_t memory_size);
+int vm_init(VM *vm, uint32_t memory_size, uint32_t stack_size);
 void vm_cleanup(VM *vm);
 
 // VM execution functions
