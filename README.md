@@ -72,7 +72,7 @@ $ ./vm hello.bin
 Hello from VM32! Sum: 55
 ```
 
-`assembler/examples` has more programs. They range from a Fibonacci printer to `MiniDos`, a small command shell that you assemble from `MiniDos/main.asm`. `cat.asm` prints the files named on its command line:
+`assembler/examples` has more programs. They range from a Fibonacci printer to `MiniDos`, a small command shell that you assemble from `MiniDos/main.asm`. `kernel.asm` runs a user program under paging, `mandelbrot.asm` draws with floats, and `cat.asm` prints the files named on its command line:
 
 ```console
 $ ./vmasm assembler/examples/cat.asm -o cat.bin
