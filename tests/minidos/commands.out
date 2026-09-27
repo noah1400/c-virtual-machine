@@ -1,0 +1,91 @@
+
+Starting MiniDos...
+
+The disk is not formatted; FORMAT prepares it.
+A:\>DIR
+Disk not formatted
+A:\>FORMAT TESTDISK
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+A:\>VOL
+ Volume in drive A is TESTDISK
+A:\>DIR
+
+ Volume in drive A is TESTDISK
+ Directory of A:\
+
+        0 file(s)              0 bytes
+        0 dir(s)       1,039,360 bytes free
+A:\>ECHO first line > NOTES.TXT
+A:\>ECHO second line >> NOTES.TXT
+A:\>TYPE NOTES.TXT
+first line
+second line
+A:\>COPY NOTES.TXT COPY.TXT
+        1 file(s) copied
+A:\>MD DOCS
+A:\>MD DOCS
+Unable to create directory
+A:\>COPY *.TXT DOCS
+        2 file(s) copied
+A:\>CD DOCS
+A:\DOCS>DIR
+
+ Volume in drive A is TESTDISK
+ Directory of A:\DOCS
+
+.               <DIR>
+..              <DIR>
+NOTES    TXT            23
+COPY     TXT            23
+        2 file(s)             46 bytes
+        2 dir(s)       1,036,800 bytes free
+A:\DOCS>CD..
+A:\>REN COPY.TXT NOTES.TXT
+Duplicate file name or file not found
+A:\>REN COPY.TXT OTHER.TXT
+A:\>DIR /W
+
+ Volume in drive A is TESTDISK
+ Directory of A:\
+
+NOTES.TXT       OTHER.TXT       [DOCS]
+        2 file(s)             46 bytes
+        1 dir(s)       1,036,800 bytes free
+A:\>TYPE NOPE.TXT
+File not found
+A:\>RD DOCS
+Directory not empty
+A:\>DEL DOCS\*.TXT
+A:\>RD DOCS
+A:\>CD \DOCS
+Invalid directory
+A:\>MD NOWHERE\SUB
+Path not found
+A:\>MD TOOLONGNAME.TXT
+Invalid file name
+A:\>COPY CON POEM.TXT
+        1 file(s) copied
+A:\>TYPE POEM.TXT
+roses are red
+violets are blue
+A:\>DEL *.TXT
+A:\>DIR
+
+ Volume in drive A is TESTDISK
+ Directory of A:\
+
+        0 file(s)              0 bytes
+        0 dir(s)       1,039,360 bytes free
+A:\>DEL
+Required parameter missing
+A:\>BOGUS
+Bad command or file name
+A:\>VER
+
+MiniDos Version 2.0
+
+A:\>EXIT

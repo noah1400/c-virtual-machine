@@ -1,0 +1,49 @@
+
+Starting MiniDos...
+
+The disk is not formatted; FORMAT prepares it.
+A:\>FORMAT
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+A:\>IMPORT sort.bin SORT.EXE
+        1 file(s) imported
+A:\>IMPORT find.bin FIND.EXE
+        1 file(s) imported
+A:\>COPY CON FRUIT.TXT
+        1 file(s) copied
+A:\>SORT < FRUIT.TXT
+Apple
+banana
+cherry
+pear
+A:\>SORT /R < FRUIT.TXT > SORTED.TXT
+A:\>TYPE SORTED.TXT
+pear
+cherry
+banana
+Apple
+A:\>TYPE FRUIT.TXT | FIND "an"
+banana
+A:\>TYPE FRUIT.TXT | SORT | FIND /V "e"
+banana
+A:\>FIND /C /I "A" FRUIT.TXT
+3
+A:\>FIND "x" NOPE.TXT
+File not found - NOPE.TXT
+A:\>DIR | FIND "TXT"
+FRUIT    TXT            25
+SORTED   TXT            25
+A:\>ECHO appended >> FRUIT.TXT
+A:\>TYPE FRUIT.TXT | FIND /C "p"
+3
+A:\>TYPE MISSING.TXT | SORT
+File not found
+A:\>SORT < MISSING.TXT
+File not found
+A:\>DIR > LIST.TXT
+A:\>FIND "LIST" LIST.TXT
+LIST     TXT             0
+A:\>EXIT

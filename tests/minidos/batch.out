@@ -1,0 +1,50 @@
+
+Starting MiniDos...
+
+The disk is not formatted; FORMAT prepares it.
+A:\>FORMAT
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+A:\>IMPORT hello.bin HELLO.EXE
+        1 file(s) imported
+A:\>COPY CON TEST.BAT
+        1 file(s) copied
+A:\>TEST alpha beta
+Parameters: alpha and beta
+Hello from A:\HELLO.EXE
+argument 1: alpha
+HELLO ended with 3 or more
+After SHIFT the first is beta
+Done
+A:\>TEST
+Parameters:  and
+No parameters
+Done
+A:\>COPY CON SHOW.BAT
+        1 file(s) copied
+A:\>SHOW
+A:\>ECHO Batch files show their commands unless ECHO is off
+Batch files show their commands unless ECHO is off
+A:\>SET GREETING=hi there
+A:\>ECHO hi there from SHOW.BAT
+hi there from SHOW.BAT
+A:\>IF EXIST SHOW.BAT ECHO SHOW.BAT exists
+SHOW.BAT exists
+A:\>IF NOT EXIST NOPE.BAT ECHO NOPE.BAT does not
+NOPE.BAT does not
+A:\>GOTO MISSING
+Label not found
+A:\>SET
+GREETING=hi there
+A:\>SET GREETING=
+A:\>SET
+A:\>ECHO
+ECHO is on
+A:\>ECHO.
+
+A:\>ECHO Spaces   stay   as   typed
+Spaces   stay   as   typed
+A:\>EXIT

@@ -1,0 +1,8 @@
+// Shows its path and arguments and ends with status 3
+fn main(args: [][]u8) int {
+    print("Hello from ", args[0], "\n");
+    for (var i = 1; i < args.len; i += 1) {
+        print("argument ", i, ": ", args[i], "\n");
+    }
+    return 3;
+}

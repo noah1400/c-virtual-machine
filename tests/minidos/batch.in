@@ -1,0 +1,36 @@
+FORMAT
+IMPORT hello.bin HELLO.EXE
+COPY CON TEST.BAT
+@ECHO OFF
+REM a batch file with parameters
+ECHO Parameters: %1 and %2
+IF "%1"=="" GOTO NONE
+HELLO %1
+IF ERRORLEVEL 3 ECHO HELLO ended with 3 or more
+SHIFT
+ECHO After SHIFT the first is %1
+GOTO END
+:NONE
+ECHO No parameters
+:END
+ECHO Done
+
+TEST alpha beta
+TEST
+COPY CON SHOW.BAT
+ECHO Batch files show their commands unless ECHO is off
+SET GREETING=hi there
+ECHO %GREETING% from %0
+IF EXIST SHOW.BAT ECHO SHOW.BAT exists
+IF NOT EXIST NOPE.BAT ECHO NOPE.BAT does not
+GOTO MISSING
+ECHO not reached
+
+SHOW
+SET
+SET GREETING=
+SET
+ECHO
+ECHO.
+ECHO Spaces   stay   as   typed
+EXIT

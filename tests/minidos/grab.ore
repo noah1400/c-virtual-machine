@@ -1,0 +1,10 @@
+// Takes a megabyte of heap and leaves it to MiniDos to give back
+fn main() {
+    var total = 0;
+    for (var i = 0; i < 100; i += 1) {
+        var block = new(u8, 10000);
+        block[9999] = 1;
+        total += block.len;
+    }
+    print("took ", total, " bytes\n");
+}

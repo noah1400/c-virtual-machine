@@ -1,0 +1,34 @@
+FORMAT
+IMPORT hello.bin HELLO.EXE
+IMPORT files.bin FILES.EXE
+IMPORT faults.bin FAULTS.EXE
+IMPORT grab.bin GRAB.EXE
+HELLO one "two words"
+IF ERRORLEVEL 3 ECHO The errorlevel is 3 or more
+IF NOT ERRORLEVEL 4 ECHO The errorlevel is below 4
+FILES
+TYPE NOTES.TXT
+FAULTS null
+FAULTS stack
+FAULTS divide
+FAULTS halt
+FAULTS port
+FAULTS
+GRAB
+GRAB
+GRAB
+GRAB
+GRAB
+GRAB
+MD BIN
+COPY HELLO.EXE BIN
+DEL HELLO.EXE
+HELLO
+PATH \BIN
+PATH
+HELLO found on the path
+HELLO.EXE
+IMPORT missing.bin
+ECHO not a program > BAD.EXE
+BAD
+EXIT

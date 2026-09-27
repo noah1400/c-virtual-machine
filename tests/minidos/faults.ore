@@ -1,0 +1,33 @@
+// Ends the way its argument says, to show that MiniDos survives it
+import "std/cpu";
+import "std/str";
+
+struct Node {
+    value: int;
+    next: *Node;
+}
+
+fn down(n: int) int {
+    var padding: [64]int;
+    padding[n % 64] = n;
+    return down(n + 1) + padding[0];
+}
+
+fn main(args: [][]u8) int {
+    var how = args[1];
+    print("ending by ", how, "\n");
+    if (str.equal(how, "null")) {
+        var node = new(Node);
+        print(node.next.value, "\n");
+    } else if (str.equal(how, "stack")) {
+        print(down(0), "\n");
+    } else if (str.equal(how, "divide")) {
+        var zero = args.len - 2;
+        print(10 / zero, "\n");
+    } else if (str.equal(how, "halt")) {
+        cpu.halt();
+    } else if (str.equal(how, "port")) {
+        print(cpu.read_port(0), "\n");
+    }
+    return 0;
+}

@@ -1,0 +1,87 @@
+
+Starting MiniDos...
+
+The disk is not formatted; FORMAT prepares it.
+A:\>FORMAT
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+A:\>IMPORT hello.bin HELLO.EXE
+        1 file(s) imported
+A:\>IMPORT files.bin FILES.EXE
+        1 file(s) imported
+A:\>IMPORT faults.bin FAULTS.EXE
+        1 file(s) imported
+A:\>IMPORT grab.bin GRAB.EXE
+        1 file(s) imported
+A:\>HELLO one "two words"
+Hello from A:\HELLO.EXE
+argument 1: one
+argument 2: two words
+A:\>IF ERRORLEVEL 3 ECHO The errorlevel is 3 or more
+The errorlevel is 3 or more
+A:\>IF NOT ERRORLEVEL 4 ECHO The errorlevel is below 4
+The errorlevel is below 4
+A:\>FILES
+read back: written by a program
+now 34 bytes: written by a program
+and appended
+seek to 8: 8
+then: by a progr
+a missing file opens as -1
+A:\>TYPE NOTES.TXT
+written by a program
+and appended
+A:\>FAULTS null
+ending by null
+null pointer
+A:\>FAULTS stack
+ending by stack
+Stack overflow
+A:\>FAULTS divide
+ending by divide
+Divide overflow
+A:\>FAULTS halt
+ending by halt
+A:\>FAULTS port
+ending by port
+Privileged instruction
+A:\>FAULTS
+index 1 is out of bounds for length 1
+A:\>GRAB
+took 1000000 bytes
+A:\>GRAB
+took 1000000 bytes
+A:\>GRAB
+took 1000000 bytes
+A:\>GRAB
+took 1000000 bytes
+A:\>GRAB
+took 1000000 bytes
+A:\>GRAB
+took 1000000 bytes
+A:\>MD BIN
+A:\>COPY HELLO.EXE BIN
+        1 file(s) copied
+A:\>DEL HELLO.EXE
+A:\>HELLO
+Bad command or file name
+A:\>PATH \BIN
+A:\>PATH
+PATH=\BIN
+A:\>HELLO found on the path
+Hello from A:\BIN\HELLO.EXE
+argument 1: found
+argument 2: on
+argument 3: the
+argument 4: path
+A:\>HELLO.EXE
+Hello from A:\BIN\HELLO.EXE
+A:\>IMPORT missing.bin
+Cannot read the host's file
+A:\>ECHO not a program > BAD.EXE
+A:\>BAD
+Error in EXE file
+A:\>EXIT

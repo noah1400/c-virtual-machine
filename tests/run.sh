@@ -43,7 +43,7 @@ wanted() {
 for name in $names; do
     [ "$name" = vmc ] || [ -f "$root/tests/programs/$name.asm" ] || [ -f "$root/tests/errors/$name.asm" ] ||
         [ -f "$root/ore/tests/$name.ore" ] || [ -f "$root/ore/tests/errors/$name.ore" ] ||
-        fail "$name" "there is no such test"
+        [ -f "$root/tests/minidos/${name#minidos_}.in" ] || fail "$name" "there is no such test"
 done
 
 # Assembly tests write their expectations in ; comments, Ore tests in // comments
@@ -286,6 +286,44 @@ for src in "$root"/ore/tests/errors/*.ore; do
         fail "$name" "compiled although it should not"
     elif ! grep -qF -- "$expected" "$tmp/$name.log"; then
         fail "$name" "expected '$expected', got: $(head -n 1 "$tmp/$name.log")"
+    else
+        passed=$((passed + 1))
+    fi
+done
+
+# MiniDos runs each session of tests/minidos, NAME.in, on an empty disk and shows each command, and
+# what it shows has to match NAME.out; the test is called minidos_NAME. The programs of
+# ore/minidos/programs and tests/minidos are built in the directory it runs in, for sessions to IMPORT.
+programs_built=0
+for src in "$root"/tests/minidos/*.in; do
+    [ -e "$src" ] || continue
+    session=$(basename "$src" .in)
+    name=minidos_$session
+    wanted "$name" || continue
+    dir="$tmp/minidos"
+    if [ "$programs_built" -eq 0 ]; then
+        mkdir -p "$dir"
+        for program in "$root"/ore/minidos/programs/*.ore "$root"/tests/minidos/*.ore; do
+            if ! (cd "$root" && ./vmc "$program" -o "$dir/$(basename "$program" .ore).bin" 2> "$tmp/minidos.log"); then
+                fail "$name" "$(basename "$program") does not compile: $(head -n 1 "$tmp/minidos.log")"
+                continue 2
+            fi
+        done
+        programs_built=1
+    fi
+    dd if=/dev/zero of="$dir/disk.img" bs=512 count=2048 2> /dev/null
+    (cd "$dir" && "$vm" -n 100000000 -m 4096 -b disk.img "$root/minidos.bin" -e < "$src" > "$session.out" 2>&1)
+    status=$?
+    expected="$root/tests/minidos/$session.out"
+    if [ "$update" -eq 1 ] && [ "$status" -eq 0 ] && ! cmp -s "$expected" "$dir/$session.out"; then
+        cp "$dir/$session.out" "$expected"
+        echo "updated $session.out"
+    fi
+    if [ "$status" -ne 0 ]; then
+        fail "$name" "exit status $status: $(tail -n 1 "$dir/$session.out")"
+    elif ! cmp -s "$expected" "$dir/$session.out"; then
+        fail "$name" "unexpected output"
+        diff "$expected" "$dir/$session.out" | cat -v | head -n 20
     else
         passed=$((passed + 1))
     fi

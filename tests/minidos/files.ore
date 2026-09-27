@@ -1,0 +1,21 @@
+// Writes, appends to, reads and seeks in a file on the MiniDos disk through std/io
+import "std/io";
+
+fn main() {
+    if (!io.write_file("NOTES.TXT", "written by a program\n")) {
+        print("cannot write\n");
+    }
+    print("read back: ", io.read_file("NOTES.TXT"));
+    var h = io.open("notes.txt", io.APPEND);
+    io.write(h, "and appended\n");
+    io.close(h);
+    var buffer: [100]u8;
+    h = io.open("NOTES.TXT", io.READ);
+    var n = io.read(h, buffer);
+    print("now ", n, " bytes: ", buffer[:n]);
+    print("seek to 8: ", io.seek(h, 8, io.START), "\n");
+    n = io.read(h, buffer[:10]);
+    print("then: ", buffer[:n], "\n");
+    io.close(h);
+    print("a missing file opens as ", io.open("NOPE.TXT", io.READ), "\n");
+}
