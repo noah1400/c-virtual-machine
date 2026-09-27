@@ -87,9 +87,10 @@ typedef struct {
     uint32_t entry_point;    // Where execution starts and RESET returns to
     uint32_t code_end;       // End of the loaded code
     uint32_t image_end;      // End of the loaded code and data, where the heap starts
-    struct HeapBlock *heap_blocks;
-    uint32_t heap_block_count;
-    uint32_t heap_block_capacity;
+    struct HeapNode *heap_blocks;  // allocated heap blocks, by address
+    struct HeapNode *heap_freed;   // freed heap blocks whose space is not reused yet
+    struct HeapNode *heap_last;    // the block of the latest heap access
+    uint32_t heap_seed;            // for the priorities that shape the heap treaps
     FILE *files[VM_MAX_FILES];
     int arg_count;           // Program arguments, starting with the program path
     char **args;
