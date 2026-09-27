@@ -283,8 +283,6 @@ fn fault(frame: *cpu.Frame, what: []u8) {
         cpu.halt();
     }
     console.screen(what);
-    console.screen(" at 0x");
-    console.screen(str.format_hex(frame.pc, buffer));
     console.screen("\n");
     end(CRASHED);
 }

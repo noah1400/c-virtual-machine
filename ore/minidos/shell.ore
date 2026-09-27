@@ -332,7 +332,12 @@ fn builtin(name: []u8, rest: []u8, echo_text: []u8) bool {
     } else if (str.equal(name, "CD") || str.equal(name, "CHDIR")) {
         change_directory(rest);
     } else if (str.equal(name, "MD") || str.equal(name, "MKDIR")) {
-        need(rest, fs.make_directory(rest));
+        var e = fs.make_directory(rest);
+        if (e == fs.Error.EXISTS) {
+            say("Unable to create directory");
+        } else {
+            need(rest, e);
+        }
     } else if (str.equal(name, "RD") || str.equal(name, "RMDIR")) {
         need(rest, fs.remove_directory(rest));
     } else if (str.equal(name, "TYPE")) {
@@ -726,16 +731,19 @@ fn dir(argument: []u8) {
         }
         if (wide) {
             var name = fs.name_text(entry.name, buffer);
+            var width = name.len;
             if ((entry.attributes & fs.DIRECTORY) != 0) {
                 console.write("[");
                 console.write(name);
                 console.write("]");
-                console.column("", 14 - name.len);
+                width += 2;
             } else {
-                console.column(name, 16);
+                console.write(name);
             }
             if (i % 5 == 4 || i == entries.len - 1) {
                 console.write("\n");
+            } else {
+                console.column("", 16 - width);
             }
             continue;
         }
@@ -879,7 +887,7 @@ fn copy_console(target: []u8) {
             break;
         }
         str.append(&text, line);
-        str.append(&text, "\r\n");
+        str.append(&text, "\n");
     }
     var e = fs.write_file(target, str.text(&text));
     str.release(&text);
