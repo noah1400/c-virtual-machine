@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include "cpu.h"
-#include "io.h"
+#include "devices.h"
 #include "vm.h"
 
 #define MAX_IO_DEVICES 8
@@ -11,82 +10,12 @@ struct IODevices {
     int count;
 };
 
-// Console: port 0 reads a character (0 at end of input) and writes stdout, port 1 writes stderr
-static uint32_t console_read(VM *vm, IODevice *device, uint16_t offset) {
-    (void)vm;
-    (void)device;
-    if (offset != 0) {
-        return 0;
-    }
-    int c = getchar();
-    return c == EOF ? 0 : (uint32_t)c;
-}
-
-static void console_write(VM *vm, IODevice *device, uint16_t offset, uint32_t value) {
-    (void)vm;
-    (void)device;
-    FILE *stream = offset == 0 ? stdout : stderr;
-    fputc((int)(value & 0xFF), stream);
-    fflush(stream);
-}
-
 // Devices that count instructions only get ticks while they need them
-static void set_ticking(VM *vm, const IODevice *device, int ticking) {
+void io_set_ticking(VM *vm, const IODevice *device, int ticking) {
     if (ticking) {
         vm->io_ticking |= 1u << device->index;
     } else {
         vm->io_ticking &= ~(1u << device->index);
-    }
-}
-
-// Timer: port 0 sets the interval in instructions (0 stops it), port 1 the interrupt vector,
-// port 2 counts expirations; every expiration requests an interrupt
-typedef struct {
-    uint32_t interval;
-    uint32_t counter;
-    uint32_t ticks;
-    uint8_t vector;
-} TimerState;
-
-static uint32_t timer_read(VM *vm, IODevice *device, uint16_t offset) {
-    (void)vm;
-    TimerState *timer = device->state;
-    switch (offset) {
-        case 0:
-            return timer->interval;
-        case 1:
-            return timer->vector;
-        default:
-            return timer->ticks;
-    }
-}
-
-static void timer_write(VM *vm, IODevice *device, uint16_t offset, uint32_t value) {
-    TimerState *timer = device->state;
-    switch (offset) {
-        case 0:
-            timer->interval = value;
-            timer->counter = 0;
-            set_ticking(vm, device, value != 0);
-            break;
-        case 1:
-            if (value > 0xFF) {
-                vm_raise(vm, VM_ERROR_IO_ERROR, "Invalid timer interrupt vector: %u", value);
-            }
-            timer->vector = (uint8_t)value;
-            break;
-        default:
-            timer->ticks = value;
-            break;
-    }
-}
-
-static void timer_tick(VM *vm, IODevice *device) {
-    TimerState *timer = device->state;
-    if (timer->interval != 0 && ++timer->counter >= timer->interval) {
-        timer->counter = 0;
-        timer->ticks++;
-        cpu_request_interrupt(vm, timer->vector);
     }
 }
 
@@ -101,22 +30,23 @@ static int add_device(VM *vm, IODevice device) {
 }
 
 int io_init(VM *vm) {
+    static int (*const constructors[])(VM *, IODevice *) = { console_device, timer_device };
+
     vm->io_devices = calloc(1, sizeof(struct IODevices));
     if (!vm->io_devices) {
         return vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Failed to allocate I/O devices");
     }
-
-    IODevice console = { .name = "console", .base_port = IO_PORT_CONSOLE, .port_count = 2,
-                         .read = console_read, .write = console_write };
-    IODevice timer = { .name = "timer", .base_port = IO_PORT_TIMER, .port_count = 3,
-                       .read = timer_read, .write = timer_write, .tick = timer_tick,
-                       .state = calloc(1, sizeof(TimerState)) };
-    if (!timer.state) {
-        return vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Failed to allocate the timer");
+    for (size_t i = 0; i < sizeof(constructors) / sizeof(constructors[0]); i++) {
+        IODevice device;
+        if (constructors[i](vm, &device) != VM_ERROR_NONE) {
+            return vm->last_error;
+        }
+        if (add_device(vm, device) != VM_ERROR_NONE) {
+            free(device.state);
+            return vm->last_error;
+        }
     }
-
-    int result = add_device(vm, console);
-    return result == VM_ERROR_NONE ? add_device(vm, timer) : result;
+    return VM_ERROR_NONE;
 }
 
 void io_cleanup(VM *vm) {
