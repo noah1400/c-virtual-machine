@@ -1,0 +1,1250 @@
+// Writes a checked program as VM32 assembly, with .loc lines that point at its source lines
+import "std/str";
+import "ast";
+import "check";
+import "wide";
+
+// Scalars end up in R0, slices in R0 (pointer) and R5 (length), structs and arrays as their address in
+// R0. R6 and R7 are scratch; every variable lives in the frame.
+
+struct Gen {
+    program: *ast.Program;
+    m: *ast.Module;
+    pooled: ast.Map;        // the labels of the strings emitted, so that equal ones share their bytes
+    text: str.Builder;      // code
+    data: str.Builder;      // global variables
+    pool: str.Builder;      // strings and the arrays of slice literals
+    body: str.Builder;      // the function being generated, which needs its frame size first
+    labels: int;
+    strings: int;
+    frame: int;             // bytes of locals and temporaries below BP
+    break_label: int;
+    continue_label: int;
+    loc_module: *ast.Module;
+    loc_line: int;
+}
+
+struct Pooled {
+    label: []u8;
+}
+
+// Appends pattern to out with each %s replaced by the next of texts, each %d by the next of numbers,
+// and each %+d by the next number with its sign
+fn format(out: *str.Builder, pattern: []u8, texts: [][]u8, numbers: []int) {
+    var start = 0;
+    var text = 0;
+    var number = 0;
+    for (var i = 0; i < pattern.len; i += 1) {
+        if (pattern[i] == '%') {
+            str.append(out, pattern[start:i]);
+            i += 1;
+            if (pattern[i] == 's') {
+                str.append(out, texts[text]);
+                text += 1;
+            } else {
+                if (pattern[i] == '+') {
+                    i += 1;
+                    if (numbers[number] >= 0) {
+                        str.append_byte(out, '+');
+                    }
+                }
+                str.append_int(out, numbers[number]);
+                number += 1;
+            }
+            start = i + 1;
+        }
+    }
+    str.append(out, pattern[start:]);
+}
+
+fn put(out: *str.Builder, pattern: []u8, texts: [][]u8, numbers: []int) {
+    format(out, pattern, texts, numbers);
+}
+
+fn emit(g: *Gen, text: []u8) {
+    str.append(&g.body, text);
+}
+
+fn emitd(g: *Gen, pattern: []u8, numbers: []int) {
+    var none: [][]u8;
+    format(&g.body, pattern, none, numbers);
+}
+
+fn emits(g: *Gen, pattern: []u8, texts: [][]u8) {
+    var none: []int;
+    format(&g.body, pattern, texts, none);
+}
+
+fn emitf(g: *Gen, pattern: []u8, texts: [][]u8, numbers: []int) {
+    format(&g.body, pattern, texts, numbers);
+}
+
+fn label(g: *Gen) int {
+    g.labels += 1;
+    return g.labels;
+}
+
+fn is_aggregate(t: *ast.Type) bool {
+    return t.kind == ast.TypeKind.STRUCT || t.kind == ast.TypeKind.ARRAY;
+}
+
+fn words(size: int) int {
+    return (size + 3) / 4 * 4;
+}
+
+fn alloc_frame(g: *Gen, size: int) int {
+    if (size > 0) {
+        g.frame += words(size);
+    } else {
+        g.frame += words(1);
+    }
+    return -g.frame;
+}
+
+fn symbol_name(s: *ast.Symbol) []u8 {
+    if (s.decl != null && s.decl.is_extern) {
+        return s.name;
+    }
+    return ast.cat([][]u8 { s.module.name, ".", s.name });
+}
+
+// Writes text as an assembler string, escaping what vmasm would read differently
+fn quoted(out: *str.Builder, text: []u8) {
+    var hex = "0123456789ABCDEF";
+    str.append_byte(out, '"');
+    var start = 0;
+    for (var i = 0; i < text.len; i += 1) {
+        var c = text[i];
+        if (c < 32 || c >= 127 || c == '"' || c == '\\') {
+            str.append(out, text[start:i]);
+            start = i + 1;
+            if (c == '"' || c == '\\') {
+                str.append_byte(out, '\\');
+                str.append_byte(out, c);
+            } else if (c == '\n') {
+                str.append(out, "\\n");
+            } else if (c == '\t') {
+                str.append(out, "\\t");
+            } else {
+                str.append(out, "\\x");
+                str.append_byte(out, hex[(c >> 4) as int]);
+                str.append_byte(out, hex[(c & 15) as int]);
+            }
+        }
+    }
+    str.append(out, text[start:]);
+    str.append_byte(out, '"');
+}
+
+fn loc(g: *Gen, line: int) {
+    if (g.loc_module == g.m && g.loc_line == line) {
+        return;
+    }
+    g.loc_module = g.m;
+    g.loc_line = line;
+    var text = "";
+    if (line >= 1 && line <= g.m.lines.len) {
+        text = g.m.lines[line - 1];
+    }
+    emit(g, "    .loc ");
+    quoted(&g.body, g.m.path);
+    emitd(g, ", %d, ", []int { line });
+    quoted(&g.body, text);
+    emit(g, "\n");
+}
+
+// Small integers are kept zero- or sign-extended to 32 bits
+fn normalize(g: *Gen, t: *ast.Type) {
+    if (t.kind != ast.TypeKind.INT || t.size == 4) {
+        return;
+    }
+    if (t.is_signed) {
+        emitd(g, "    SHL R0, #%d\n    SAR R0, #%d\n", []int { 32 - 8 * t.size, 32 - 8 * t.size });
+    } else if (t.size == 1) {
+        emit(g, "    AND R0, #255\n");
+    } else {
+        emit(g, "    AND R0, #65535\n");
+    }
+}
+
+// Loads the value of type t from the address place into R0 (and R5); place is a register, BP-8 or a label
+fn load_from(g: *Gen, t: *ast.Type, place: []u8) {
+    if (t.kind == ast.TypeKind.SLICE) {
+        emits(g, "    LOAD R5, [%s+4]\n    LOAD R0, [%s]\n", [][]u8 { place, place });
+    } else if (is_aggregate(t)) {
+        if (!ast.same(place, "R0")) {
+            if (place[0] == 'R' || place[0] == 'B') {
+                emits(g, "    LEA R0, [%s]\n", [][]u8 { place });
+            } else {
+                emits(g, "    LOAD R0, %s\n", [][]u8 { place });
+            }
+        }
+    } else if (t.size == 1) {
+        emits(g, "    LOADB R0, [%s]\n", [][]u8 { place });
+        normalize(g, t);
+    } else if (t.size == 2) {
+        emits(g, "    LOADW R0, [%s]\n", [][]u8 { place });
+        normalize(g, t);
+    } else {
+        emits(g, "    LOAD R0, [%s]\n", [][]u8 { place });
+    }
+}
+
+// Stores the value in R0 (and R5), or the aggregate R0 points at, to place
+fn store_to(g: *Gen, t: *ast.Type, place: []u8) {
+    if (t.kind == ast.TypeKind.SLICE) {
+        emits(g, "    STORE R0, [%s]\n    STORE R5, [%s+4]\n", [][]u8 { place, place });
+    } else if (is_aggregate(t)) {
+        if (t.size > 0) {
+            if (!ast.same(place, "R6")) {
+                if (place[0] == 'B') {
+                    emits(g, "    LEA R6, [%s]\n", [][]u8 { place });
+                } else {
+                    emits(g, "    LOAD R6, %s\n", [][]u8 { place });
+                }
+            }
+            emitd(g, "    MEMCPY R6, R0, #%d\n", []int { t.size });
+        }
+    } else if (t.size == 1) {
+        emits(g, "    STOREB R0, [%s]\n", [][]u8 { place });
+    } else if (t.size == 2) {
+        emits(g, "    STOREW R0, [%s]\n", [][]u8 { place });
+    } else {
+        emits(g, "    STORE R0, [%s]\n", [][]u8 { place });
+    }
+}
+
+fn store(g: *Gen, t: *ast.Type) {
+    store_to(g, t, "R6");
+}
+
+fn local_place(offset: int) []u8 {
+    var digits: [11]u8;
+    var sign = "+";
+    if (offset < 0) {
+        sign = "";
+    }
+    return ast.cat([][]u8 { "BP", sign, str.format_int(offset, digits) });
+}
+
+// A variable that instructions can address directly, as BP-8 or its label, or nothing
+fn place(e: *ast.Expr) []u8 {
+    var none: []u8;
+    if (e.kind != ast.ExprKind.NAME) {
+        return none;
+    }
+    if (e.symbol.kind == ast.SymbolKind.LOCAL) {
+        return local_place(e.symbol.offset);
+    }
+    if (e.symbol.kind == ast.SymbolKind.GLOBAL) {
+        return symbol_name(e.symbol);
+    }
+    return none;
+}
+
+fn zero(g: *Gen, t: *ast.Type, offset: int) {
+    if (t.size == 0) {
+        return;
+    }
+    if (check.is_scalar(t) && t.size == 4) {
+        emitd(g, "    LOAD R0, #0\n    STORE R0, [BP%+d]\n", []int { offset });
+        return;
+    }
+    emitd(g, "    LEA R6, [BP%+d]\n    LOAD R7, #0\n    MEMSET R6, R7, #%d\n", []int { offset, t.size });
+}
+
+fn check_null(g: *Gen, register: []u8) {
+    var ok = label(g);
+    emitf(g, "    CMP %s, #0\n    JNZ .L%d\n    CALL rt.null_error\n.L%d:\n", [][]u8 { register }, []int { ok, ok });
+}
+
+// Multiplies a register by the size of an element
+fn scale(g: *Gen, size: int, register: []u8) {
+    if (size == 1) {
+        return;
+    }
+    if ((size & (size - 1)) == 0) {
+        var shift = 0;
+        while (1 << shift < size) {
+            shift += 1;
+        }
+        emitf(g, "    SHL %s, #%d\n", [][]u8 { register }, []int { shift });
+    } else {
+        emitf(g, "    MUL %s, #%d\n", [][]u8 { register }, []int { size });
+    }
+}
+
+// Labels of data without a name of its own; digits after the dot keep them apart from Ore names
+fn pool_label(g: *Gen) []u8 {
+    g.strings += 1;
+    return ast.cat([][]u8 { g.m.name, ".", ast.number(g.strings) });
+}
+
+fn string_label(g: *Gen, bytes: []u8) []u8 {
+    var pooled = ast.get(&g.pooled, bytes) as *Pooled;
+    if (pooled != null) {
+        return pooled.label;
+    }
+    var name = pool_label(g);
+    put(&g.pool, "%s:\n    .asciiz ", [][]u8 { name }, []int {});
+    quoted(&g.pool, bytes);
+    str.append(&g.pool, "\n");
+    pooled = ast.allocate(sizeof(Pooled)) as *Pooled;
+    pooled.label = name;
+    ast.put(&g.pooled, bytes, pooled as *u8);
+    return name;
+}
+
+// A string constant keeps one copy of its bytes however often it is used
+fn string_of(g: *Gen, e: *ast.Expr) []u8 {
+    if (e.kind != ast.ExprKind.NAME) {
+        return string_label(g, e.bytes);
+    }
+    var s = e.symbol;
+    if (s.label.len == 0) {
+        s.label = string_label(g, s.string.bytes);
+    }
+    return s.label;
+}
+
+fn string_size(e: *ast.Expr) int {
+    if (e.kind == ast.ExprKind.NAME) {
+        return e.symbol.string.bytes.len;
+    }
+    return e.bytes.len;
+}
+
+fn gen_string(g: *Gen, e: *ast.Expr) {
+    emitf(g, "    LOAD R0, %s\n    LOAD R5, #%d\n", [][]u8 { string_of(g, e) }, []int { string_size(e) });
+}
+
+fn is_signed(t: *ast.Type) bool {
+    return t.kind == ast.TypeKind.ENUM || t.kind == ast.TypeKind.UNTYPED || t.kind == ast.TypeKind.INT && t.is_signed;
+}
+
+var signed_codes = [6][]u8 { "Z", "NZ", "L", "GE", "LE", "G" };
+var unsigned_codes = [6][]u8 { "Z", "NZ", "B", "AE", "BE", "A" };
+
+// The condition code of a comparison, or of its opposite
+fn condition(op: ast.TokenKind, t: *ast.Type, inverse: bool) []u8 {
+    var i = 0;
+    switch (op) {
+        case ast.TokenKind.NE {
+            i = 1;
+        }
+        case ast.TokenKind.LT {
+            i = 2;
+        }
+        case ast.TokenKind.GE {
+            i = 3;
+        }
+        case ast.TokenKind.LE {
+            i = 4;
+        }
+        case ast.TokenKind.GT {
+            i = 5;
+        }
+    }
+    if (inverse) {
+        i ^= 1;
+    }
+    if (is_signed(t)) {
+        return signed_codes[i];
+    }
+    return unsigned_codes[i];
+}
+
+fn is_comparison(e: *ast.Expr) bool {
+    return e.kind == ast.ExprKind.BINARY && e.op as int >= ast.TokenKind.EQ as int &&
+        e.op as int <= ast.TokenKind.GE as int;
+}
+
+// Leaves the left operand in R0 and puts the right one where the instruction can take it
+fn operands(g: *Gen, e: *ast.Expr) []u8 {
+    if (e.right.is_const && check.is_scalar(e.right.type)) {
+        gen_expr(g, e.left);
+        return ast.cat([][]u8 { "#", ast.number(wide.low(e.right.value)) });
+    }
+    // Memory operands are read as 32 bits
+    var right = place(e.right);
+    if (right.ptr != null && check.is_scalar(e.right.type) && e.right.type.size == 4) {
+        gen_expr(g, e.left);
+        return ast.cat([][]u8 { "[", right, "]" });
+    }
+    gen_expr(g, e.left);
+    emit(g, "    PUSH R0\n");
+    gen_expr(g, e.right);
+    emit(g, "    MOVE R6, R0\n    POP R0\n");
+    return "R6";
+}
+
+fn arithmetic(g: *Gen, op: ast.TokenKind, t: *ast.Type, right: []u8) {
+    var instruction = "ADD";
+    switch (op) {
+        case ast.TokenKind.MINUS {
+            instruction = "SUB";
+        }
+        case ast.TokenKind.STAR {
+            instruction = "MUL";
+        }
+        case ast.TokenKind.SLASH {
+            instruction = "DIV";
+            if (is_signed(t)) {
+                instruction = "IDIV";
+            }
+        }
+        case ast.TokenKind.PERCENT {
+            instruction = "MOD";
+            if (is_signed(t)) {
+                instruction = "IMOD";
+            }
+        }
+        case ast.TokenKind.AMP {
+            instruction = "AND";
+        }
+        case ast.TokenKind.PIPE {
+            instruction = "OR";
+        }
+        case ast.TokenKind.CARET {
+            instruction = "XOR";
+        }
+        case ast.TokenKind.SHL {
+            instruction = "SHL";
+        }
+        case ast.TokenKind.SHR {
+            instruction = "SHR";
+            if (is_signed(t)) {
+                instruction = "SAR";
+            }
+        }
+    }
+    emits(g, "    %s R0, %s\n", [][]u8 { instruction, right });
+    normalize(g, t);
+}
+
+fn gen_binary(g: *Gen, e: *ast.Expr) {
+    var left = e.left.type;
+
+    if (e.op == ast.TokenKind.ANDAND || e.op == ast.TokenKind.OROR) {
+        var end = label(g);
+        gen_expr(g, e.left);
+        var jump = "JNZ";
+        if (e.op == ast.TokenKind.ANDAND) {
+            jump = "JZ";
+        }
+        emitf(g, "    CMP R0, #0\n    %s .L%d\n", [][]u8 { jump }, []int { end });
+        gen_expr(g, e.right);
+        emitd(g, ".L%d:\n", []int { end });
+        return;
+    }
+    if (left.kind == ast.TypeKind.POINTER && !is_comparison(e)) {
+        var size = left.base.size;
+        gen_expr(g, e.left);
+        emit(g, "    PUSH R0\n");
+        gen_expr(g, e.right);
+        if (e.right.type.kind == ast.TypeKind.POINTER) {
+            emit(g, "    MOVE R6, R0\n    POP R0\n    SUB R0, R6\n");
+            if (size > 1) {
+                emitd(g, "    IDIV R0, #%d\n", []int { size });
+            }
+            return;
+        }
+        scale(g, size, "R0");
+        var instruction = "SUB";
+        if (e.op == ast.TokenKind.PLUS) {
+            instruction = "ADD";
+        }
+        emits(g, "    MOVE R6, R0\n    POP R0\n    %s R0, R6\n", [][]u8 { instruction });
+        return;
+    }
+
+    var right = operands(g, e);
+    if (is_comparison(e)) {
+        emits(g, "    CMP R0, %s\n    SET%s R0\n", [][]u8 { right, condition(e.op, left, false) });
+        return;
+    }
+    arithmetic(g, e.op, e.type, right);
+}
+
+// Jumps to target unless the condition holds
+fn gen_branch(g: *Gen, e: *ast.Expr, target: int) {
+    if (is_comparison(e) && check.is_scalar(e.left.type)) {
+        var right = operands(g, e);
+        emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, condition(e.op, e.left.type, true) }, []int { target });
+        return;
+    }
+    gen_expr(g, e);
+    emitd(g, "    CMP R0, #0\n    JZ .L%d\n", []int { target });
+}
+
+// Evaluates an argument into its place below SP
+fn gen_argument(g: *Gen, arg: *ast.Expr, offset: int) {
+    var t = arg.type;
+    gen_expr(g, arg);
+    if (t.kind == ast.TypeKind.SLICE) {
+        emitd(g, "    STORE R0, [SP+%d]\n    STORE R5, [SP+%d]\n", []int { offset, offset + 4 });
+    } else if (is_aggregate(t)) {
+        if (t.size > 0) {
+            emitd(g, "    LEA R6, [SP+%d]\n    MEMCPY R6, R0, #%d\n", []int { offset, t.size });
+        }
+    } else {
+        emitd(g, "    STORE R0, [SP+%d]\n", []int { offset });
+    }
+}
+
+fn gen_call(g: *Gen, e: *ast.Expr) {
+    var function = e.left.type;
+    var result = function.base;
+    var hidden = is_aggregate(result);
+    var size = 0;
+    if (hidden) {
+        size = 4;
+    }
+    var direct = e.left.kind == ast.ExprKind.NAME && e.left.symbol.kind == ast.SymbolKind.FN;
+    var temp = 0;
+
+    for (var i = 0; i < function.params.len; i += 1) {
+        size += words(function.params[i].size);
+    }
+    if (!direct) {
+        gen_expr(g, e.left);
+        emit(g, "    PUSH R0\n");
+    }
+    if (size != 0) {
+        emitd(g, "    SUB SP, #%d\n", []int { size });
+    }
+    var offset = 0;
+    if (hidden) {
+        temp = alloc_frame(g, result.size);
+        emitd(g, "    LEA R0, [BP%+d]\n    STORE R0, [SP]\n", []int { temp });
+        offset = 4;
+    }
+    for (var i = 0; i < e.args.len; i += 1) {
+        gen_argument(g, e.args[i], offset);
+        offset += words(function.params[i].size);
+    }
+    if (direct) {
+        emits(g, "    CALL %s\n", [][]u8 { symbol_name(e.left.symbol) });
+    } else {
+        emitd(g, "    LOAD R6, [SP+%d]\n", []int { size });
+        check_null(g, "R6");
+        emit(g, "    CALL R6\n");
+        size += 4;
+    }
+    if (size != 0) {
+        emitd(g, "    ADD SP, #%d\n", []int { size });
+    }
+    if (hidden) {
+        emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
+    }
+}
+
+fn gen_print(g: *Gen, e: *ast.Expr) {
+    for (var i = 0; i < e.args.len; i += 1) {
+        var t = e.args[i].type;
+        gen_expr(g, e.args[i]);
+        if (t.kind == ast.TypeKind.SLICE) {
+            emit(g, "    MOVE R6, R5\n    MOVE R5, R0\n    LOAD R0, #1\n    SYSCALL #13\n");
+        } else if (t.kind == ast.TypeKind.BOOL) {
+            var done = label(g);
+            emitd(g, "    LOAD R6, rt.false\n    CMP R0, #0\n    JZ .L%d\n    LOAD R6, rt.true\n.L%d:\n    MOVE R0, R6\n    SYSCALL #2\n", []int { done, done });
+        } else if (t.kind == ast.TypeKind.POINTER || t.kind == ast.TypeKind.FN) {
+            emit(g, "    SYSCALL #5\n");
+        } else if (t.kind == ast.TypeKind.INT && !t.is_signed) {
+            emit(g, "    LOAD R5, #10\n    SYSCALL #6\n");
+        } else {
+            emit(g, "    SYSCALL #1\n");
+        }
+    }
+}
+
+var syscall_registers = [3][]u8 { "R0", "R5", "R6" };
+
+fn gen_builtin(g: *Gen, e: *ast.Expr) {
+    switch (e.builtin) {
+        case ast.Builtin.PRINT {
+            gen_print(g, e);
+        }
+        case ast.Builtin.PANIC {
+            gen_expr(g, e.args[0]);
+            emit(g, "    PUSH R5\n    PUSH R0\n    CALL rt.panic\n");
+        }
+        case ast.Builtin.ASSERT {
+            var ok = label(g);
+            gen_expr(g, e.args[0]);
+            emitd(g, "    CMP R0, #0\n    JNZ .L%d\n    CALL rt.assert_error\n.L%d:\n", []int { ok, ok });
+        }
+        case ast.Builtin.FREE {
+            gen_expr(g, e.args[0]);
+            emit(g, "    PUSH R0\n    CALL rt.free\n    ADD SP, #4\n");
+        }
+        case ast.Builtin.SYSCALL {
+            var temp = alloc_frame(g, 8);
+            for (var i = 1; i < e.args.len; i += 1) {
+                gen_expr(g, e.args[i]);
+                emit(g, "    PUSH R0\n");
+            }
+            for (var i = e.args.len - 1; i >= 1; i -= 1) {
+                emits(g, "    POP %s\n", [][]u8 { syscall_registers[i - 1] });
+            }
+            emitd(g, "    SYSCALL #%d\n    STORE R0, [BP%+d]\n    STORE R5, [BP%+d]\n    LEA R0, [BP%+d]\n",
+                []int { wide.low(e.args[0].value), temp, temp + 4, temp });
+        }
+    }
+}
+
+fn gen_index(g: *Gen, e: *ast.Expr) {
+    var t = e.left.type;
+    var size = t.base.size;
+    var ok = label(g);
+
+    gen_expr(g, e.left);
+    if (t.kind == ast.TypeKind.POINTER) {
+        check_null(g, "R0");
+    }
+    emit(g, "    PUSH R0\n");
+    if (t.kind == ast.TypeKind.SLICE) {
+        emit(g, "    PUSH R5\n");
+    }
+    gen_expr(g, e.right);
+    if (t.kind == ast.TypeKind.SLICE) {
+        emitd(g, "    POP R7\n    POP R6\n    CMP R0, R7\n    JB .L%d\n    PUSH R7\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
+            []int { ok, ok });
+    } else {
+        emit(g, "    POP R6\n");
+        if (t.kind == ast.TypeKind.ARRAY && !e.right.is_const) {
+            emitd(g, "    CMP R0, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
+                []int { t.length, ok, t.length, ok });
+        }
+    }
+    scale(g, size, "R0");
+    emit(g, "    ADD R0, R6\n");
+}
+
+// Leaves the pointer in R0 and the length in R5
+fn gen_slice(g: *Gen, e: *ast.Expr) {
+    var t = e.left.type;
+    var failed = label(g);
+    var ok = label(g);
+
+    if (t.kind == ast.TypeKind.ARRAY) {
+        gen_addr(g, e.left);
+        emitd(g, "    PUSH R0\n    PUSH #%d\n", []int { t.length });
+    } else {
+        gen_expr(g, e.left);
+        if (t.kind == ast.TypeKind.POINTER) {
+            check_null(g, "R0");
+            emit(g, "    PUSH R0\n    PUSH #-1\n");
+        } else {
+            emit(g, "    PUSH R0\n    PUSH R5\n");
+        }
+    }
+    if (e.right != null) {
+        gen_expr(g, e.right);
+        emit(g, "    PUSH R0\n");
+    } else {
+        emit(g, "    PUSH #0\n");
+    }
+    if (e.third != null) {
+        gen_expr(g, e.third);
+    } else {
+        emit(g, "    LOAD R0, [SP+4]\n");
+    }
+    emit(g, "    POP R7\n    POP R6\n");
+    if (t.kind != ast.TypeKind.POINTER) {
+        emitd(g, "    CMP R0, R6\n    JA .L%d\n", []int { failed });
+    }
+    emitd(g, "    CMP R7, R0\n    JBE .L%d\n.L%d:\n    PUSH R6\n    PUSH R0\n    PUSH R7\n    CALL rt.slice_error\n.L%d:\n",
+        []int { ok, failed, ok });
+    emit(g, "    MOVE R5, R0\n    SUB R5, R7\n");
+    scale(g, t.base.size, "R7");
+    emit(g, "    POP R0\n    ADD R0, R7\n");
+}
+
+// Builds a struct, array or slice literal in a temporary of the frame
+fn gen_literal(g: *Gen, e: *ast.Expr) {
+    var t = e.type;
+    var storage = t;
+    var array = ast.Type {};
+    if (t.kind == ast.TypeKind.SLICE) {
+        array = ast.Type {
+            kind: ast.TypeKind.ARRAY, base: t.base, length: e.args.len, size: e.args.len * t.base.size,
+            align: t.base.align,
+        };
+        storage = &array;
+    }
+    var temp = alloc_frame(g, storage.size);
+    zero(g, storage, temp);
+    for (var i = 0; i < e.args.len; i += 1) {
+        var field = t.base;
+        var offset = 0;
+        if (e.kind == ast.ExprKind.STRUCT) {
+            for (var k = 0; k < t.fields.len; k += 1) {
+                if (ast.same(t.fields[k].name, e.fields[i])) {
+                    field = t.fields[k].type;
+                    offset = t.fields[k].offset;
+                }
+            }
+        } else {
+            offset = i * t.base.size;
+        }
+        gen_expr(g, e.args[i]);
+        emitd(g, "    LEA R6, [BP%+d]\n", []int { temp + offset });
+        store(g, field);
+    }
+    emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
+    if (t.kind == ast.TypeKind.SLICE) {
+        emitd(g, "    LOAD R5, #%d\n", []int { e.args.len });
+    }
+}
+
+fn gen_new(g: *Gen, e: *ast.Expr) {
+    var size = e.named.size;
+    if (e.left == null) {
+        emitd(g, "    PUSH #%d\n    CALL rt.alloc\n    ADD SP, #4\n", []int { size });
+        return;
+    }
+    gen_expr(g, e.left);
+    emit(g, "    PUSH R0\n");
+    scale(g, size, "R0");
+    emit(g, "    PUSH R0\n    CALL rt.alloc\n    ADD SP, #4\n    POP R5\n");
+}
+
+fn gen_addr(g: *Gen, e: *ast.Expr) {
+    switch (e.kind) {
+        case ast.ExprKind.NAME {
+            if (e.symbol.kind == ast.SymbolKind.LOCAL) {
+                emitd(g, "    LEA R0, [BP%+d]\n", []int { e.symbol.offset });
+            } else {
+                emits(g, "    LOAD R0, %s\n", [][]u8 { symbol_name(e.symbol) });
+            }
+        }
+        case ast.ExprKind.UNARY {
+            gen_expr(g, e.left);
+            check_null(g, "R0");
+        }
+        case ast.ExprKind.FIELD {
+            gen_expr(g, e.left);
+            if (e.left.type.kind == ast.TypeKind.POINTER) {
+                check_null(g, "R0");
+            }
+            if (e.field.offset != 0) {
+                emitd(g, "    ADD R0, #%d\n", []int { e.field.offset });
+            }
+        }
+        case ast.ExprKind.INDEX {
+            gen_index(g, e);
+        }
+        default {
+            // Aggregates evaluate to their address
+            gen_expr(g, e);
+        }
+    }
+}
+
+fn gen_expr(g: *Gen, e: *ast.Expr) {
+    var t = e.type;
+
+    if (e.is_const && check.is_scalar(t)) {
+        emitd(g, "    LOAD R0, #%d\n", []int { wide.low(e.value) });
+        return;
+    }
+    switch (e.kind) {
+        case ast.ExprKind.NAME {
+            if (e.symbol.kind == ast.SymbolKind.CONST) {
+                gen_string(g, e);
+            } else if (e.symbol.kind == ast.SymbolKind.FN) {
+                emits(g, "    LOAD R0, %s\n", [][]u8 { symbol_name(e.symbol) });
+            } else {
+                load_from(g, t, place(e));
+            }
+        }
+        case ast.ExprKind.FIELD, ast.ExprKind.INDEX {
+            gen_addr(g, e);
+            load_from(g, t, "R0");
+        }
+        case ast.ExprKind.CALL {
+            if (e.builtin != ast.Builtin.NONE) {
+                gen_builtin(g, e);
+            } else {
+                gen_call(g, e);
+            }
+        }
+        case ast.ExprKind.BINARY {
+            gen_binary(g, e);
+        }
+        case ast.ExprKind.NULL {
+            emit(g, "    LOAD R0, #0\n");
+        }
+        case ast.ExprKind.STRING {
+            gen_string(g, e);
+        }
+        case ast.ExprKind.CONVERT {
+            gen_expr(g, e.left);
+            if (e.left.type.kind == ast.TypeKind.ARRAY) {
+                emitd(g, "    LOAD R5, #%d\n", []int { e.left.type.length });
+            }
+        }
+        case ast.ExprKind.LEN {
+            gen_expr(g, e.left);
+            emit(g, "    MOVE R0, R5\n");
+        }
+        case ast.ExprKind.PTR {
+            gen_expr(g, e.left);
+        }
+        case ast.ExprKind.UNARY {
+            if (e.op == ast.TokenKind.AMP) {
+                gen_addr(g, e.left);
+                return;
+            }
+            if (e.op == ast.TokenKind.STAR) {
+                gen_addr(g, e);
+                load_from(g, t, "R0");
+                return;
+            }
+            gen_expr(g, e.left);
+            if (e.op == ast.TokenKind.BANG) {
+                emit(g, "    XOR R0, #1\n");
+            } else if (e.op == ast.TokenKind.MINUS) {
+                emit(g, "    NEG R0\n");
+                normalize(g, t);
+            } else {
+                emit(g, "    NOT R0\n");
+                normalize(g, t);
+            }
+        }
+        case ast.ExprKind.SLICE {
+            gen_slice(g, e);
+        }
+        case ast.ExprKind.CAST {
+            gen_expr(g, e.left);
+            normalize(g, t);
+        }
+        case ast.ExprKind.STRUCT, ast.ExprKind.ARRAY {
+            gen_literal(g, e);
+        }
+        case ast.ExprKind.NEW {
+            gen_new(g, e);
+        }
+        default {
+            ast.fail(g.m, e.line, "cannot generate code for this expression (internal error)");
+        }
+    }
+}
+
+// x op= y works like x = x op y
+fn compound(op: ast.TokenKind) ast.TokenKind {
+    switch (op) {
+        case ast.TokenKind.ADD_ASSIGN {
+            return ast.TokenKind.PLUS;
+        }
+        case ast.TokenKind.SUB_ASSIGN {
+            return ast.TokenKind.MINUS;
+        }
+        case ast.TokenKind.MUL_ASSIGN {
+            return ast.TokenKind.STAR;
+        }
+        case ast.TokenKind.DIV_ASSIGN {
+            return ast.TokenKind.SLASH;
+        }
+        case ast.TokenKind.MOD_ASSIGN {
+            return ast.TokenKind.PERCENT;
+        }
+        case ast.TokenKind.AND_ASSIGN {
+            return ast.TokenKind.AMP;
+        }
+        case ast.TokenKind.OR_ASSIGN {
+            return ast.TokenKind.PIPE;
+        }
+        case ast.TokenKind.XOR_ASSIGN {
+            return ast.TokenKind.CARET;
+        }
+        case ast.TokenKind.SHL_ASSIGN {
+            return ast.TokenKind.SHL;
+        }
+    }
+    return ast.TokenKind.SHR;
+}
+
+fn gen_assign(g: *Gen, s: *ast.Stmt) {
+    var t = s.target.type;
+    var direct = place(s.target);
+    var target = "R6";
+    if (direct.ptr != null) {
+        target = direct;
+    } else {
+        gen_addr(g, s.target);
+        emit(g, "    PUSH R0\n");
+    }
+    gen_expr(g, s.value);
+    if (s.op == ast.TokenKind.ASSIGN) {
+        if (direct.ptr == null) {
+            emit(g, "    POP R6\n");
+        }
+        store_to(g, t, target);
+        return;
+    }
+    if (t.kind == ast.TypeKind.POINTER) {
+        scale(g, t.base.size, "R0");
+    }
+    emit(g, "    MOVE R7, R0\n");
+    if (direct.ptr == null) {
+        emit(g, "    POP R6\n");
+    }
+    load_from(g, t, target);
+    arithmetic(g, compound(s.op), t, "R7");
+    store_to(g, t, target);
+}
+
+fn gen_variable(g: *Gen, s: *ast.Stmt) {
+    var sym = s.symbol;
+    if (s.kind == ast.StmtKind.CONST) {
+        return;
+    }
+    sym.offset = alloc_frame(g, sym.type.size);
+    if (s.value == null) {
+        zero(g, sym.type, sym.offset);
+        return;
+    }
+    gen_expr(g, s.value);
+    store_to(g, sym.type, local_place(sym.offset));
+}
+
+fn gen_switch(g: *Gen, s: *ast.Stmt) {
+    var end = label(g);
+    var fallback = label(g);
+    var first = g.labels + 1;
+    g.labels += s.cases.len;
+
+    gen_expr(g, s.cond);
+    for (var i = 0; i < s.cases.len; i += 1) {
+        var values = s.cases[i].values;
+        for (var v = 0; v < values.len; v += 1) {
+            emitd(g, "    CMP R0, #%d\n    JZ .L%d\n", []int { wide.low(values[v].value), first + i });
+        }
+    }
+    if (s.fallback != null) {
+        emitd(g, "    JMP .L%d\n", []int { fallback });
+    } else {
+        emitd(g, "    JMP .L%d\n", []int { end });
+    }
+    for (var i = 0; i < s.cases.len; i += 1) {
+        emitd(g, ".L%d:\n", []int { first + i });
+        gen_block(g, s.cases[i].body);
+        emitd(g, "    JMP .L%d\n", []int { end });
+    }
+    if (s.fallback != null) {
+        emitd(g, ".L%d:\n", []int { fallback });
+        gen_block(g, s.fallback);
+    }
+    emitd(g, ".L%d:\n", []int { end });
+}
+
+fn gen_loop(g: *Gen, s: *ast.Stmt) {
+    var top = label(g);
+    var next = label(g);
+    var end = label(g);
+    var saved_break = g.break_label;
+    var saved_continue = g.continue_label;
+
+    if (s.init != null) {
+        gen_stmt(g, s.init);
+    }
+    emitd(g, ".L%d:\n", []int { top });
+    if (s.cond != null) {
+        loc(g, s.line);
+        gen_branch(g, s.cond, end);
+    }
+    g.break_label = end;
+    g.continue_label = next;
+    gen_block(g, s.then);
+    g.break_label = saved_break;
+    g.continue_label = saved_continue;
+    emitd(g, ".L%d:\n", []int { next });
+    if (s.step != null) {
+        gen_stmt(g, s.step);
+    }
+    emitd(g, "    JMP .L%d\n.L%d:\n", []int { top, end });
+}
+
+fn gen_stmt(g: *Gen, s: *ast.Stmt) {
+    if (s.kind != ast.StmtKind.BLOCK) {
+        loc(g, s.line);
+    }
+    switch (s.kind) {
+        case ast.StmtKind.BLOCK {
+            gen_block(g, s);
+        }
+        case ast.StmtKind.VAR, ast.StmtKind.CONST {
+            gen_variable(g, s);
+        }
+        case ast.StmtKind.ASSIGN {
+            gen_assign(g, s);
+        }
+        case ast.StmtKind.EXPR {
+            gen_expr(g, s.value);
+        }
+        case ast.StmtKind.IF {
+            var otherwise = label(g);
+            var end = label(g);
+            gen_branch(g, s.cond, otherwise);
+            gen_block(g, s.then);
+            if (s.otherwise != null) {
+                emitd(g, "    JMP .L%d\n", []int { end });
+            }
+            emitd(g, ".L%d:\n", []int { otherwise });
+            if (s.otherwise != null) {
+                gen_stmt(g, s.otherwise);
+                emitd(g, ".L%d:\n", []int { end });
+            }
+        }
+        case ast.StmtKind.WHILE, ast.StmtKind.FOR {
+            gen_loop(g, s);
+        }
+        case ast.StmtKind.SWITCH {
+            gen_switch(g, s);
+        }
+        case ast.StmtKind.BREAK {
+            emitd(g, "    JMP .L%d\n", []int { g.break_label });
+        }
+        case ast.StmtKind.CONTINUE {
+            emitd(g, "    JMP .L%d\n", []int { g.continue_label });
+        }
+        case ast.StmtKind.RETURN {
+            if (s.value != null) {
+                var t = s.value.type;
+                gen_expr(g, s.value);
+                if (is_aggregate(t) && t.size > 0) {
+                    emitd(g, "    LOAD R6, [BP+8]\n    MEMCPY R6, R0, #%d\n    MOVE R0, R6\n", []int { t.size });
+                } else if (is_aggregate(t)) {
+                    emit(g, "    LOAD R0, [BP+8]\n");
+                }
+            }
+            emit(g, "    JMP .ret\n");
+        }
+    }
+}
+
+fn gen_block(g: *Gen, s: *ast.Stmt) {
+    for (var i = 0; i < s.body.len; i += 1) {
+        gen_stmt(g, s.body[i]);
+    }
+}
+
+fn gen_function(g: *Gen, d: *ast.Decl) {
+    var t = d.symbol.type;
+    var offset = 8;
+    if (is_aggregate(t.base)) {
+        offset = 12;
+    }
+
+    g.frame = 0;
+    str.clear(&g.body);
+    for (var i = 0; i < d.params.len; i += 1) {
+        d.params[i].symbol.offset = offset;
+        offset += words(t.params[i].size);
+    }
+    g.loc_module = null;
+    loc(g, d.line);
+    var start = g.body.len;
+    gen_block(g, d.body);
+    loc(g, d.body.end_line);
+
+    // ENTER needs the size of the frame, known only after the body
+    var body = str.text(&g.body);
+    var ending = "RET";
+    if (d.is_interrupt) {
+        ending = "IRET";
+    }
+    str.append(&g.text, "\n");
+    str.append(&g.text, body[:start]);
+    put(&g.text, "%s:\n    ENTER #%d\n", [][]u8 { symbol_name(d.symbol) }, []int { g.frame });
+    str.append(&g.text, body[start:]);
+    put(&g.text, ".ret:\n    LEAVE\n    %s\n", [][]u8 { ending }, []int {});
+}
+
+// Emits the initial value of data of type t
+fn gen_data(g: *Gen, out: *str.Builder, t: *ast.Type, e: *ast.Expr) {
+    if (e == null) {
+        if (t.size > 0) {
+            put(out, "    .space %d\n", [][]u8 {}, []int { t.size });
+        }
+        return;
+    }
+    if (e.kind == ast.ExprKind.CONVERT && e.type.kind == ast.TypeKind.SLICE) {
+        put(out, "    .dword %s, %d\n", [][]u8 { symbol_name(e.left.symbol) }, []int { e.left.type.length });
+        return;
+    }
+    if (t.kind == ast.TypeKind.SLICE && e.kind == ast.ExprKind.ARRAY) {
+        var array = ast.Type {
+            kind: ast.TypeKind.ARRAY, base: t.base, length: e.args.len, size: e.args.len * t.base.size,
+            align: t.base.align,
+        };
+        var inner = str.builder(64);
+        var name = pool_label(g);
+        var align = array.align;
+        if (align == 0) {
+            align = 1;
+        }
+        put(&inner, "    .align %d\n%s:\n", [][]u8 { name }, []int { align });
+        gen_data(g, &inner, &array, e);
+        str.append(&g.pool, str.text(&inner));
+        str.release(&inner);
+        put(out, "    .dword %s, %d\n", [][]u8 { name }, []int { e.args.len });
+        return;
+    }
+    if (t.kind == ast.TypeKind.SLICE) {
+        put(out, "    .dword %s, %d\n", [][]u8 { string_of(g, e) }, []int { string_size(e) });
+        return;
+    }
+    if (t.kind == ast.TypeKind.STRUCT || t.kind == ast.TypeKind.ARRAY) {
+        var offset = 0;
+        for (var i = 0; i < e.args.len; i += 1) {
+            var element = t.base;
+            var at = 0;
+            if (t.kind == ast.TypeKind.ARRAY) {
+                at = i * t.base.size;
+            } else {
+                for (var k = 0; k < t.fields.len; k += 1) {
+                    if (ast.same(t.fields[k].name, e.fields[i])) {
+                        element = t.fields[k].type;
+                        at = t.fields[k].offset;
+                    }
+                }
+            }
+            if (at > offset) {
+                put(out, "    .space %d\n", [][]u8 {}, []int { at - offset });
+            }
+            gen_data(g, out, element, e.args[i]);
+            offset = at + element.size;
+        }
+        if (t.size > offset) {
+            put(out, "    .space %d\n", [][]u8 {}, []int { t.size - offset });
+        }
+        return;
+    }
+    var directive = ".dword";
+    if (t.size == 1) {
+        directive = ".byte";
+    } else if (t.size == 2) {
+        directive = ".word";
+    }
+    if (e.is_const) {
+        put(out, "    %s %d\n", [][]u8 { directive }, []int { wide.low(e.value) });
+    } else if (e.kind == ast.ExprKind.NULL) {
+        str.append(out, "    .dword 0\n");
+    } else if (e.kind == ast.ExprKind.CAST) {
+        gen_data(g, out, t, e.left);
+    } else if (e.kind == ast.ExprKind.UNARY) {
+        put(out, "    .dword %s\n", [][]u8 { symbol_name(e.left.symbol) }, []int {});
+    } else {
+        put(out, "    .dword %s\n", [][]u8 { symbol_name(e.symbol) }, []int {});
+    }
+}
+
+fn field_index(t: *ast.Type, name: []u8) int {
+    var found = -1;
+    for (var f = 0; f < t.fields.len; f += 1) {
+        if (ast.same(t.fields[f].name, name)) {
+            found = f;
+        }
+    }
+    return found;
+}
+
+// Struct literals in data list their fields in the order written; data needs them in memory order
+fn sort_fields(e: *ast.Expr) {
+    if (e.kind != ast.ExprKind.STRUCT && e.kind != ast.ExprKind.ARRAY || e.type == null) {
+        return;
+    }
+    for (var i = 0; i < e.args.len; i += 1) {
+        sort_fields(e.args[i]);
+    }
+    if (e.kind != ast.ExprKind.STRUCT) {
+        return;
+    }
+    var t = e.type;
+    for (var i = 1; i < e.args.len; i += 1) {
+        for (var k = i; k > 0; k -= 1) {
+            if (field_index(t, e.fields[k - 1]) <= field_index(t, e.fields[k])) {
+                break;
+            }
+            var arg = e.args[k];
+            var field = e.fields[k];
+            e.args[k] = e.args[k - 1];
+            e.fields[k] = e.fields[k - 1];
+            e.args[k - 1] = arg;
+            e.fields[k - 1] = field;
+        }
+    }
+}
+
+fn gen_global(g: *Gen, d: *ast.Decl) {
+    var t = d.symbol.type;
+    if (d.value != null) {
+        sort_fields(d.value);
+    }
+    var align = t.align;
+    if (align <= 0) {
+        align = 1;
+    }
+    put(&g.data, "    .align %d\n%s:\n", [][]u8 { symbol_name(d.symbol) }, []int { align });
+    gen_data(g, &g.data, t, d.value);
+}
+
+// The runtime starts the program at main, which passes the arguments if the program's main takes them
+fn gen_entry(g: *Gen) {
+    var main = g.program.main;
+    var t = main.type;
+    g.m = main.decl.module;
+    str.clear(&g.body);
+    g.loc_module = null;
+    loc(g, main.line);
+    str.append(&g.text, str.text(&g.body));
+    str.append(&g.text, "main:\n");
+    if (t.params.len > 0) {
+        str.append(&g.text, "    CALL rt.args\n    PUSH R5\n    PUSH R0\n");
+    }
+    put(&g.text, "    CALL %s\n", [][]u8 { symbol_name(main) }, []int {});
+    if (t.params.len > 0) {
+        str.append(&g.text, "    ADD SP, #8\n");
+    }
+    if (t.base.kind == ast.TypeKind.VOID) {
+        str.append(&g.text, "    LOAD R0, #0\n");
+    }
+    str.append(&g.text, "    RET\n");
+}
+
+pub fn generate(program: *ast.Program) []u8 {
+    var g = Gen {
+        program: program, text: str.builder(65536), data: str.builder(4096), pool: str.builder(4096),
+        body: str.builder(4096),
+    };
+
+    str.append(&g.text, "; Generated by vmc\n    .include \"runtime.asm\"\n");
+    for (var i = 0; i < program.assembly.count; i += 1) {
+        str.append(&g.text, "    .include ");
+        quoted(&g.text, program.assembly.items[i]);
+        str.append(&g.text, "\n");
+    }
+    str.append(&g.text, "\n.text\n");
+    gen_entry(&g);
+    for (var i = 0; i < program.modules.count; i += 1) {
+        g.m = ast.module_at(program, i);
+        var decls = g.m.decls;
+        for (var k = 0; k < decls.len; k += 1) {
+            if (decls[k].kind == ast.DeclKind.FN && decls[k].body != null) {
+                gen_function(&g, decls[k]);
+            }
+        }
+        for (var k = 0; k < decls.len; k += 1) {
+            if (decls[k].kind == ast.DeclKind.VAR) {
+                gen_global(&g, decls[k]);
+            }
+        }
+    }
+    str.append(&g.text, "\n.data\n");
+    str.append(&g.text, str.text(&g.data));
+    str.append(&g.text, str.text(&g.pool));
+    return str.text(&g.text);
+}

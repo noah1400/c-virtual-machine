@@ -1,0 +1,233 @@
+// The Ore compiler written in Ore. It reads a program and the modules it imports, checks it and writes
+// it as one file of assembly, which vmasm turns into a binary.
+import "std/io";
+import "std/str";
+import "ast";
+import "check";
+import "gen";
+import "lexer";
+import "parser";
+
+// The file with a 0 byte after it, or a slice with a null pointer when it cannot be read. The lexer
+// rejects 0 bytes inside the file.
+fn read_source(path: []u8) []u8 {
+    var none: []u8;
+    var bytes = io.read_file(path);
+    if (bytes.ptr == null) {
+        return none;
+    }
+    var source = (ast.allocate(bytes.len + 1))[:bytes.len + 1];
+    ast.copy(source.ptr, bytes.ptr, bytes.len);
+    free(bytes);
+    return source;
+}
+
+fn exists(path: []u8) bool {
+    var handle = io.open(path, io.READ);
+    if (handle < 0) {
+        return false;
+    }
+    io.close(handle);
+    return true;
+}
+
+fn join(dir: []u8, name: []u8, extension: []u8) []u8 {
+    if (dir.len == 0) {
+        return ast.cat([][]u8 { name, extension });
+    }
+    if (dir[dir.len - 1] == '/') {
+        return ast.cat([][]u8 { dir, name, extension });
+    }
+    return ast.cat([][]u8 { dir, "/", name, extension });
+}
+
+// Everything before the last slash, or nothing
+fn directory(path: []u8) []u8 {
+    var slash = str.find_last_byte(path, '/');
+    if (slash < 0) {
+        return path[:0];
+    }
+    return path[:slash];
+}
+
+// An import names a file without .ore, next to the importing file, in an -I directory or in the library
+fn find_import(program: *ast.Program, name: []u8, importer: *ast.Module) []u8 {
+    var none: []u8;
+    var slash = str.find_last_byte(importer.path, '/');
+    var path = join(importer.path[:slash + 1], name, ".ore");
+    if (exists(path)) {
+        return path;
+    }
+    for (var i = 0; i < program.include_dirs.len; i += 1) {
+        path = join(program.include_dirs[i], name, ".ore");
+        if (exists(path)) {
+            return path;
+        }
+    }
+    path = join(program.library, name, ".ore");
+    if (exists(path)) {
+        return path;
+    }
+    return none;
+}
+
+fn is_name_start(c: u8) bool {
+    return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_';
+}
+
+// The file name without its directory and extension, if that makes a name
+fn module_name(path: []u8) []u8 {
+    var none: []u8;
+    var base = path[str.find_last_byte(path, '/') + 1:];
+    var dot = str.find_last_byte(base, '.');
+    if (dot > 0) {
+        base = base[:dot];
+    }
+    if (base.len == 0 || !is_name_start(base[0])) {
+        return none;
+    }
+    for (var i = 0; i < base.len; i += 1) {
+        if (!is_name_start(base[i]) && !str.is_digit(base[i])) {
+            return none;
+        }
+    }
+    return base;
+}
+
+fn load_module(program: *ast.Program, path: []u8, importer: *ast.Module, line: int) *ast.Module {
+    var resolved = path;
+    if (importer != null) {
+        resolved = find_import(program, path, importer);
+        if (resolved.ptr == null) {
+            ast.fail(importer, line, ast.cat([][]u8 { "cannot find the module \"", path, "\"" }));
+        }
+    }
+    for (var i = 0; i < program.modules.count; i += 1) {
+        if (ast.same(ast.module_at(program, i).path, resolved)) {
+            return ast.module_at(program, i);
+        }
+    }
+
+    var m = ast.allocate(sizeof(ast.Module)) as *ast.Module;
+    m.path = resolved;
+    m.name = module_name(resolved);
+    if (m.name.ptr == null) {
+        ast.fail(importer, line, ast.cat([][]u8 { "the file name of ", resolved, " is not a valid module name" }));
+    }
+    for (var i = 0; i < program.modules.count; i += 1) {
+        var other = ast.module_at(program, i);
+        if (ast.same(other.name, m.name)) {
+            ast.fail(importer, line, ast.cat([][]u8 { other.path, " and ", resolved, " are both named ", m.name }));
+        }
+    }
+    m.source = read_source(resolved);
+    if (m.source.ptr == null) {
+        ast.fail(importer, line, ast.cat([][]u8 { "cannot read ", resolved }));
+    }
+    ast.add(&program.modules, m as *u8);
+
+    // An imported module can bring assembly for its extern functions in a file of the same name. The
+    // main module cannot, since that is where -S puts the program's assembly.
+    if (importer != null && str.ends_with(resolved, ".ore") && resolved.len > 4) {
+        var assembly = ast.cat([][]u8 { resolved[:resolved.len - 4], ".asm" });
+        if (exists(assembly)) {
+            ast.add_text(&program.assembly, assembly);
+        }
+    }
+    lexer.lex(m);
+    parser.parse(m);
+    for (var i = 0; i < m.decls.len; i += 1) {
+        var d = m.decls[i];
+        if (d.kind == ast.DeclKind.IMPORT) {
+            d.imported = load_module(program, d.path, m, d.line);
+            if (d.name.len == 0) {
+                d.name = d.imported.name;
+            }
+        }
+    }
+    return m;
+}
+
+fn usage(handle: int) {
+    io.write(handle, "Usage: vmc [options] program.ore [file.asm...]\n");
+    io.write(handle, "Compiles an Ore program and the modules it imports into a VM32 binary, together with the\n");
+    io.write(handle, "assembly files that define its extern functions.\n");
+    io.write(handle, "  -o FILE   write the binary to FILE (default: the program with .bin)\n");
+    io.write(handle, "  -S        write the assembly instead, to FILE or the program with .asm\n");
+    io.write(handle, "  -I DIR    look for imported modules in DIR as well\n");
+    io.write(handle, "  -L DIR    take the runtime and the standard library from DIR\n");
+    io.write(handle, "  -h        show this help\n");
+}
+
+// The path with its extension replaced
+fn derived(path: []u8, extension: []u8) []u8 {
+    var dot = str.find_last_byte(path, '.');
+    if (dot >= 0 && dot > str.find_last_byte(path, '/')) {
+        return ast.cat([][]u8 { path[:dot], extension });
+    }
+    return ast.cat([][]u8 { path, extension });
+}
+
+// Without -S the assembly goes to the binary's path with .asm added, for the vmc script to assemble
+fn main(args: [][]u8) int {
+    var program = ast.Program {};
+    var dirs = ast.Texts {};
+    var source: []u8;
+    var output: []u8;
+    var assembly_only = false;
+
+    // The runtime and the standard library live in ore/lib next to vmc
+    program.library = join(directory(args[0]), "ore/lib", "");
+    for (var i = 1; i < args.len; i += 1) {
+        var arg = args[i];
+        if (str.equal(arg, "-h")) {
+            usage(io.STDOUT);
+            return 0;
+        } else if (str.equal(arg, "-S")) {
+            assembly_only = true;
+        } else if ((str.equal(arg, "-o") || str.equal(arg, "-I") || str.equal(arg, "-L")) && i + 1 < args.len) {
+            i += 1;
+            if (arg[1] == 'o') {
+                output = args[i];
+            } else if (arg[1] == 'I') {
+                ast.add_text(&dirs, args[i]);
+            } else {
+                program.library = args[i];
+            }
+        } else if (str.starts_with(arg, "-")) {
+            usage(io.STDERR);
+            return 1;
+        } else if (arg.len > 4 && str.ends_with(arg, ".asm")) {
+            ast.add_text(&program.assembly, arg);
+        } else if (source.ptr != null) {
+            usage(io.STDERR);
+            return 1;
+        } else {
+            source = arg;
+        }
+    }
+    program.include_dirs = ast.texts(dirs);
+    if (source.ptr == null) {
+        usage(io.STDERR);
+        return 1;
+    }
+    load_module(&program, source, null, 0);
+    check.check_program(&program);
+
+    var assembly = gen.generate(&program);
+    if (output.ptr == null) {
+        if (assembly_only) {
+            output = derived(source, ".asm");
+        } else {
+            output = derived(source, ".bin");
+        }
+    }
+    var path = output;
+    if (!assembly_only) {
+        path = ast.cat([][]u8 { output, ".asm" });
+    }
+    if (!io.write_file(path, assembly)) {
+        ast.fail(null, 0, ast.cat([][]u8 { "cannot write ", path }));
+    }
+    return 0;
+}
