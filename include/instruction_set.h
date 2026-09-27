@@ -46,6 +46,16 @@
 #define SUBC_OP     (uint8_t)0x2B // SUBC | Reg1, Reg2/Imm | Subtract with carry | Z, N, C, O
 #define IDIV_OP     (uint8_t)0x2C // IDIV | Reg1, Reg2/Imm | Signed divide | Z, N
 #define IMOD_OP     (uint8_t)0x2D // IMOD | Reg1, Reg2/Imm | Signed remainder | Z, N
+#define FADD_OP     (uint8_t)0x30 // FADD | Reg1, Reg2/Imm | Floating-point add | Z, N, C and O cleared
+#define FSUB_OP     (uint8_t)0x31 // FSUB | Reg1, Reg2/Imm | Floating-point subtract | Z, N, C and O cleared
+#define FMUL_OP     (uint8_t)0x32 // FMUL | Reg1, Reg2/Imm | Floating-point multiply | Z, N, C and O cleared
+#define FDIV_OP     (uint8_t)0x33 // FDIV | Reg1, Reg2/Imm | Floating-point divide | Z, N, C and O cleared
+#define FCMP_OP     (uint8_t)0x34 // FCMP | Reg1, Reg2/Imm | Floating-point compare | Z, C, O, N cleared
+#define FSQRT_OP    (uint8_t)0x35 // FSQRT | Reg, Src | Square root | Z, N, C and O cleared
+#define FNEG_OP     (uint8_t)0x36 // FNEG | Reg | Flip the sign | Z, N, C and O cleared
+#define FABS_OP     (uint8_t)0x37 // FABS | Reg | Clear the sign | Z, N, C and O cleared
+#define ITOF_OP     (uint8_t)0x38 // ITOF | Reg, Src | Signed integer to float | Z, N, C and O cleared
+#define FTOI_OP     (uint8_t)0x39 // FTOI | Reg, Src | Float to signed integer, truncating | Z, N, O
 
 // Logical Instructions (0x40-0x5F)
 #define AND_OP      (uint8_t)0x40 // AND | Reg1, Reg2/Imm | Bitwise AND | Z, N, C and O cleared

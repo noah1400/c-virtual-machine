@@ -1,4 +1,6 @@
+#include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include "cpu.h"
 #include "io.h"
 #include "memory.h"
@@ -148,6 +150,85 @@ static int execute_arithmetic(VM *vm, const Instruction *instr) {
             break;
         }
     }
+    return VM_ERROR_NONE;
+}
+
+static float to_float(uint32_t bits) {
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static uint32_t from_float(float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+// Floating-point values are IEEE single-precision bit patterns in the general registers
+static int execute_float(VM *vm, const Instruction *instr) {
+    uint32_t *dest = &vm->registers[instr->reg1];
+    uint32_t operand = 0;
+    float a = to_float(*dest), result;
+
+    if (instr->opcode != FNEG_OP && instr->opcode != FABS_OP) {
+        operand = read_operand(vm, instr, instr->reg2, 4);
+        if (vm->last_error != VM_ERROR_NONE) {
+            return vm->last_error;
+        }
+    }
+    float b = to_float(operand);
+
+    switch (instr->opcode) {
+        case FADD_OP:
+            result = a + b;
+            break;
+        case FSUB_OP:
+            result = a - b;
+            break;
+        case FMUL_OP:
+            result = a * b;
+            break;
+        case FDIV_OP:
+            result = a / b;
+            break;
+        case FSQRT_OP:
+            result = sqrtf(b);
+            break;
+        case FNEG_OP:
+            result = -a;
+            break;
+        case FABS_OP:
+            result = fabsf(a);
+            break;
+        case ITOF_OP:
+            result = (float)(int32_t)operand;
+            break;
+        case FCMP_OP: {
+            // Unsigned conditions apply; unordered operands also set O
+            int unordered = isnan(a) || isnan(b);
+            cpu_set_flag(vm, ZERO_FLAG, unordered || a == b);
+            cpu_set_flag(vm, CARRY_FLAG, unordered || a < b);
+            cpu_set_flag(vm, OVER_FLAG, unordered);
+            cpu_set_flag(vm, NEG_FLAG, 0);
+            return VM_ERROR_NONE;
+        }
+        default: {
+            // NaN and values outside the int32 range give INT32_MIN and set O
+            int valid = b >= -2147483648.0f && b < 2147483648.0f;
+            *dest = valid ? (uint32_t)(int32_t)b : 0x80000000u;
+            set_zero_negative(vm, *dest);
+            cpu_set_flag(vm, CARRY_FLAG, 0);
+            cpu_set_flag(vm, OVER_FLAG, !valid);
+            return VM_ERROR_NONE;
+        }
+    }
+
+    *dest = from_float(result);
+    cpu_set_flag(vm, ZERO_FLAG, result == 0.0f);
+    cpu_set_flag(vm, NEG_FLAG, signbit(result) && !isnan(result));
+    cpu_set_flag(vm, CARRY_FLAG, 0);
+    cpu_set_flag(vm, OVER_FLAG, 0);
     return VM_ERROR_NONE;
 }
 
@@ -378,10 +459,10 @@ static void execute_cpuid(VM *vm) {
             break;
         case 1:
             // Version 2.0; R5 features: I/O ports, heap protection, interrupts, syscalls, exceptions,
-            // user mode, paging; R6 features: debug support, timer device
+            // user mode, paging, floating point; R6 features: debug support, timer device
             vm->registers[R0_ACC] = 0x00020000;
             vm->registers[R5] = 0x00000004 | 0x00000008 | 0x00000010 | 0x00000020 | 0x00000040 | 0x00000080 |
-                                0x00000100;
+                                0x00000100 | 0x00000200;
             vm->registers[R6] = 0x00000001 | 0x00000002;
             vm->registers[R7] = 0;
             break;
@@ -570,6 +651,9 @@ int cpu_execute_instruction(VM *vm, const Instruction *instr) {
             return execute_unary(vm, instr);
 
         default:
+            if (instr->opcode >= FADD_OP && instr->opcode <= FTOI_OP) {
+                return execute_float(vm, instr);
+            }
             break;
     }
 

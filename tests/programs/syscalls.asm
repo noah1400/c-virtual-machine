@@ -14,10 +14,8 @@
     LOAD R0, #'\n'
     SYSCALL #0
 
-    ; -2.25 in 16.16 fixed point
-    LOAD R0, #0xFFFD
-    SHL R0, #16
-    OR R0, #0xC000
+    ; -2.25 as a single-precision float
+    LOAD R0, #0xC0100000
     SYSCALL #7
     LOAD R0, #'\n'
     SYSCALL #0

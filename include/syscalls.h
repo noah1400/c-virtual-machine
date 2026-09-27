@@ -13,7 +13,7 @@ enum {
     SYS_READ_LINE    = 4,
     SYS_PRINT_HEX    = 5,
     SYS_PRINT_BASE   = 6,
-    SYS_PRINT_FIXED  = 7,
+    SYS_PRINT_FLOAT  = 7,
     SYS_CLEAR_SCREEN = 8,
     SYS_SET_COLOR    = 9,
     SYS_OPEN         = 10,

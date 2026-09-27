@@ -64,13 +64,11 @@ static void print_in_base(uint32_t value, uint32_t base) {
     }
 }
 
-// Prints a signed 16.16 fixed-point number with four decimals
-static void print_fixed(uint32_t value) {
-    int negative = (value & 0x80000000) != 0;
-    uint32_t magnitude = negative ? 0u - value : value;
-    uint32_t decimals = ((magnitude & 0xFFFF) * 10000u) >> 16;
-
-    printf("%s%u.%04u", negative ? "-" : "", magnitude >> 16, decimals);
+// Prints a single-precision float with up to six significant digits
+static void print_float(uint32_t bits) {
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    printf("%g", value);
 }
 
 // Low byte selects the foreground (0-7, 0xFF resets), second byte the background (0-7)
@@ -306,8 +304,8 @@ int syscall_dispatch(VM *vm, uint32_t number) {
         case SYS_PRINT_BASE:
             print_in_base(arg0, arg1);
             break;
-        case SYS_PRINT_FIXED:
-            print_fixed(arg0);
+        case SYS_PRINT_FLOAT:
+            print_float(arg0);
             break;
         case SYS_CLEAR_SCREEN:
             printf("\033[2J\033[H");

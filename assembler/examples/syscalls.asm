@@ -22,7 +22,7 @@
     LOAD R0, #' '
     SYSCALL #0
     LOAD R0, [pi]
-    SYSCALL #7                  ; print 16.16 fixed point
+    SYSCALL #7                  ; print a float
     LOAD R0, #'\n'
     SYSCALL #0
 
@@ -67,7 +67,7 @@ roll:
 
 .data
 pi:
-    .dword 0x0003243F           ; pi in 16.16 fixed point
+    .dword 0x40490FDB           ; pi as a float
 console_text:
     .asciiz "Console: "
 memory_text:

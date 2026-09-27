@@ -13,7 +13,7 @@ ASM_OBJ := $(ASM_SRC:%.c=$(BUILD)/%.o)
 all: vm vmasm
 
 vm: $(VM_OBJ)
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) $(LDFLAGS) -o $@ $^ -lm
 
 vmasm: $(ASM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^
