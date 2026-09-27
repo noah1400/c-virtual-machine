@@ -926,7 +926,7 @@ Comment lines in a test adjust the checks:
 | `; program-args: ...` | Arguments passed to the program |
 | `; disk-sectors: N` | Attach an empty disk image of N sectors |
 
-A file `NAME.x` next to a test holds [debugger](#debugger) commands, which the program then runs under with `-x`. When `NAME.err` exists, stderr has to match it as a whole.
+A file `NAME.x` next to a test holds [debugger](#debugger) commands, which the program then runs under with `-x`, and `NAME.keys` is passed as a key script with `-k`. When `NAME.err` exists, stderr has to match it as a whole.
 
 `make test T="display disk"` or `sh tests/run.sh display disk` runs only the tests named. `sh tests/run.sh -u NAME` rewrites `NAME.out`, and `NAME.err` if there is one, from the actual output, provided the program exits with the expected status; a failing test shows the first lines of the difference with control characters made visible.
 
