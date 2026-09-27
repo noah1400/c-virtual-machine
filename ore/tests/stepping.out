@@ -17,7 +17,7 @@ Instructions executed: 15, last: ENTER #4
 Next instruction: LOAD R0, [BP+8]
 > bt
 #0 0x0284 <stepping.square+4> ore/tests/stepping.ore:3: LOAD R0, [BP+8]
-#1 0x02CC <stepping.main.L1+24> ore/tests/stepping.ore:10: CALL stepping.square
+#1 0x02C8 <stepping.main.L1+24> ore/tests/stepping.ore:10: CALL stepping.square
 #2 0x0274 <main> ore/tests/stepping.ore:7: CALL stepping.main
 #3 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main
 > n
@@ -31,38 +31,38 @@ Instructions executed: 18, last: STORE R0, [BP-4]
   ore/tests/stepping.ore:4: return result;
 Next instruction: LOAD R0, [BP-4]
 > n
-R0  0x00000001   BP  0x000FFFE0   SP  0x000FFFDC   PC  0x00000298
+R0  0x00000001   BP  0x000FFFE0   SP  0x000FFFDC   PC  0x00000294
 SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
 Flags: [------S-]
-Instructions executed: 20, last: JMP stepping.square.ret
-0x0298 <stepping.square.ret>
+Instructions executed: 19, last: LOAD R0, [BP-4]
+0x0294 <stepping.square.ret>
   ore/tests/stepping.ore:5: }
 Next instruction: LEAVE
 > n
-R0  0x00000001   BP  0x000FFFF4   SP  0x000FFFE8   PC  0x000002D0
+R0  0x00000001   BP  0x000FFFF4   SP  0x000FFFE8   PC  0x000002CC
 SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
 Flags: [------S-]
-Instructions executed: 22, last: RET
-0x02D0 <stepping.main.L1+28>
+Instructions executed: 21, last: RET
+0x02CC <stepping.main.L1+28>
   ore/tests/stepping.ore:10: total += square(i);
 Next instruction: ADD SP, #0x4
 > d 1
 Deleted breakpoint 1
 > b stepping.ore:12
-Breakpoint 1 at 0x02FC <stepping.main.L3>
+Breakpoint 1 at 0x02F0 <stepping.main.L3>
 > c
-Breakpoint 1 at 0x02FC
-R0  0x00000004   BP  0x000FFFF4   SP  0x000FFFEC   PC  0x000002FC
-SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000001
+Breakpoint 1 at 0x02F0
+R0  0x00000004   BP  0x000FFFF4   SP  0x000FFFEC   PC  0x000002F0
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000009
 R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
 Flags: [------S-]
-Instructions executed: 88, last: JG stepping.main.L3
-0x02FC <stepping.main.L3>
+Instructions executed: 79, last: JG stepping.main.L3
+0x02F0 <stepping.main.L3>
   ore/tests/stepping.ore:12: print(total, "\n");
 Next instruction: LOAD R0, [BP-4]
 > q

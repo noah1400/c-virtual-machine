@@ -206,10 +206,14 @@ fn load_from(g: *Gen, t: *ast.Type, place: []u8) {
         }
     } else if (t.size == 1) {
         emits(g, "    LOADB R0, [%s]\n", [][]u8 { place });
-        normalize(g, t);
+        if (t.is_signed) {
+            normalize(g, t);
+        }
     } else if (t.size == 2) {
         emits(g, "    LOADW R0, [%s]\n", [][]u8 { place });
-        normalize(g, t);
+        if (t.is_signed) {
+            normalize(g, t);
+        }
     } else {
         emits(g, "    LOAD R0, [%s]\n", [][]u8 { place });
     }
@@ -384,17 +388,26 @@ fn is_comparison(e: *ast.Expr) bool {
         e.op as int <= ast.TokenKind.GE as int;
 }
 
+// A value that an instruction can take without code to compute it: a constant, or a variable of 4 bytes
+// in memory, since memory operands are read as 32 bits
+fn simple_operand(e: *ast.Expr) []u8 {
+    var none: []u8;
+    if (e.is_const && check.is_scalar(e.type)) {
+        return ast.cat([][]u8 { "#", ast.number(wide.low(e.value)) });
+    }
+    var at = place(e);
+    if (at.ptr != null && check.is_scalar(e.type) && e.type.size == 4) {
+        return ast.cat([][]u8 { "[", at, "]" });
+    }
+    return none;
+}
+
 // Leaves the left operand in R0 and puts the right one where the instruction can take it
 fn operands(g: *Gen, e: *ast.Expr) []u8 {
-    if (e.right.is_const && check.is_scalar(e.right.type)) {
+    var right = simple_operand(e.right);
+    if (right.ptr != null) {
         gen_expr(g, e.left);
-        return ast.cat([][]u8 { "#", ast.number(wide.low(e.right.value)) });
-    }
-    // Memory operands are read as 32 bits
-    var right = place(e.right);
-    if (right.ptr != null && check.is_scalar(e.right.type) && e.right.type.size == 4) {
-        gen_expr(g, e.left);
-        return ast.cat([][]u8 { "[", right, "]" });
+        return right;
     }
     gen_expr(g, e.left);
     emit(g, "    PUSH R0\n");
@@ -895,6 +908,25 @@ fn gen_assign(g: *Gen, s: *ast.Stmt) {
     var t = s.target.type;
     var direct = place(s.target);
     var target = "R6";
+
+    // x op= y with a y that needs no code works on x directly, as scaled for a pointer
+    var operand = simple_operand(s.value);
+    if (s.op != ast.TokenKind.ASSIGN && operand.ptr != null && (t.kind != ast.TypeKind.POINTER || s.value.is_const)) {
+        if (t.kind == ast.TypeKind.POINTER) {
+            operand = ast.cat([][]u8 { "#", ast.number(wide.low(s.value.value) * t.base.size) });
+        }
+        if (direct.ptr != null) {
+            target = direct;
+        } else {
+            gen_addr(g, s.target);
+            emit(g, "    MOVE R6, R0\n");
+        }
+        load_from(g, t, target);
+        arithmetic(g, compound(s.op), t, operand);
+        store_to(g, t, target);
+        return;
+    }
+
     if (direct.ptr != null) {
         target = direct;
     } else {
@@ -1073,6 +1105,10 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     loc(g, d.line);
     var start = g.body.len;
     gen_block(g, d.body);
+    // A return at the end has nowhere to jump
+    if (str.ends_with(str.text(&g.body), "    JMP .ret\n")) {
+        g.body.len -= 13;
+    }
     loc(g, d.body.end_line);
 
     // ENTER needs the size of the frame, known only after the body
