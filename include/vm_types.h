@@ -58,6 +58,7 @@ typedef struct {
     char exception_message[256];
 
     struct IODevices *io_devices;
+    uint8_t io_ticking;      // a device counts executed instructions
 
     // Instruction cycle info for debugging
     uint32_t instruction_count; // Number of instructions executed
@@ -100,6 +101,7 @@ typedef struct {
 #define VM_ERROR_IO_ERROR             11 // I/O operation error
 #define VM_ERROR_PROTECTION_FAULT     12 // Memory protection fault
 #define VM_ERROR_PRIVILEGE            13 // Privileged instruction in user mode
+#define VM_ERROR_PAGE_FAULT           14 // Page table does not allow the access
 #define VM_ERROR_INSTRUCTION_LIMIT    16 // Instruction limit reached, never delivered to the program
 
 // Faults with a code below this are delivered to the interrupt vector of the same number

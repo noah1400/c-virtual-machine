@@ -58,6 +58,7 @@ static void timer_write(VM *vm, IODevice *device, uint16_t offset, uint32_t valu
         case 0:
             timer->interval = value;
             timer->counter = 0;
+            vm->io_ticking = value != 0;
             break;
         case 1:
             if (value > 0xFF) {

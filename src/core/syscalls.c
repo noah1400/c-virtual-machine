@@ -184,19 +184,35 @@ static void file_transfer(VM *vm, uint32_t handle, uint32_t address, uint32_t co
         vm_raise(vm, VM_ERROR_IO_ERROR, "Invalid file handle");
         return;
     }
-    if (memory_check_address_permissions(vm, address, count, writing ? PROT_READ : PROT_WRITE) != VM_ERROR_NONE) {
+    if (memory_check_range(vm, address, count, writing ? PROT_READ : PROT_WRITE) != VM_ERROR_NONE) {
         return;
     }
 
     if (writing) {
         fflush(stdout);
     }
-    size_t moved = writing ? fwrite(vm->memory + address, 1, count, file)
-                           : fread(vm->memory + address, 1, count, file);
+    // Pages of the buffer need not be contiguous in physical memory, so the data goes through a chunk
+    uint8_t chunk[4096];
+    uint32_t moved = 0;
+    while (moved < count) {
+        uint32_t size = count - moved < sizeof(chunk) ? count - moved : (uint32_t)sizeof(chunk);
+        size_t done;
+        if (writing) {
+            memory_read(vm, address + moved, chunk, size);
+            done = fwrite(chunk, 1, size, file);
+        } else {
+            done = fread(chunk, 1, size, file);
+            memory_write(vm, address + moved, chunk, (uint32_t)done);
+        }
+        moved += (uint32_t)done;
+        if (done < size) {
+            break;
+        }
+    }
     if (writing) {
         fflush(file);
     }
-    vm->registers[R0_ACC] = (uint32_t)moved;
+    vm->registers[R0_ACC] = moved;
     if (moved < count && ferror(file)) {
         clearerr(file);
         vm_raise(vm, VM_ERROR_IO_ERROR, "File transfer failed");
@@ -232,9 +248,9 @@ static void program_argument(VM *vm, uint32_t index, uint32_t address, uint32_t 
     }
 
     uint32_t copied = length < size - 1 ? length : size - 1;
-    if (memory_check_address_permissions(vm, address, copied + 1, PROT_WRITE) == VM_ERROR_NONE) {
-        memcpy(vm->memory + address, arg, copied);
-        vm->memory[address + copied] = '\0';
+    if (memory_check_range(vm, address, copied + 1, PROT_WRITE) == VM_ERROR_NONE) {
+        memory_write(vm, address, arg, copied);
+        memory_write_byte(vm, address + copied, 0);
     }
 }
 

@@ -49,17 +49,17 @@ static int execute_next(VM *vm) {
     if (pc % 4 != 0) {
         return vm_raise(vm, VM_ERROR_INVALID_ALIGNMENT, "Unaligned program counter 0x%04X", pc);
     }
-    if (memory_check_address_permissions(vm, pc, 4, PROT_EXEC) != VM_ERROR_NONE) {
+    uint32_t word, extension = 0;
+    if (memory_fetch(vm, pc, &word) != VM_ERROR_NONE) {
         return vm->last_error;
     }
-    uint32_t word = read_le32(vm->memory + pc);
     uint32_t size = isa_instruction_size(word);
-    if (size > 4 && memory_check_address_permissions(vm, pc + 4, 4, PROT_EXEC) != VM_ERROR_NONE) {
+    if (size > 4 && memory_fetch(vm, pc + 4, &extension) != VM_ERROR_NONE) {
         return vm->last_error;
     }
 
     Instruction instr;
-    isa_decode(word, size > 4 ? read_le32(vm->memory + pc + 4) : 0, &instr);
+    isa_decode(word, extension, &instr);
 
     // PC already points at the next instruction while this one executes
     vm->registers[R3_PC] = pc + size;
@@ -88,7 +88,7 @@ int vm_step(VM *vm) {
     vm->exception = 0;
     memcpy(saved, vm->registers, sizeof(saved));
     vm->error_pc = vm->registers[R3_PC];
-    if (cpu_deliver_interrupt(vm)) {
+    if (vm->irq_pending && cpu_deliver_interrupt(vm)) {
         if (vm->last_error != VM_ERROR_NONE) {
             memcpy(vm->registers, saved, sizeof(saved));
             return cpu_exception(vm);
@@ -110,7 +110,9 @@ int vm_step(VM *vm) {
     }
 
     vm->instruction_count++;
-    io_tick(vm);
+    if (vm->io_ticking) {
+        io_tick(vm);
+    }
     if (trap && !vm->halted && !vm->entered_interrupt && vm->last_error == VM_ERROR_NONE) {
         cpu_interrupt(vm, VM_TRAP_VECTOR);
     }
@@ -119,15 +121,15 @@ int vm_step(VM *vm) {
 
 // Decodes the instruction at address without faulting the VM; returns its size, or 0 if it is out of range
 uint32_t vm_peek_instruction(const VM *vm, uint32_t address, Instruction *instr) {
-    if (address > vm->memory_size || vm->memory_size - address < 4) {
+    uint8_t bytes[8];
+    if (memory_peek(vm, address, bytes, 4) < 4) {
         return 0;
     }
-    uint32_t word = read_le32(vm->memory + address);
-    uint32_t size = isa_instruction_size(word);
-    if (vm->memory_size - address < size) {
+    uint32_t size = isa_instruction_size(read_le32(bytes));
+    if (size > 4 && memory_peek(vm, address + 4, bytes + 4, 4) < 4) {
         return 0;
     }
-    isa_decode(word, size > 4 ? read_le32(vm->memory + address + 4) : 0, instr);
+    isa_decode(read_le32(bytes), read_le32(bytes + 4), instr);
     return size;
 }
 
@@ -258,6 +260,8 @@ const char *vm_get_error_string(int error_code) {
             return "Memory protection fault";
         case VM_ERROR_PRIVILEGE:
             return "Privilege violation";
+        case VM_ERROR_PAGE_FAULT:
+            return "Page fault";
         case VM_ERROR_INSTRUCTION_LIMIT:
             return "Instruction limit reached";
         default:

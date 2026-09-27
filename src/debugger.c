@@ -6,6 +6,7 @@
 #include "debug.h"
 #include "debugger.h"
 #include "disassembler.h"
+#include "memory.h"
 #include "vm.h"
 
 #define MAX_BREAKPOINTS 32
@@ -189,7 +190,8 @@ static int watch_triggered(Debugger *dbg) {
     int triggered = 0;
     for (int i = 0; i < dbg->breakpoint_count; i++) {
         Breakpoint *bp = &dbg->breakpoints[i];
-        uint32_t value = bp->watch ? read_le32(dbg->vm->memory + bp->address) : 0;
+        uint8_t bytes[4] = { 0 };
+        uint32_t value = bp->watch && memory_peek(dbg->vm, bp->address, bytes, 4) == 4 ? read_le32(bytes) : bp->value;
         if (bp->watch && value != bp->value) {
             printf("Watchpoint %d: 0x%04X changed from 0x%08X to 0x%08X\n", i + 1, bp->address, bp->value, value);
             bp->value = value;
@@ -336,7 +338,9 @@ static void add_breakpoint(Debugger *dbg, uint32_t address, int watch) {
     Breakpoint *bp = &dbg->breakpoints[dbg->breakpoint_count++];
     bp->address = address;
     bp->watch = watch;
-    bp->value = watch ? read_le32(dbg->vm->memory + address) : 0;
+    uint8_t bytes[4] = { 0 };
+    memory_peek(dbg->vm, address, bytes, 4);
+    bp->value = watch ? read_le32(bytes) : 0;
     printf("%s %d at 0x%04X", kind, dbg->breakpoint_count, address);
     print_symbolic(dbg, address);
     printf("\n");
@@ -362,8 +366,9 @@ static void cmd_watch(Debugger *dbg, int argc, char **argv) {
     if (!parse_location(dbg, argv[1], &address)) {
         return;
     }
-    if (address > dbg->vm->memory_size - 4) {
-        printf("Address out of range\n");
+    uint8_t bytes[4];
+    if (memory_peek(dbg->vm, address, bytes, 4) < 4) {
+        printf("Address 0x%04X cannot be read\n", address);
         return;
     }
     add_breakpoint(dbg, address, 1);
@@ -426,14 +431,17 @@ static void cmd_memory(const Debugger *dbg, int argc, char **argv) {
     if (!parse_location(dbg, argv[1], &address) || (argc > 2 && !parse_number(argv[2], &count))) {
         return;
     }
-    if (address >= vm->memory_size) {
-        printf("Address out of range\n");
-        return;
+    if (count > 0x10000) {
+        count = 0x10000;
     }
-    if (count > vm->memory_size - address) {
-        count = vm->memory_size - address;
+    uint8_t *bytes = malloc(count ? count : 1);
+    uint32_t readable = bytes ? memory_peek(vm, address, bytes, count) : 0;
+    if (readable == 0) {
+        printf("Address 0x%04X cannot be read\n", address);
+    } else {
+        disasm_hexdump(bytes, address, readable);
     }
-    disasm_hexdump(vm->memory + address, address, count);
+    free(bytes);
 }
 
 static void cmd_disassemble(const Debugger *dbg, int argc, char **argv) {
@@ -476,7 +484,12 @@ static void cmd_stack(const Debugger *dbg, int argc, char **argv) {
         printf("The stack is empty\n");
     }
     for (uint32_t address = sp; address + 4 <= top && count > 0; address += 4, count--) {
-        uint32_t value = read_le32(vm->memory + address);
+        uint8_t bytes[4];
+        if (memory_peek(vm, address, bytes, 4) < 4) {
+            printf("0x%04X  cannot be read\n", address);
+            break;
+        }
+        uint32_t value = read_le32(bytes);
         printf("0x%04X  0x%08X", address, value);
         if (address == sp) {
             printf("  <- SP");

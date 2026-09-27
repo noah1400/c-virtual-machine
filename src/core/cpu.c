@@ -20,18 +20,6 @@ void cpu_reset(VM *vm) {
     vm->halted = 0;
 }
 
-uint8_t cpu_get_flag(const VM *vm, uint8_t flag) {
-    return (vm->registers[R4_SR] & flag) != 0;
-}
-
-void cpu_set_flag(VM *vm, uint8_t flag, int value) {
-    if (value) {
-        vm->registers[R4_SR] |= flag;
-    } else {
-        vm->registers[R4_SR] &= ~(uint32_t)flag;
-    }
-}
-
 // The stack lies between the SLO and SHI control registers
 static void stack_fault(VM *vm, int code, uint32_t address, const char *message) {
     if (vm->last_error == VM_ERROR_NONE) {
@@ -225,28 +213,23 @@ void cpu_disable_interrupts(VM *vm) {
 
 // Copies a NUL-terminated run of at least three printable characters found after the code
 static int describe_string(const VM *vm, uint32_t address, char *out, size_t size) {
-    if (address < vm->code_end || address >= vm->memory_size) {
-        return 0;
-    }
+    uint8_t bytes[64];
+    uint32_t readable = address >= vm->code_end ? memory_peek(vm, address, bytes, sizeof(bytes)) : 0;
 
     size_t length = 0;
-    for (uint32_t a = address; a < vm->memory_size && length < 64; a++, length++) {
-        uint8_t c = vm->memory[a];
-        if (c == 0) {
-            break;
-        }
+    while (length < readable && bytes[length] != 0) {
+        uint8_t c = bytes[length++];
         if ((c < 32 || c > 126) && c != '\n' && c != '\t') {
             return 0;
         }
     }
-    if (length < 3 || length == 64) {
+    if (length < 3 || length == readable) {
         return 0;
     }
 
     size_t shown = length < size - 4 ? length : size - 4;
     for (size_t i = 0; i < shown; i++) {
-        uint8_t c = vm->memory[address + i];
-        out[i] = c == '\n' || c == '\t' ? ' ' : (char)c;
+        out[i] = bytes[i] == '\n' || bytes[i] == '\t' ? ' ' : (char)bytes[i];
     }
     strcpy(out + shown, shown < length ? "..." : "");
     return 1;

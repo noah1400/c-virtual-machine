@@ -14,9 +14,24 @@
 int memory_init(VM *vm, uint32_t size);
 void memory_cleanup(VM *vm);
 
-// Memory access functions with bounds checking
-int memory_check_address(VM *vm, uint32_t address, uint32_t size);
-int memory_check_address_permissions(VM *vm, uint32_t address, uint32_t size, uint8_t required_perm);
+// Page table entry bits
+#define PAGE_PRESENT 0x1
+#define PAGE_WRITE   0x2
+#define PAGE_USER    0x4
+#define PAGE_EXEC    0x8
+
+// ECODE bits describing a page fault
+#define FAULT_PRESENT 0x1   // the page is mapped but does not allow the access
+#define FAULT_WRITE   0x2
+#define FAULT_USER    0x4
+#define FAULT_FETCH   0x8
+
+// Accesses at virtual addresses: heap rules, then page tables when PTB is set, then memory bounds
+int memory_check_range(VM *vm, uint32_t address, uint32_t size, uint8_t access);
+int memory_read(VM *vm, uint32_t address, void *buffer, uint32_t size);
+int memory_write(VM *vm, uint32_t address, const void *buffer, uint32_t size);
+int memory_fetch(VM *vm, uint32_t address, uint32_t *word);
+uint32_t memory_peek(const VM *vm, uint32_t address, void *buffer, uint32_t size);
 
 // Low-level memory operations
 uint8_t memory_read_byte(VM *vm, uint32_t address);

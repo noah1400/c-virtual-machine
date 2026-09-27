@@ -6,8 +6,17 @@
 void cpu_reset(VM *vm);
 int cpu_execute_instruction(VM *vm, const Instruction *instr);
 
-uint8_t cpu_get_flag(const VM *vm, uint8_t flag);
-void cpu_set_flag(VM *vm, uint8_t flag, int value);
+static inline uint8_t cpu_get_flag(const VM *vm, uint8_t flag) {
+    return (vm->registers[R4_SR] & flag) != 0;
+}
+
+static inline void cpu_set_flag(VM *vm, uint8_t flag, int value) {
+    if (value) {
+        vm->registers[R4_SR] |= flag;
+    } else {
+        vm->registers[R4_SR] &= ~(uint32_t)flag;
+    }
+}
 
 void cpu_stack_push(VM *vm, uint32_t value);
 uint32_t cpu_stack_pop(VM *vm);
