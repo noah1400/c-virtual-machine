@@ -637,20 +637,58 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
 
 // Jumps to target unless the condition holds
 fn gen_branch(g: *Gen, e: *ast.Expr, target: int) {
+    gen_condition(g, e, target, false);
+}
+
+// Jumps to target when the condition is when, without making a value of &&, || and !
+fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
+    if (e.is_const) {
+        if (!wide.is_zero(e.value) == when) {
+            emitd(g, "    JMP .L%d\n", []int { target });
+        }
+        return;
+    }
+    if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.BANG) {
+        gen_condition(g, e.left, target, !when);
+        return;
+    }
+    if (e.kind == ast.ExprKind.BINARY && (e.op == ast.TokenKind.ANDAND || e.op == ast.TokenKind.OROR)) {
+        // The right side decides only when the left one did not
+        if ((e.op == ast.TokenKind.ANDAND) != when) {
+            gen_condition(g, e.left, target, when);
+            gen_condition(g, e.right, target, when);
+            return;
+        }
+        var skip = label(g);
+        gen_condition(g, e.left, skip, !when);
+        gen_condition(g, e.right, target, when);
+        merge_label(g, skip);
+        return;
+    }
     if (is_comparison(e) && check.is_scalar(e.left.type)) {
+        var code = condition(e.op, e.left.type, !when);
         var register = register_of(e.left);
         var operand = simple_operand(e.right);
         if (register.ptr != null && operand.ptr != null) {
-            emitf(g, "    CMP %s, %s\n    J%s .L%d\n", [][]u8 { register, operand, condition(e.op, e.left.type, true) },
-                []int { target });
+            emitf(g, "    CMP %s, %s\n    J%s .L%d\n", [][]u8 { register, operand, code }, []int { target });
             return;
         }
         var right = operands(g, e);
-        emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, condition(e.op, e.left.type, true) }, []int { target });
+        emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, code }, []int { target });
         return;
     }
-    gen_expr(g, e);
-    emitd(g, "    CMP R0, #0\n    JZ .L%d\n", []int { target });
+    var register = register_of(e);
+    if (register.ptr != null) {
+        emits(g, "    CMP %s, #0\n", [][]u8 { register });
+    } else {
+        gen_expr(g, e);
+        emit(g, "    CMP R0, #0\n");
+    }
+    var jump = "JZ";
+    if (when) {
+        jump = "JNZ";
+    }
+    emitf(g, "    %s .L%d\n", [][]u8 { jump }, []int { target });
 }
 
 // Evaluates an argument into its place below SP
