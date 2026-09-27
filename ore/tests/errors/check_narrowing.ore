@@ -1,0 +1,5 @@
+// expect-error: expected u8, found int
+fn main() {
+    var n = 65;
+    var c: u8 = n;
+}

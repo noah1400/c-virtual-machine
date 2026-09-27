@@ -1,0 +1,5 @@
+// expect-error: the syscall number must be a constant from 0 to 255
+fn main() {
+    var n = 3;
+    syscall(n, 1);
+}

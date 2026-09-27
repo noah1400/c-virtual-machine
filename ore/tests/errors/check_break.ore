@@ -1,0 +1,4 @@
+// expect-error: break is only allowed in a loop
+fn main() {
+    break;
+}

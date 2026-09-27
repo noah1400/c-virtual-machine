@@ -1,0 +1,8 @@
+// expect-error: cannot assign to this
+fn one() int {
+    return 1;
+}
+
+fn main() {
+    one() = 2;
+}

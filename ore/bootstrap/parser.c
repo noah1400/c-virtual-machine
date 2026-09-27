@@ -97,10 +97,7 @@ static TypeExpr *parse_type(Parser *p) {
         expect(p, TOK_LPAREN, "after fn");
         int capacity = 0;
         while (!check(p, TOK_RPAREN)) {
-            if (t->param_count == capacity) {
-                capacity = capacity ? capacity * 2 : 4;
-                grow((void **)&t->params, capacity, sizeof(TypeExpr *));
-            }
+            extend((void **)&t->params, &capacity, t->param_count, sizeof(TypeExpr *));
             t->params[t->param_count++] = parse_type(p);
             if (!accept(p, TOK_COMMA)) {
                 break;
@@ -128,11 +125,9 @@ static Expr *new_expr(ExprKind kind, int line) {
 }
 
 static void add_arg(Expr *e, Expr *arg, const char *field, int *capacity) {
-    if (e->arg_count == *capacity) {
-        *capacity = *capacity ? *capacity * 2 : 4;
-        grow((void **)&e->args, *capacity, sizeof(Expr *));
-        grow((void **)&e->fields, *capacity, sizeof(char *));
-    }
+    int fields = *capacity;
+    extend((void **)&e->fields, &fields, e->arg_count, sizeof(char *));
+    extend((void **)&e->args, capacity, e->arg_count, sizeof(Expr *));
     e->fields[e->arg_count] = field;
     e->args[e->arg_count++] = arg;
 }
@@ -446,19 +441,13 @@ static Stmt *parse_switch(Parser *p) {
             continue;
         }
         int line = expect(p, TOK_CASE, "or default")->line;
-        if (s->case_count == capacity) {
-            capacity = capacity ? capacity * 2 : 8;
-            grow((void **)&s->cases, capacity, sizeof(Case));
-        }
+        extend((void **)&s->cases, &capacity, s->case_count, sizeof(Case));
         Case *c = &s->cases[s->case_count++];
         int values = 0;
         c->line = line;
         p->no_literal = 1;
         do {
-            if (c->value_count == values) {
-                values = values ? values * 2 : 4;
-                grow((void **)&c->values, values, sizeof(Expr *));
-            }
+            extend((void **)&c->values, &values, c->value_count, sizeof(Expr *));
             c->values[c->value_count++] = parse_expr(p);
         } while (accept(p, TOK_COMMA));
         p->no_literal = 0;
@@ -535,10 +524,7 @@ static Stmt *parse_block(Parser *p) {
         if (check(p, TOK_EOF)) {
             fail(p->m, s->line, "the block is missing its '}'");
         }
-        if (s->count == capacity) {
-            capacity = capacity ? capacity * 2 : 8;
-            grow((void **)&s->body, capacity, sizeof(Stmt *));
-        }
+        extend((void **)&s->body, &capacity, s->count, sizeof(Stmt *));
         s->body[s->count++] = parse_stmt(p);
     }
     s->end_line = peek(p)->line;
@@ -550,10 +536,7 @@ static void parse_params(Parser *p, Decl *d) {
     int capacity = 0;
     expect(p, TOK_LPAREN, "after the name of the function");
     while (!check(p, TOK_RPAREN)) {
-        if (d->param_count == capacity) {
-            capacity = capacity ? capacity * 2 : 4;
-            grow((void **)&d->params, capacity, sizeof(Param));
-        }
+        extend((void **)&d->params, &capacity, d->param_count, sizeof(Param));
         Param *param = &d->params[d->param_count++];
         param->line = peek(p)->line;
         param->name = name(p, "a parameter name");
@@ -574,10 +557,7 @@ static void parse_struct(Parser *p, Decl *d) {
     d->name = name(p, "the name of the struct");
     expect(p, TOK_LBRACE, "after the name of the struct");
     while (!accept(p, TOK_RBRACE)) {
-        if (d->param_count == capacity) {
-            capacity = capacity ? capacity * 2 : 8;
-            grow((void **)&d->params, capacity, sizeof(Param));
-        }
+        extend((void **)&d->params, &capacity, d->param_count, sizeof(Param));
         Param *field = &d->params[d->param_count++];
         field->line = peek(p)->line;
         field->name = name(p, "a field name");
@@ -592,10 +572,7 @@ static void parse_enum(Parser *p, Decl *d) {
     d->name = name(p, "the name of the enum");
     expect(p, TOK_LBRACE, "after the name of the enum");
     while (!check(p, TOK_RBRACE)) {
-        if (d->member_count == capacity) {
-            capacity = capacity ? capacity * 2 : 8;
-            grow((void **)&d->members, capacity, sizeof(Member));
-        }
+        extend((void **)&d->members, &capacity, d->member_count, sizeof(Member));
         Member *member = &d->members[d->member_count++];
         member->line = peek(p)->line;
         member->name = name(p, "a name");
@@ -680,10 +657,7 @@ void parse(Program *program, Module *m) {
     int capacity = 0;
 
     while (!check(&p, TOK_EOF)) {
-        if (m->decl_count == capacity) {
-            capacity = capacity ? capacity * 2 : 16;
-            grow((void **)&m->decls, capacity, sizeof(Decl *));
-        }
+        extend((void **)&m->decls, &capacity, m->decl_count, sizeof(Decl *));
         m->decls[m->decl_count++] = parse_decl(&p);
     }
     for (int i = 0; i < m->decl_count; i++) {

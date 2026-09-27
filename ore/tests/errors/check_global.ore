@@ -1,0 +1,9 @@
+// expect-error: a global variable needs a value known before the program runs
+fn seed() int {
+    return 7;
+}
+
+var start = seed();
+
+fn main() {
+}

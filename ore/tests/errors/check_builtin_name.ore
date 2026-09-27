@@ -1,0 +1,6 @@
+// expect-error: new is predeclared
+fn new() {
+}
+
+fn main() {
+}

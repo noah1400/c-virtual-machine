@@ -1,0 +1,4 @@
+// expect-error: count is not declared
+fn main() {
+    count = 1;
+}

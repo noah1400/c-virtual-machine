@@ -94,6 +94,62 @@ typedef struct Stmt Stmt;
 typedef struct Decl Decl;
 typedef struct Symbol Symbol;
 
+typedef enum {
+    TY_VOID,
+    TY_BOOL,
+    TY_INT,
+    TY_POINTER,
+    TY_ARRAY,
+    TY_SLICE,
+    TY_FN,
+    TY_STRUCT,
+    TY_ENUM,
+    TY_NULL,                // null before it meets a pointer or function type
+    TY_UNTYPED,             // an integer constant before it meets a type
+} TypeKind;
+
+typedef struct {
+    const char *name;
+    Type *type;
+    int offset;
+    int line;
+} Field;
+
+struct Type {
+    TypeKind kind;
+    int size;
+    int align;
+    int is_signed;
+    Type *base;             // pointed to, element, or the result of a function
+    int length;             // of an array
+    Type **params;
+    int param_count;
+    int is_interrupt;
+    const char *name;       // integer, struct and enum types
+    Decl *decl;
+    Field *fields;
+    int field_count;
+    int state;              // of a struct layout: 0 not started, 1 in progress, 2 done
+};
+
+typedef enum { SYM_LOCAL, SYM_GLOBAL, SYM_FN, SYM_CONST, SYM_TYPE, SYM_MODULE, SYM_BUILTIN } SymbolKind;
+
+typedef enum { BUILTIN_PRINT = 1, BUILTIN_PANIC, BUILTIN_ASSERT, BUILTIN_FREE, BUILTIN_SYSCALL } Builtin;
+
+struct Symbol {
+    SymbolKind kind;
+    const char *name;
+    Type *type;
+    Decl *decl;
+    Module *module;         // where it is declared, or the module a SYM_MODULE stands for
+    int line;
+    int64_t value;          // constants
+    Expr *string;           // string constants
+    Builtin builtin;
+    int offset;             // frame offset of a local, set by the code generator
+    int label;              // string constants: the label of their bytes, once emitted
+};
+
 typedef enum { TE_NAME, TE_POINTER, TE_ARRAY, TE_SLICE, TE_FN } TypeExprKind;
 
 typedef struct TypeExpr {
@@ -108,6 +164,9 @@ typedef struct TypeExpr {
 } TypeExpr;
 
 typedef enum {
+    EX_CONVERT,             // an implicit conversion the checker inserts
+    EX_LEN,                 // the length of a slice
+    EX_PTR,                 // the pointer of a slice
     EX_INT,
     EX_BOOL,
     EX_NULL,
@@ -139,6 +198,14 @@ struct Expr {
     const char **fields;    // field names of a struct literal, one per argument
     int arg_count;
     TypeExpr *type_expr;    // casts, literals, sizeof and new
+
+    Type *type;             // set by the checker
+    Type *named;            // the type written in casts, literals and new
+    int is_const;           // value holds an integer, boolean or enum known when compiling
+    Symbol *symbol;         // what a name stands for
+    Field *field;
+    Builtin builtin;
+    int label;              // string literals, set by the code generator
 };
 
 typedef struct {
@@ -180,18 +247,21 @@ struct Stmt {
     Case *cases;
     int case_count;
     Stmt *fallback;         // default block of a switch
+    Symbol *symbol;         // declared variable or constant
 };
 
 typedef struct {
     const char *name;
     TypeExpr *type_expr;
     int line;
+    Symbol *symbol;
 } Param;
 
 typedef struct {
     const char *name;
     Expr *value;
     int line;
+    int64_t number;
 } Member;
 
 typedef enum { DECL_IMPORT, DECL_CONST, DECL_VAR, DECL_FN, DECL_STRUCT, DECL_ENUM } DeclKind;
@@ -213,6 +283,9 @@ struct Decl {
     int member_count;
     const char *path;       // import
     Module *imported;
+    Symbol *symbol;
+    Type *type;
+    int state;              // of a constant: 0 unchecked, 1 being checked, 2 checked
 };
 
 struct Module {
@@ -225,6 +298,8 @@ struct Module {
     int token_count;
     Decl **decls;
     int decl_count;
+    Symbol **symbols;
+    int symbol_count;
 };
 
 typedef struct {
@@ -233,16 +308,25 @@ typedef struct {
     const char **include_dirs;
     int include_dir_count;
     const char *library;
+    Symbol *main;
 } Program;
+
+extern Type *type_void, *type_bool, *type_int, *type_u8, *type_u32, *type_syscall;
 
 void *allocate(size_t size);
 char *copy_text(const char *text, size_t length);
 void grow(void **items, int count, size_t item_size);
+void extend(void **items, int *capacity, int used, size_t item_size);
 _Noreturn void fail(const Module *m, int line, const char *format, ...);
 
 void lex(Module *m);
 const char *token_text(TokenKind kind);
 void parse(Program *program, Module *m);
 Module *load_module(Program *program, const char *path, const Module *importer, int line);
+
+void check_program(Program *program);
+int same_type(const Type *a, const Type *b);
+const char *type_name(const Type *t);
+int is_scalar(const Type *t);
 
 #endif // _ORE_H_

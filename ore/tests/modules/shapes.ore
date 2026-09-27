@@ -1,0 +1,17 @@
+// Declarations for the tests that import a module
+pub struct Point {
+    x: int;
+    y: int;
+}
+
+pub enum Corner { top_left, top_right, bottom_left, bottom_right }
+
+pub const SIDES = 4;
+
+pub fn origin() Point {
+    return Point {};
+}
+
+fn secret() int {
+    return 42;
+}

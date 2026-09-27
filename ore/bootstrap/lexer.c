@@ -61,10 +61,7 @@ typedef struct {
 
 static void add(Lexer *lx, Token token) {
     Module *m = lx->m;
-    if (m->token_count == lx->capacity) {
-        lx->capacity = lx->capacity ? lx->capacity * 2 : 256;
-        grow((void **)&m->tokens, lx->capacity, sizeof(Token));
-    }
+    extend((void **)&m->tokens, &lx->capacity, m->token_count, sizeof(Token));
     m->tokens[m->token_count++] = token;
 }
 
@@ -167,20 +164,17 @@ static void character(Lexer *lx, Token *t) {
 }
 
 static void string(Lexer *lx, Token *t) {
-    int capacity = 16;
-    t->bytes = allocate((size_t)capacity);
+    int capacity = 0;
     lx->p++;
     while (*lx->p != '"') {
         if (*lx->p == '\n' || *lx->p == '\0') {
             fail(lx->m, lx->line, "unterminated string");
         }
         int c = *lx->p == '\\' ? (lx->p++, escape(lx)) : (unsigned char)*lx->p++;
-        if (t->size + 1 == capacity) {
-            capacity *= 2;
-            grow((void **)&t->bytes, capacity, 1);
-        }
+        extend((void **)&t->bytes, &capacity, t->size + 1, 1);
         t->bytes[t->size++] = (char)c;
     }
+    extend((void **)&t->bytes, &capacity, t->size, 1);
     lx->p++;
     t->bytes[t->size] = '\0';
     t->kind = TOK_STRING;
@@ -235,17 +229,13 @@ static void skip_space(Lexer *lx) {
 }
 
 static void split_lines(Module *m) {
-    int capacity = 64;
-    m->lines = allocate((size_t)capacity * sizeof(char *));
+    int capacity = 0;
     for (const char *p = m->source;; p++) {
         if (p == m->source || p[-1] == '\n') {
             if (*p == '\0') {
                 break;
             }
-            if (m->line_count == capacity) {
-                capacity *= 2;
-                grow((void **)&m->lines, capacity, sizeof(char *));
-            }
+            extend((void **)&m->lines, &capacity, m->line_count, sizeof(char *));
             m->lines[m->line_count++] = p;
         }
         if (*p == '\0') {

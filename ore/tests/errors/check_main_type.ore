@@ -1,0 +1,3 @@
+// expect-error: main takes nothing or args: [][]u8, and returns nothing or an int
+fn main(n: int) {
+}

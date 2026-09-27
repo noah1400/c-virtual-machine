@@ -1,0 +1,8 @@
+// expect-error: struct Node contains itself
+struct Node {
+    value: int;
+    next: Node;
+}
+
+fn main() {
+}

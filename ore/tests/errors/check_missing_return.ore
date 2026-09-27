@@ -1,0 +1,9 @@
+// expect-error: sign has to return int at its end
+fn sign(x: int) int {
+    if (x < 0) {
+        return -1;
+    }
+}
+
+fn main() {
+}

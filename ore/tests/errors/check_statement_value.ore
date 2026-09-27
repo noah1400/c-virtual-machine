@@ -1,0 +1,7 @@
+// expect-error: this has no value
+fn nothing() {
+}
+
+fn main() {
+    var x = nothing();
+}

@@ -1,0 +1,5 @@
+// expect-error: division by zero
+const N = 10 / (5 - 5);
+
+fn main() {
+}

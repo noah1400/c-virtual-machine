@@ -1,0 +1,7 @@
+// expect-error: an interrupt function cannot be called
+interrupt fn tick() {
+}
+
+fn main() {
+    tick();
+}

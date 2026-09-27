@@ -1,0 +1,4 @@
+// expect-error: the type of null has to be written out
+fn main() {
+    var p = null;
+}

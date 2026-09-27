@@ -1,0 +1,4 @@
+// expect-error: 300 does not fit in u8
+fn main() {
+    var b: u8 = 300;
+}

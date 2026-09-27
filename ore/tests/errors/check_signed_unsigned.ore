@@ -1,0 +1,5 @@
+// expect-error: expected u32, found int
+fn main() {
+    var n = -1;
+    var u: u32 = n;
+}

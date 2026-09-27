@@ -1,0 +1,10 @@
+// expect-error: Point has no field z
+struct Point {
+    x: int;
+    y: int;
+}
+
+fn main() {
+    var p = Point { x: 1 };
+    p.z = 2;
+}

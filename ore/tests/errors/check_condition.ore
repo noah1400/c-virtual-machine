@@ -1,0 +1,5 @@
+// expect-error: expected bool, found a number
+fn main() {
+    if (1) {
+    }
+}

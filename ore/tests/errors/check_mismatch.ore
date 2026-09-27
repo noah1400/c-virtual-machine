@@ -1,0 +1,6 @@
+// expect-error: mismatched types int and u32
+fn main() {
+    var a: int = 1;
+    var b: u32 = 2;
+    var c = a + b;
+}

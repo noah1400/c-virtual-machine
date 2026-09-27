@@ -1,0 +1,6 @@
+// expect-error: shapes.secret is not pub
+import "../modules/shapes";
+
+fn main() {
+    var n = shapes.secret();
+}

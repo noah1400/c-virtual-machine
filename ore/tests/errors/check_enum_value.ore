@@ -1,0 +1,6 @@
+// expect-error: enum Corner has no value middle
+import "../modules/shapes";
+
+fn main() {
+    var c = shapes.Corner.middle;
+}

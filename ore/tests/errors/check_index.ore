@@ -1,0 +1,5 @@
+// expect-error: index 4 is out of bounds for length 4
+fn main() {
+    var a: [4]int;
+    a[4] = 1;
+}

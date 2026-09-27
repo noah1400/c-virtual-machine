@@ -1,0 +1,4 @@
+// expect-error: []u8 values cannot be compared
+fn main() {
+    var same = "a" == "b";
+}

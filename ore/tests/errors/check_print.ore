@@ -1,0 +1,8 @@
+// expect-error: print cannot show Point
+struct Point {
+    x: int;
+}
+
+fn main() {
+    print(Point { x: 1 });
+}

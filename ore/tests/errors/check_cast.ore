@@ -1,0 +1,4 @@
+// expect-error: cannot convert bool to *u8
+fn main() {
+    var p = true as *u8;
+}

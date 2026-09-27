@@ -30,6 +30,17 @@ void grow(void **items, int count, size_t item_size) {
     *items = p;
 }
 
+// Makes room for one more item after the used ones, zeroing the new room
+void extend(void **items, int *capacity, int used, size_t item_size) {
+    if (used < *capacity) {
+        return;
+    }
+    int larger = *capacity ? *capacity * 2 : 8;
+    grow(items, larger, item_size);
+    memset((char *)*items + (size_t)*capacity * item_size, 0, (size_t)(larger - *capacity) * item_size);
+    *capacity = larger;
+}
+
 _Noreturn void fail(const Module *m, int line, const char *format, ...) {
     va_list args;
     if (m) {
@@ -157,7 +168,7 @@ Module *load_module(Program *program, const char *path, const Module *importer, 
 
 static void usage(FILE *out) {
     fprintf(out, "Usage: vmc0 [options] program.ore\n"
-                 "Reads an Ore program and the modules it imports.\n"
+                 "Reads and checks an Ore program and the modules it imports.\n"
                  "  -I DIR    look for imported modules in DIR as well\n"
                  "  -L DIR    take the standard library from DIR\n"
                  "  -h        show this help\n");
@@ -195,5 +206,6 @@ int main(int argc, char **argv) {
         return 1;
     }
     load_module(&program, source, NULL, 0);
+    check_program(&program);
     return 0;
 }

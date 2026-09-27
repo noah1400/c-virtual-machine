@@ -1,0 +1,4 @@
+// expect-error: main does not return a value
+fn main() {
+    return 1;
+}
