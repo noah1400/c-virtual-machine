@@ -51,7 +51,7 @@ static void format_operand(char *out, size_t size, const Instruction *instr, uin
             format_displacement(out, size,
                                 instr->mode == IDX_MODE ? isa_register_name(reg)
                                                         : isa_register_name(instr->mode == STK_MODE ? R2_SP : R1_BP),
-                                isa_displacement(instr));
+                                (int32_t)instr->immediate);
             break;
         default:
             snprintf(out, size, "<mode %u>", instr->mode);
@@ -62,7 +62,9 @@ static void format_operand(char *out, size_t size, const Instruction *instr, uin
 void disasm_format(const Instruction *instr, const DebugInfo *info, char *buffer, size_t size) {
     const InstructionInfo *op = isa_by_opcode(instr->opcode);
     if (!op) {
-        snprintf(buffer, size, ".dword 0x%08X", isa_encode(instr));
+        uint32_t words[2];
+        isa_encode(instr, words);
+        snprintf(buffer, size, ".dword 0x%08X", words[0]);
         return;
     }
 
@@ -205,25 +207,30 @@ int disassemble_file(const char *filename) {
 
     if (bin.code_size > 0) {
         printf("\nCode:\n");
-        for (uint32_t offset = 0; offset + 4 <= bin.code_size; offset += 4) {
+        for (uint32_t offset = 0; offset + 4 <= bin.code_size;) {
             uint32_t address = bin.code_base + offset;
             uint32_t word = read_le32(bin.code + offset);
+            uint32_t size = isa_instruction_size(word);
             Instruction instr;
-            char text[160];
+            char text[160], extension[12] = "";
 
+            if (offset + size > bin.code_size) {
+                size = 4;
+                word &= ~((uint32_t)MODE_EXTENDED << 20);
+            }
+            if (size > 4) {
+                snprintf(extension, sizeof(extension), "%08X", read_le32(bin.code + offset + 4));
+            }
             print_label(info, address);
-            isa_decode(word, &instr);
+            isa_decode(word, size > 4 ? read_le32(bin.code + offset + 4) : 0, &instr);
             disasm_format(&instr, info, text, sizeof(text));
 
             char *operands = strchr(text, ' ');
             if (operands) {
                 *operands++ = '\0';
             }
-            if (operands) {
-                printf("  %04X  %08X  %-8s%s\n", address, word, text, operands);
-            } else {
-                printf("  %04X  %08X  %s\n", address, word, text);
-            }
+            printf("  %04X  %08X %-8s  %-8s%s\n", address, word, extension, text, operands ? operands : "");
+            offset += size;
         }
     }
 

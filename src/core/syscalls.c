@@ -256,7 +256,7 @@ static uint32_t next_random(VM *vm, uint32_t max) {
     return max ? (uint32_t)(((uint64_t)x * max) >> 32) : x;
 }
 
-int syscall_dispatch(VM *vm, uint16_t number) {
+int syscall_dispatch(VM *vm, uint32_t number) {
     uint32_t *r = vm->registers;
     uint32_t arg0 = r[R0_ACC];
     uint32_t arg1 = r[R5];

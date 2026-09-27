@@ -69,12 +69,17 @@ int vm_step(VM *vm) {
     if (memory_check_address_permissions(vm, pc, 4, PROT_EXEC) != VM_ERROR_NONE) {
         return vm->last_error;
     }
+    uint32_t word = read_le32(vm->memory + pc);
+    uint32_t size = isa_instruction_size(word);
+    if (size > 4 && memory_check_address_permissions(vm, pc + 4, 4, PROT_EXEC) != VM_ERROR_NONE) {
+        return vm->last_error;
+    }
 
     Instruction instr;
-    isa_decode(read_le32(vm->memory + pc), &instr);
+    isa_decode(word, size > 4 ? read_le32(vm->memory + pc + 4) : 0, &instr);
 
     // PC already points at the next instruction while this one executes
-    vm->registers[R3_PC] = pc + 4;
+    vm->registers[R3_PC] = pc + size;
     cpu_execute_instruction(vm, &instr);
     if (vm->last_error != VM_ERROR_NONE) {
         return vm->last_error;
@@ -85,13 +90,18 @@ int vm_step(VM *vm) {
     return vm->last_error;
 }
 
-// Decodes the instruction at address without faulting the VM; returns 0 if it is out of range
-int vm_peek_instruction(const VM *vm, uint32_t address, Instruction *instr) {
+// Decodes the instruction at address without faulting the VM; returns its size, or 0 if it is out of range
+uint32_t vm_peek_instruction(const VM *vm, uint32_t address, Instruction *instr) {
     if (address > vm->memory_size || vm->memory_size - address < 4) {
         return 0;
     }
-    isa_decode(read_le32(vm->memory + address), instr);
-    return 1;
+    uint32_t word = read_le32(vm->memory + address);
+    uint32_t size = isa_instruction_size(word);
+    if (vm->memory_size - address < size) {
+        return 0;
+    }
+    isa_decode(word, size > 4 ? read_le32(vm->memory + address + 4) : 0, instr);
+    return size;
 }
 
 static int segment_fits(uint32_t base, uint32_t size, uint32_t seg_base, uint32_t seg_size) {

@@ -167,40 +167,53 @@ const char *isa_mode_name(uint8_t mode) {
     return mode < sizeof(names) / sizeof(names[0]) ? names[mode] : "???";
 }
 
-int isa_mode_has_wide_immediate(uint8_t mode) {
-    return mode == IMM_MODE || mode == MEM_MODE || mode == STK_MODE || mode == BAS_MODE;
+// Operand fields of IMM, MEM, STK and BAS take 16 bits by borrowing the Reg2 field, except in
+// MEMCPY and MEMSET, whose Reg2 field names the second register
+static int has_wide_field(const Instruction *instr) {
+    const InstructionInfo *info = isa_by_opcode(instr->opcode);
+    int wide_mode = instr->mode == IMM_MODE || instr->mode == MEM_MODE || instr->mode == STK_MODE ||
+                    instr->mode == BAS_MODE;
+    return wide_mode && !(info && info->format == FMT_REG_REG_SIZE);
 }
 
-// Signed offset of IDX (12-bit), STK and BAS (16-bit) operands
-int32_t isa_displacement(const Instruction *instr) {
-    switch (instr->mode) {
-        case IDX_MODE:
-            return (int32_t)((instr->immediate & 0x0FFF) ^ 0x0800) - 0x0800;
-        case STK_MODE:
-        case BAS_MODE:
-            return (int32_t)(instr->immediate ^ 0x8000) - 0x8000;
-        default:
-            return 0;
-    }
+uint32_t isa_instruction_size(uint32_t word) {
+    return (word >> 20) & MODE_EXTENDED ? 8 : 4;
 }
 
-uint32_t isa_encode(const Instruction *instr) {
-    uint32_t high = isa_mode_has_wide_immediate(instr->mode) ? (instr->immediate >> 12) & 0x0F
-                                                             : instr->reg2 & 0x0F;
-    return ((uint32_t)instr->opcode << 24) |
-           ((uint32_t)(instr->mode & 0x0F) << 20) |
-           ((uint32_t)(instr->reg1 & 0x0F) << 16) |
-           (high << 12) |
-           (instr->immediate & 0x0FFF);
-}
+void isa_decode(uint32_t word, uint32_t extension, Instruction *instr) {
+    uint32_t field = word & 0x0FFF;
 
-void isa_decode(uint32_t word, Instruction *instr) {
     instr->opcode = (uint8_t)(word >> 24);
-    instr->mode = (uint8_t)((word >> 20) & 0x0F);
+    instr->mode = (uint8_t)((word >> 20) & 0x07);
+    instr->extended = (uint8_t)((word >> 23) & 1);
     instr->reg1 = (uint8_t)((word >> 16) & 0x0F);
     instr->reg2 = (uint8_t)((word >> 12) & 0x0F);
-    instr->immediate = (uint16_t)(word & 0x0FFF);
-    if (isa_mode_has_wide_immediate(instr->mode)) {
-        instr->immediate |= (uint16_t)(instr->reg2 << 12);
+
+    if (instr->extended) {
+        instr->immediate = extension;
+    } else if (has_wide_field(instr)) {
+        field |= (uint32_t)instr->reg2 << 12;
+        instr->reg2 = 0;
+        instr->immediate = instr->mode == STK_MODE || instr->mode == BAS_MODE ? (uint32_t)(int16_t)field : field;
+    } else if (instr->mode == IDX_MODE) {
+        instr->immediate = (uint32_t)(((int32_t)field ^ 0x800) - 0x800);
+    } else {
+        instr->immediate = field;
     }
+}
+
+int isa_encode(const Instruction *instr, uint32_t words[2]) {
+    uint32_t mode = instr->mode | (instr->extended ? MODE_EXTENDED : 0);
+    uint32_t reg2 = instr->reg2 & 0x0F, field = 0;
+
+    if (!instr->extended) {
+        field = instr->immediate & 0x0FFF;
+        if (has_wide_field(instr)) {
+            reg2 = (instr->immediate >> 12) & 0x0F;
+        }
+    }
+    words[0] = ((uint32_t)instr->opcode << 24) | (mode << 20) | ((uint32_t)(instr->reg1 & 0x0F) << 16) |
+               (reg2 << 12) | field;
+    words[1] = instr->immediate;
+    return instr->extended ? 2 : 1;
 }

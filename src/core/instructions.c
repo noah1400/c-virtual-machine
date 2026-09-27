@@ -12,11 +12,11 @@ static uint32_t effective_address(VM *vm, const Instruction *instr, uint8_t reg)
         case REGM_MODE:
             return vm->registers[reg];
         case IDX_MODE:
-            return vm->registers[reg] + (uint32_t)isa_displacement(instr);
+            return vm->registers[reg] + instr->immediate;
         case STK_MODE:
-            return vm->registers[R2_SP] + (uint32_t)isa_displacement(instr);
+            return vm->registers[R2_SP] + instr->immediate;
         case BAS_MODE:
-            return vm->registers[R1_BP] + (uint32_t)isa_displacement(instr);
+            return vm->registers[R1_BP] + instr->immediate;
         default:
             vm_raise(vm, VM_ERROR_INVALID_INSTRUCTION, "Addressing mode %s has no address",
                      isa_mode_name(instr->mode));
@@ -472,9 +472,8 @@ static int execute_memory(VM *vm, const Instruction *instr) {
             break;
         case MEMCPY_OP:
         case MEMSET_OP: {
-            // The size is a 12-bit immediate or a register named in the immediate field
-            uint32_t size = instr->mode == REG_MODE ? vm->registers[instr->immediate & 0x0F]
-                                                    : (uint32_t)(instr->immediate & 0x0FFF);
+            // The size is an immediate or a register named in the immediate field
+            uint32_t size = instr->mode == REG_MODE ? vm->registers[instr->immediate & 0x0F] : instr->immediate;
             if (instr->opcode == MEMCPY_OP) {
                 memory_copy(vm, first, second, size);
             } else {
@@ -500,6 +499,10 @@ int cpu_execute_instruction(VM *vm, const Instruction *instr) {
     if (info->modes && !(info->modes & MODE_BIT(instr->mode))) {
         return vm_raise(vm, VM_ERROR_INVALID_INSTRUCTION, "Invalid addressing mode %s for %s",
                         isa_mode_name(instr->mode), info->mnemonic);
+    }
+    if (instr->extended && !(info->modes & MODE_BIT(instr->mode) & MODES_WITH_IMMEDIATE)) {
+        return vm_raise(vm, VM_ERROR_INVALID_INSTRUCTION, "%s has no immediate for an extension word",
+                        info->mnemonic);
     }
 
     switch (instr->opcode) {

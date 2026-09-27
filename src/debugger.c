@@ -243,12 +243,14 @@ static uint8_t next_opcode(const Debugger *dbg) {
 // Steps one instruction, running a CALL until it returns; RET #n leaves SP above its old value
 static int step_over(Debugger *dbg) {
     VM *vm = dbg->vm;
+    Instruction call;
+    uint32_t size = vm_peek_instruction(vm, vm->registers[R3_PC], &call);
 
-    if (next_opcode(dbg) != CALL_OP) {
+    if (!size || call.opcode != CALL_OP) {
         return step_instruction(dbg);
     }
 
-    uint32_t return_address = vm->registers[R3_PC] + 4;
+    uint32_t return_address = vm->registers[R3_PC] + size;
     uint32_t sp = vm->registers[R2_SP];
     if (!step_instruction(dbg)) {
         return 0;
@@ -437,10 +439,10 @@ static void cmd_disassemble(const Debugger *dbg, int argc, char **argv) {
     if ((argc > 1 && !parse_location(dbg, argv[1], &address)) || (argc > 2 && !parse_number(argv[2], &count))) {
         return;
     }
-    for (uint32_t i = 0; i < count; i++, address += 4) {
+    for (uint32_t i = 0, size; i < count; i++, address += size) {
         Instruction instr;
         char text[160];
-        if (!vm_peek_instruction(vm, address, &instr)) {
+        if (!(size = vm_peek_instruction(vm, address, &instr))) {
             break;
         }
         const Symbol *sym = debug_symbol_at(vm->debug_info, address);

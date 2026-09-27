@@ -7,6 +7,8 @@
 // Instruction format
 // [Opcode: 8 bits][Mode: 4 bits][Reg1: 4 bits][Reg2: 4 bits][Immediate/Offset: 12 bits]
 // IMM, MEM, STK and BAS modes use the Reg2 field as the top 4 bits of a 16-bit immediate.
+// Mode bit 3 means a second word follows that holds the whole 32-bit immediate or offset.
+#define MODE_EXTENDED 0x8
 
 // Addressing modes
 #define IMM_MODE (uint8_t)0x0 // Immediate: Value in instruction
@@ -119,10 +121,11 @@
 // Instruction structure that represents a decoded instruction
 typedef struct {
     uint8_t opcode;          // 8-bit opcode
-    uint8_t mode;            // 4-bit addressing mode
+    uint8_t mode;            // addressing mode without the extension bit
     uint8_t reg1;            // 4-bit register 1
     uint8_t reg2;            // 4-bit register 2
-    uint16_t immediate;      // 12-bit offset or 16-bit immediate, see above
+    uint8_t extended;        // the immediate came from a second word
+    uint32_t immediate;      // operand value, offsets already sign-extended
 } Instruction;
 
 // Addressing mode sets accepted by an instruction's variable operand
@@ -131,6 +134,8 @@ typedef struct {
 #define MODES_ADDR      (MODE_BIT(MEM_MODE) | MODE_BIT(REGM_MODE) | MODE_BIT(IDX_MODE) | \
                          MODE_BIT(STK_MODE) | MODE_BIT(BAS_MODE))
 #define MODES_SRC       (MODES_IMM_REG | MODES_ADDR)
+#define MODES_WITH_IMMEDIATE (MODE_BIT(IMM_MODE) | MODE_BIT(MEM_MODE) | MODE_BIT(IDX_MODE) | \
+                              MODE_BIT(STK_MODE) | MODE_BIT(BAS_MODE))
 
 typedef enum {
     FMT_NONE,           // HALT
@@ -159,9 +164,10 @@ int isa_register_index(const char *name);
 const char *isa_register_name(uint8_t reg);
 const char *isa_mode_name(uint8_t mode);
 
-int isa_mode_has_wide_immediate(uint8_t mode);
-int32_t isa_displacement(const Instruction *instr);
-uint32_t isa_encode(const Instruction *instr);
-void isa_decode(uint32_t word, Instruction *instr);
+// Size in bytes of the instruction whose first word is given: 4, or 8 with an extension word
+uint32_t isa_instruction_size(uint32_t word);
+void isa_decode(uint32_t word, uint32_t extension, Instruction *instr);
+// Returns the number of words written, 1 or 2
+int isa_encode(const Instruction *instr, uint32_t words[2]);
 
 #endif // _INSTRUCTION_SET_H_

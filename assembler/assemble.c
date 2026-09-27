@@ -506,19 +506,16 @@ static int set_operand(Assembler *as, const InstructionInfo *info, const Operand
         }
     }
 
+    in->immediate = (uint32_t)op->value;
     switch (op->mode) {
         case IMM_MODE:
-            in->immediate = (uint16_t)op->value;
             return check_range(as, op, 0, 0xFFFF, "immediate");
         case MEM_MODE:
-            in->immediate = (uint16_t)op->value;
             return check_range(as, op, 0, 0xFFFF, "address");
         case IDX_MODE:
-            in->immediate = (uint16_t)(op->value & 0x0FFF);
             return check_range(as, op, -2048, 2047, "index offset");
         case STK_MODE:
         case BAS_MODE:
-            in->immediate = (uint16_t)op->value;
             return check_range(as, op, -32768, 32767, "offset");
         default:
             return 1;
@@ -597,7 +594,7 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
                 return 0;
             }
             in->mode = IMM_MODE;
-            in->immediate = (uint16_t)((ops[1].reg << 12) | (ops[2].value & 0x0FFF));
+            in->immediate = (uint32_t)ops[2].value;
             return check_range(as, &ops[2], 0, 0x0FFF, "size");
         default:
             return 0;
@@ -605,12 +602,15 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
 }
 
 static void emit_instruction(Assembler *as, const Instruction *in) {
-    uint8_t bytes[4];
-    uint32_t word = isa_encode(in);
-    for (int i = 0; i < 4; i++) {
-        bytes[i] = (uint8_t)(word >> (8 * i));
+    uint32_t words[2];
+    int count = isa_encode(in, words);
+    for (int w = 0; w < count; w++) {
+        uint8_t bytes[4];
+        for (int i = 0; i < 4; i++) {
+            bytes[i] = (uint8_t)(words[w] >> (8 * i));
+        }
+        emit(as, bytes, 4);
     }
-    emit(as, bytes, 4);
 }
 
 // Alternative names for conditional jumps
@@ -677,8 +677,10 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
                 asm_error(as, "constant %lld does not fit in 32 bits", (long long)value);
                 return;
             }
-            Instruction low = { LOAD_OP, IMM_MODE, ops[0].reg, 0, (uint16_t)value };
-            Instruction high = { LOADHI_OP, IMM_MODE, ops[0].reg, 0, (uint16_t)((uint64_t)value >> 16) };
+            Instruction low = { .opcode = LOAD_OP, .mode = IMM_MODE, .reg1 = ops[0].reg,
+                                .immediate = (uint32_t)value & 0xFFFF };
+            Instruction high = { .opcode = LOADHI_OP, .mode = IMM_MODE, .reg1 = ops[0].reg,
+                                 .immediate = (uint32_t)((uint64_t)value >> 16) & 0xFFFF };
             emit_instruction(as, &low);
             emit_instruction(as, &high);
             return;

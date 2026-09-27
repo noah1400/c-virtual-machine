@@ -12,7 +12,7 @@ void vm_cleanup(VM *vm);
 int vm_run(VM *vm);
 int vm_step(VM *vm);
 
-int vm_peek_instruction(const VM *vm, uint32_t address, Instruction *instr);
+uint32_t vm_peek_instruction(const VM *vm, uint32_t address, Instruction *instr);
 
 // Program loading
 int vm_load_program(VM *vm, const uint8_t *program, uint32_t size);

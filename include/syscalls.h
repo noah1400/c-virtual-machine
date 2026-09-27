@@ -38,6 +38,6 @@ void syscalls_init(VM *vm);
 void syscalls_cleanup(VM *vm);
 
 // Services SYSCALL #number; returns a VM error code if the syscall faulted
-int syscall_dispatch(VM *vm, uint16_t number);
+int syscall_dispatch(VM *vm, uint32_t number);
 
 #endif // _SYSCALLS_H_

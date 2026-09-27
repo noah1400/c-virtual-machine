@@ -64,7 +64,7 @@ uint32_t cpu_stack_pop(VM *vm) {
 }
 
 // Saves BP, points BP at the saved value and reserves locals_size bytes below it
-void cpu_enter_frame(VM *vm, uint16_t locals_size) {
+void cpu_enter_frame(VM *vm, uint32_t locals_size) {
     cpu_stack_push(vm, vm->registers[R1_BP]);
     if (vm->last_error != VM_ERROR_NONE) {
         return;
