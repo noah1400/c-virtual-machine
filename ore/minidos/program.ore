@@ -1,0 +1,610 @@
+// Programs: VM32 binaries that MiniDos loads below itself and runs in user mode. Their syscalls reach it
+// as privilege violations, and it serves them as the VM would, with files on its own disk in place of the
+// host's. A fault or a runtime error ends the program instead of the machine.
+import "std/cpu";
+import "std/mem";
+import "std/str";
+import "console";
+import "fs";
+import "machine";
+
+// Programs live below this address and MiniDos above it, as make builds it with vmc -b
+pub const LIMIT = 0x100000;
+
+const STACK = 0x4000;               // the least room a program gets for its stack
+const PRIVILEGE_VIOLATION = 13;
+const SYSCALL_OPCODE: u32 = 0x6C;
+const HALT_OPCODE: u32 = 0xA0;
+const SUPERVISOR: u32 = 0x40;
+const SEGMENTATION_FAULT: u32 = 2;
+const INVALID_FREE: u32 = 6;
+const IO_ERROR: u32 = 11;
+const FIRST_HANDLE = 3;
+const HANDLES = 16;
+
+// Exit statuses of programs that did not choose one
+pub const ABORTED = 1;
+pub const CRASHED = 255;
+
+struct Header {
+    magic: [4]u8;
+    major: u16;
+    minor: u16;
+    header_size: int;
+    code_base: int;
+    code_size: int;
+    data_base: int;
+    data_size: int;
+    symbols: int;
+    entry: int;
+}
+
+// Heap memory the running program allocated
+struct Block {
+    address: u32;
+    size: int;
+}
+
+var running = false;
+var arguments: [][]u8;
+var files: [HANDLES]*fs.File;
+var blocks: []Block;
+var block_count = 0;
+
+pub fn install() {
+    cpu.set_handler(1, on_invalid_instruction as u32);
+    cpu.set_handler(2, on_segmentation_fault as u32);
+    cpu.set_handler(3, on_stack_overflow as u32);
+    cpu.set_handler(4, on_stack_underflow as u32);
+    cpu.set_handler(5, on_division_by_zero as u32);
+    cpu.set_handler(6, on_invalid_free as u32);
+    cpu.set_handler(8, on_allocation_failure as u32);
+    cpu.set_handler(9, on_unaligned_jump as u32);
+    cpu.set_handler(10, on_unexpected_interrupt as u32);
+    cpu.set_handler(11, on_io_error as u32);
+    cpu.set_handler(12, on_heap_protection as u32);
+    cpu.set_handler(PRIVILEGE_VIOLATION, on_privilege_violation as u32);
+    cpu.set_handler(14, on_page_fault as u32);
+}
+
+// Loads the program at path and runs it with the words of tail as its arguments; returns its exit
+// status, or -1 when it cannot run, after saying why
+pub fn run(path: []u8, tail: []u8) int {
+    if (running) {
+        console.screen("A program is running already\n");
+        return -1;
+    }
+    var bytes: []u8;
+    var e = fs.read_file(path, &bytes);
+    if (e != fs.Error.NONE) {
+        console.screen(fs.message(e));
+        console.screen("\n");
+        return -1;
+    }
+    var h = Header {};
+    if (bytes.len >= 36) {
+        h = *(bytes.ptr as *Header);
+    }
+    var problem = check(&h, bytes.len);
+    if (problem.len > 0) {
+        free(bytes);
+        console.screen(problem);
+        console.screen("\n");
+        return -1;
+    }
+    if (h.code_size > 0) {
+        syscall(22, h.code_base, bytes.ptr + h.header_size, h.code_size);
+    }
+    if (h.data_size > 0) {
+        syscall(22, h.data_base, bytes.ptr + h.header_size + h.code_size, h.data_size);
+    }
+    free(bytes);
+
+    var absolute = fs.absolute(path);
+    var full = new(u8, absolute.len + 2);
+    full[0] = 'A';
+    full[1] = ':';
+    mem.copy(full[2:], absolute);
+    free(absolute);
+    arguments = split(full, tail);
+    blocks = new(Block, 16);
+    block_count = 0;
+    var bottom = cpu.read_control(cpu.SLO);
+    cpu.write_control(cpu.SLO, image_end(&h) as u32);
+    running = true;
+    var status = cpu.enter_user(h.entry as u32, LIMIT as u32) as int;
+    running = false;
+    cpu.write_control(cpu.SLO, bottom);
+
+    for (var i = 0; i < HANDLES; i += 1) {
+        if (files[i] != null) {
+            fs.close(files[i]);
+            files[i] = null;
+        }
+    }
+    for (var i = 0; i < block_count; i += 1) {
+        syscall(21, blocks[i].address);
+    }
+    free(blocks);
+    for (var i = 0; i < arguments.len; i += 1) {
+        free(arguments[i]);
+    }
+    free(arguments);
+    return status;
+}
+
+fn image_end(h: *Header) int {
+    var end = h.code_base + h.code_size;
+    if (h.data_base + h.data_size > end) {
+        end = h.data_base + h.data_size;
+    }
+    return (end + 4095) / 4096 * 4096;
+}
+
+// Why a binary cannot run, or nothing
+fn check(h: *Header, size: int) []u8 {
+    if (!mem.equal(h.magic[:], "VM32") || h.major != 2 || h.header_size < 36 || h.code_size < 0 || h.data_size < 0 ||
+        h.header_size > size || h.code_size > size - h.header_size ||
+        h.data_size > size - h.header_size - h.code_size || h.entry < h.code_base ||
+        h.entry >= h.code_base + h.code_size || h.entry % 4 != 0) {
+        return "Error in EXE file";
+    }
+    if (h.code_base < 0 || h.code_base + h.code_size > LIMIT || h.data_base < 0 || h.data_base + h.data_size > LIMIT ||
+        image_end(h) > LIMIT - STACK) {
+        return "Program too big to fit in memory";
+    }
+    return "";
+}
+
+// The program's path and the words of tail, where double quotes keep spaces in a word
+fn split(path: []u8, tail: []u8) [][]u8 {
+    var count = 1;
+    var i = 0;
+    while (next_word(tail, &i).ptr != null) {
+        count += 1;
+    }
+    var words = new([]u8, count);
+    words[0] = path;
+    i = 0;
+    for (var k = 1; k < count; k += 1) {
+        words[k] = str.clone(next_word(tail, &i));
+    }
+    return words;
+}
+
+fn next_word(text: []u8, at: *int) []u8 {
+    var none: []u8;
+    var i = *at;
+    while (i < text.len && text[i] == ' ') {
+        i += 1;
+    }
+    if (i == text.len) {
+        *at = i;
+        return none;
+    }
+    var start = i;
+    var end = i;
+    if (text[i] == '"') {
+        start = i + 1;
+        i = start;
+        while (i < text.len && text[i] != '"') {
+            i += 1;
+        }
+        end = i;
+        if (i < text.len) {
+            i += 1;
+        }
+    } else {
+        while (i < text.len && text[i] != ' ') {
+            i += 1;
+        }
+        end = i;
+    }
+    *at = i;
+    return text[start:end];
+}
+
+interrupt fn on_privilege_violation(frame: *cpu.Frame) {
+    var word = machine.peek(frame.pc);
+    if (word >> 24 == SYSCALL_OPCODE && (frame.sr & SUPERVISOR) == 0) {
+        var number = word & 0xFFFF;
+        var length: u32 = 4;
+        if ((word & 0x800000) != 0) {
+            number = machine.peek(frame.pc + 4);
+            length = 8;
+        }
+        frame.pc += length;
+        serve(frame, number);
+        return;
+    }
+    if (word >> 24 == HALT_OPCODE) {
+        end(0);
+    }
+    fault(frame, "Privileged instruction");
+}
+
+interrupt fn on_invalid_instruction(frame: *cpu.Frame) {
+    fault(frame, "Invalid instruction");
+}
+
+interrupt fn on_segmentation_fault(frame: *cpu.Frame) {
+    fault(frame, "Memory access outside the machine");
+}
+
+interrupt fn on_stack_overflow(frame: *cpu.Frame) {
+    fault(frame, "Stack overflow");
+}
+
+interrupt fn on_stack_underflow(frame: *cpu.Frame) {
+    fault(frame, "Stack underflow");
+}
+
+interrupt fn on_division_by_zero(frame: *cpu.Frame) {
+    fault(frame, "Divide overflow");
+}
+
+interrupt fn on_invalid_free(frame: *cpu.Frame) {
+    fault(frame, "Memory control blocks destroyed");
+}
+
+interrupt fn on_allocation_failure(frame: *cpu.Frame) {
+    fault(frame, "Insufficient memory");
+}
+
+interrupt fn on_unaligned_jump(frame: *cpu.Frame) {
+    fault(frame, "Jump to an unaligned address");
+}
+
+interrupt fn on_unexpected_interrupt(frame: *cpu.Frame) {
+    fault(frame, "Unexpected interrupt");
+}
+
+interrupt fn on_io_error(frame: *cpu.Frame) {
+    fault(frame, "I/O error");
+}
+
+interrupt fn on_heap_protection(frame: *cpu.Frame) {
+    fault(frame, "Memory protection violation");
+}
+
+interrupt fn on_page_fault(frame: *cpu.Frame) {
+    fault(frame, "Page fault");
+}
+
+// Ends the running program after a fault, or stops the machine when MiniDos itself caused it
+fn fault(frame: *cpu.Frame, what: []u8) {
+    var buffer: [8]u8;
+    if (!running || (frame.sr & SUPERVISOR) != 0) {
+        console.screen("\nMiniDos stopped: ");
+        console.screen(what);
+        console.screen(" at 0x");
+        console.screen(str.format_hex(frame.pc, buffer));
+        console.screen("\n");
+        cpu.halt();
+    }
+    console.screen(what);
+    console.screen(" at 0x");
+    console.screen(str.format_hex(frame.pc, buffer));
+    console.screen("\n");
+    end(CRASHED);
+}
+
+fn end(status: int) {
+    cpu.leave_user(status as u32);
+}
+
+// Does what the VM's syscall number would, with the registers of the program's frame
+fn serve(frame: *cpu.Frame, number: u32) {
+    var a = frame.r0;
+    var b = frame.r5;
+    var c = frame.r6;
+    frame.r5 = 0;
+    switch (number) {
+        case 0 {
+            console.write_byte(a as u8);
+        }
+        case 1 {
+            console.write_int(a as int);
+        }
+        case 2 {
+            console.write(user_string(a));
+        }
+        case 3 {
+            var byte = console.read_char();
+            frame.r0 = 0;
+            if (byte < 0) {
+                frame.r5 = IO_ERROR;
+            } else {
+                frame.r0 = byte as u32;
+            }
+        }
+        case 4 {
+            read_line(frame, a, b as int);
+        }
+        case 5 {
+            var buffer: [8]u8;
+            console.write("0x");
+            console.write(str.format_hex(a, buffer));
+        }
+        case 6 {
+            write_in_base(a, b);
+        }
+        case 7 {
+            syscall(7, a);
+        }
+        case 8 {
+            console.clear();
+        }
+        case 9 {
+            syscall(9, a);
+        }
+        case 10 {
+            open(frame, a, b as int);
+        }
+        case 11 {
+            var f = file(a);
+            if (f == null || fs.close(f) != fs.Error.NONE) {
+                frame.r5 = IO_ERROR;
+            }
+            if (f != null) {
+                files[a as int - FIRST_HANDLE] = null;
+            }
+        }
+        case 12, 13 {
+            transfer(frame, a, b, c as int, number == 13);
+        }
+        case 14 {
+            var f = file(a);
+            var position = -1;
+            if (f != null) {
+                position = fs.seek(f, b as int, c as int);
+            }
+            frame.r0 = 0;
+            if (position < 0) {
+                frame.r5 = IO_ERROR;
+            } else {
+                frame.r0 = position as u32;
+            }
+        }
+        case 20 {
+            allocate(frame, a);
+        }
+        case 21 {
+            release(frame, a);
+        }
+        case 22 {
+            frame.r0 = 0;
+            if (!usable(a, c as int) || !usable(b, c as int)) {
+                frame.r5 = SEGMENTATION_FAULT;
+            } else {
+                var result = syscall(22, a, b, c);
+                frame.r0 = result.value as u32;
+                frame.r5 = result.status as u32;
+            }
+        }
+        case 23 {
+            machine.memory_info(frame);
+        }
+        case 30 {
+            end(a as int);
+        }
+        case 31 {
+            syscall(31, a);
+        }
+        case 32 {
+            frame.r0 = syscall(32).value as u32;
+        }
+        case 33 {
+            frame.r0 = syscall(33).value as u32;
+        }
+        case 34 {
+            argument(frame, a, b, c as int);
+        }
+        case 35 {
+            console.screen(user_string(a));
+            console.screen("\n");
+            end(ABORTED);
+        }
+        case 40 {
+            frame.r0 = syscall(40, a).value as u32;
+        }
+        case 41 {
+            syscall(41, a);
+            frame.r0 = 0;
+        }
+        default {
+            var digits: [11]u8;
+            console.screen("Invalid system call ");
+            console.screen(str.format_int(number as int, digits));
+            console.screen("\n");
+            end(CRASHED);
+        }
+    }
+}
+
+// How many bytes the program may use from address on: the rest of its part of memory, or of heap
+// memory it allocated. Address 0 counts as none, as Ore cannot point there.
+fn room(address: u32) int {
+    if (address == 0) {
+        return 0;
+    }
+    if (address < LIMIT as u32) {
+        return LIMIT - address as int;
+    }
+    for (var i = 0; i < block_count; i += 1) {
+        var start = blocks[i].address;
+        if (address >= start && address - start < blocks[i].size as u32) {
+            return blocks[i].size - (address - start) as int;
+        }
+    }
+    return 0;
+}
+
+fn usable(address: u32, size: int) bool {
+    return size == 0 || size > 0 && size <= room(address);
+}
+
+fn user_bytes(address: u32, size: int) []u8 {
+    var none: []u8;
+    if (size == 0) {
+        return none;
+    }
+    return mem.bytes(address as *u8, size);
+}
+
+// The NUL-terminated text at address, up to where the program's memory ends
+fn user_string(address: u32) []u8 {
+    var bytes = user_bytes(address, room(address));
+    var end = str.find_byte(bytes, 0);
+    if (end >= 0) {
+        return bytes[:end];
+    }
+    return bytes;
+}
+
+fn write_in_base(value: u32, base: u32) {
+    if (base < 2 || base > 36) {
+        base = 10;
+    }
+    var buffer: [32]u8;
+    var i = buffer.len;
+    for (;;) {
+        i -= 1;
+        buffer[i] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(value % base) as int];
+        value /= base;
+        if (value == 0) {
+            break;
+        }
+    }
+    console.write(buffer[i:]);
+}
+
+fn read_line(frame: *cpu.Frame, address: u32, size: int) {
+    frame.r0 = 0;
+    if (size == 0 || !usable(address, size)) {
+        frame.r5 = SEGMENTATION_FAULT;
+        return;
+    }
+    var buffer = user_bytes(address, size);
+    var text: []u8;
+    if (!console.read_line(buffer, &text)) {
+        buffer[0] = 0;
+        frame.r5 = IO_ERROR;
+        return;
+    }
+    buffer[text.len] = 0;
+    frame.r0 = text.len as u32;
+}
+
+fn file(handle: u32) *fs.File {
+    if (handle < FIRST_HANDLE as u32 || handle >= (FIRST_HANDLE + HANDLES) as u32) {
+        return null;
+    }
+    return files[handle as int - FIRST_HANDLE];
+}
+
+fn open(frame: *cpu.Frame, path: u32, mode: int) {
+    frame.r0 = 0;
+    var slot = 0;
+    while (slot < HANDLES && files[slot] != null) {
+        slot += 1;
+    }
+    var e = fs.Error.NONE;
+    var f: *fs.File = null;
+    if (slot < HANDLES && room(path) > 0) {
+        f = fs.open(user_string(path), mode, &e);
+    }
+    if (f == null) {
+        frame.r5 = IO_ERROR;
+        return;
+    }
+    files[slot] = f;
+    frame.r0 = (FIRST_HANDLE + slot) as u32;
+}
+
+// Reads or writes the console or an open file
+fn transfer(frame: *cpu.Frame, handle: u32, address: u32, count: int, writing: bool) {
+    frame.r0 = 0;
+    if (!usable(address, count)) {
+        frame.r5 = SEGMENTATION_FAULT;
+        return;
+    }
+    var bytes = user_bytes(address, count);
+    var done = -1;
+    if (handle == 0 && !writing) {
+        done = console.read(bytes);
+    } else if (handle == 1 && writing) {
+        console.write(bytes);
+        done = count;
+    } else if (handle == 2 && writing) {
+        console.screen(bytes);
+        done = count;
+    } else if (file(handle) != null && writing) {
+        done = fs.write(file(handle), bytes);
+    } else if (file(handle) != null) {
+        done = fs.read(file(handle), bytes);
+    }
+    if (done < 0) {
+        frame.r5 = IO_ERROR;
+    } else {
+        frame.r0 = done as u32;
+    }
+}
+
+fn allocate(frame: *cpu.Frame, size: u32) {
+    var result = syscall(20, size);
+    frame.r0 = result.value as u32;
+    frame.r5 = result.status as u32;
+    if (result.status != 0 || result.value == 0) {
+        return;
+    }
+    if (block_count == blocks.len) {
+        var larger = new(Block, blocks.len * 2);
+        for (var i = 0; i < block_count; i += 1) {
+            larger[i] = blocks[i];
+        }
+        free(blocks);
+        blocks = larger;
+    }
+    blocks[block_count] = Block { address: result.value as u32, size: size as int };
+    block_count += 1;
+}
+
+fn release(frame: *cpu.Frame, address: u32) {
+    for (var i = 0; i < block_count; i += 1) {
+        if (blocks[i].address == address) {
+            var result = syscall(21, address);
+            frame.r0 = result.value as u32;
+            frame.r5 = result.status as u32;
+            block_count -= 1;
+            blocks[i] = blocks[block_count];
+            return;
+        }
+    }
+    frame.r0 = INVALID_FREE;
+    frame.r5 = INVALID_FREE;
+}
+
+// Copies argument index into the program's buffer, cut to fit, and gives its whole length, or -1
+fn argument(frame: *cpu.Frame, index: u32, address: u32, size: int) {
+    if (index >= arguments.len as u32) {
+        frame.r0 = 0xFFFFFFFF;
+        return;
+    }
+    var text = arguments[index as int];
+    frame.r0 = text.len as u32;
+    if (size == 0) {
+        return;
+    }
+    var copied = text.len;
+    if (copied > size - 1) {
+        copied = size - 1;
+    }
+    if (!usable(address, copied + 1)) {
+        frame.r5 = SEGMENTATION_FAULT;
+        return;
+    }
+    var buffer = user_bytes(address, copied + 1);
+    mem.copy(buffer, text[:copied]);
+    buffer[copied] = 0;
+}
