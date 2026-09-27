@@ -1,48 +1,8 @@
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "buffer.h"
 #include "debug.h"
-
-typedef struct {
-    const uint8_t *ptr;
-    const uint8_t *end;
-    bool ok;
-} Reader;
-
-static uint32_t read_uint(Reader *r, int bytes) {
-    if (!r->ok || r->end - r->ptr < bytes) {
-        r->ok = false;
-        return 0;
-    }
-    uint32_t value = 0;
-    for (int i = 0; i < bytes; i++) {
-        value |= (uint32_t)r->ptr[i] << (8 * i);
-    }
-    r->ptr += bytes;
-    return value;
-}
-
-// Reads a length-prefixed string; empty strings become NULL
-static char *read_string(Reader *r) {
-    uint16_t len = (uint16_t)read_uint(r, 2);
-    if (!r->ok || r->end - r->ptr < len) {
-        r->ok = false;
-        return NULL;
-    }
-    if (len == 0) {
-        return NULL;
-    }
-    char *str = malloc(len + 1u);
-    if (!str) {
-        r->ok = false;
-        return NULL;
-    }
-    memcpy(str, r->ptr, len);
-    str[len] = '\0';
-    r->ptr += len;
-    return str;
-}
 
 DebugInfo *debug_info_parse(const uint8_t *data, uint32_t size) {
     DebugInfo *info = calloc(1, sizeof(DebugInfo));
@@ -50,10 +10,10 @@ DebugInfo *debug_info_parse(const uint8_t *data, uint32_t size) {
         return info;
     }
 
-    Reader r = { data, data + size, true };
+    Reader r = { data, data + size, 1 };
 
     // Entries have a minimum encoded size, which bounds allocations for corrupt counts
-    uint32_t symbol_count = read_uint(&r, 4);
+    uint32_t symbol_count = reader_uint(&r, 4);
     if (!r.ok || symbol_count > size / 13) {
         return info;
     }
@@ -63,11 +23,11 @@ DebugInfo *debug_info_parse(const uint8_t *data, uint32_t size) {
     }
     for (uint32_t i = 0; i < symbol_count; i++) {
         Symbol *sym = &info->symbols[i];
-        sym->name = read_string(&r);
-        sym->address = read_uint(&r, 4);
-        sym->type = (uint8_t)read_uint(&r, 1);
-        sym->line_num = read_uint(&r, 4);
-        sym->source_file = read_string(&r);
+        sym->name = reader_string(&r);
+        sym->address = reader_uint(&r, 4);
+        sym->type = (uint8_t)reader_uint(&r, 1);
+        sym->line_num = reader_uint(&r, 4);
+        sym->source_file = reader_string(&r);
         if (!r.ok || !sym->name) {
             free(sym->name);
             free(sym->source_file);
@@ -76,7 +36,7 @@ DebugInfo *debug_info_parse(const uint8_t *data, uint32_t size) {
         info->symbol_count = i + 1;
     }
 
-    uint32_t line_count = read_uint(&r, 4);
+    uint32_t line_count = reader_uint(&r, 4);
     if (!r.ok || line_count > size / 12) {
         return info;
     }
@@ -86,10 +46,10 @@ DebugInfo *debug_info_parse(const uint8_t *data, uint32_t size) {
     }
     for (uint32_t i = 0; i < line_count; i++) {
         SourceLine *line = &info->source_lines[i];
-        line->address = read_uint(&r, 4);
-        line->line_num = read_uint(&r, 4);
-        line->source = read_string(&r);
-        line->source_file = read_string(&r);
+        line->address = reader_uint(&r, 4);
+        line->line_num = reader_uint(&r, 4);
+        line->source = reader_string(&r);
+        line->source_file = reader_string(&r);
         if (!r.ok) {
             free(line->source);
             free(line->source_file);
