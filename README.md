@@ -764,7 +764,7 @@ Includes and macro definitions are processed even inside a false block. The incl
 
 `-I` and `-D` also accept their value attached, as in `-DNAME`.
 
-`-W` follows values through the registers. For each routine that is called directly, it works out which registers the routine reads, which it changes, and which of those it returns: the ones it changes on every path without only passing them on to another call, and the ones it reads and changes. It then follows the code from every label and warns where a register is read after a call or syscall overwrote a value that nothing had read:
+`-W` follows values through the registers. For each routine that is called directly, it works out which registers the routine reads, which it changes, and which of those it returns: the ones that hold a value it computed on every way out, rather than one it only handed to another call, and the ones it reads and then changes. It then follows the code from every label and warns where a register is read after a call or syscall overwrote a value that nothing had read:
 
 ```console
 $ ./vmasm -W minidos.asm
@@ -971,7 +971,7 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `src/core/` | CPU helpers, instruction execution, memory and heap, syscalls, disassembler, debug info |
 | `src/io/` | The I/O devices: console, timer, display, keyboard and disk |
 | `src/common/` | Instruction table, encoding and binary format, shared with the assembler |
-| `assembler/` | `vmasm`: lexer, expressions, symbols, includes and macros, the two passes, output |
+| `assembler/` | `vmasm`: lexer, expressions, symbols, includes and macros, the two passes, output and the register check |
 | `assembler/examples/` | Example programs |
 | `include/` | Headers |
 | `tests/` | Test programs and the test runner |
