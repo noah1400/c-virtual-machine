@@ -718,6 +718,10 @@ static Type *check_builtin(Checker *c, Expr *e, Builtin builtin) {
         case BUILTIN_PRINT:
             for (int i = 0; i < e->arg_count; i++) {
                 Type *t = settle(c, &e->args[i]);
+                if (t->kind == TY_ARRAY && same_type(t->base, &t_u8)) {
+                    coerce(c, &e->args[i], new_type(TY_SLICE, &t_u8));
+                    t = e->args[i]->type;
+                }
                 if (!is_scalar(t) && !(t->kind == TY_SLICE && same_type(t->base, &t_u8))) {
                     error(c, e->args[i]->line, "print cannot show %s", type_name(t));
                 }

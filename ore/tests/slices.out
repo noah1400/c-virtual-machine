@@ -10,3 +10,4 @@ pointer steps: 4 2 3
 [5 2]
 rows: 7 0 3x4
 empty: 0 ''
+an array of bytes prints as text: ore

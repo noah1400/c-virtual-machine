@@ -73,4 +73,6 @@ fn main() {
     print("rows: ", grid[1][3], " ", grid[0][3], " ", grid.len, "x", grid[0].len, "\n");
     var empty: []u8;
     print("empty: ", empty.len, " '", empty, "'\n");
+    var word = [3]u8 { 'o', 'r', 'e' };
+    print("an array of bytes prints as text: ", word, "\n");
 }
