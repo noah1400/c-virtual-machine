@@ -1,0 +1,53 @@
+// std/io: lines and characters of stdin, files, and whole files
+import "std/io";
+import "std/str";
+
+fn main() {
+    var buffer: [8]u8;
+    var line: []u8;
+    var count = 0;
+    while (io.read_line(buffer, &line)) {
+        count += 1;
+        print(count, ": [", line, "]\n");
+        if (str.equal(line, "stop")) {
+            break;
+        }
+    }
+    var c = io.read_char();
+    print("then the character ", c, ", ");
+    while (io.read_char() >= 0) {
+        count += 1;
+    }
+    print("and after the end ", io.read_char(), "\n");
+
+    var out = str.builder(64);
+    for (var i = 1; i <= 3; i += 1) {
+        str.append(&out, "line ");
+        str.append_int(&out, i);
+        str.append_byte(&out, '\n');
+    }
+    print("written: ", io.write_file("notes.txt", str.text(&out)), "\n");
+    str.release(&out);
+
+    var handle = io.open("notes.txt", io.APPEND);
+    io.write(handle, "appended\n");
+    io.close(handle);
+
+    var text = io.read_file("notes.txt");
+    print(text.len, " bytes read back:\n", text);
+    handle = io.open("notes.txt", io.READ);
+    print("seek to 5 gives ", io.seek(handle, 5, io.START), ", then ");
+    var part: [6]u8;
+    var n = io.read(handle, part);
+    print(n, " bytes: [", part[:n], "], at the end ", io.seek(handle, 0, io.END), "\n");
+    io.close(handle);
+    free(text);
+
+    var missing = io.read_file("no such file");
+    print("a missing file gives a null slice: ", missing.ptr == null, ", open gives ", io.open("no such file", io.READ), "\n");
+    io.print_error("to stderr\n");
+    io.print_char('!');
+    io.print_hex(48879);
+    io.print_char('\n');
+    print("empty file: ", io.write_file("empty.txt", ""), " ", io.read_file("empty.txt").len, "\n");
+}

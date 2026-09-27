@@ -1,0 +1,17 @@
+1: [first]
+2: [second ]
+3: [line]
+4: []
+5: [stop]
+then the character 120, and after the end -1
+written: true
+30 bytes read back:
+line 1
+line 2
+line 3
+appended
+seek to 5 gives 5, then 6 bytes: [1
+line], at the end 30
+a missing file gives a null slice: true, open gives -1
+!0xbeef
+empty file: true 0
