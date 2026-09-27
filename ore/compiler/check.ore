@@ -1,0 +1,1613 @@
+// Resolves the names of a program, checks its types and computes its constants
+import "ast";
+import "lexer";
+import "wide";
+
+// Values larger than this cannot be laid out in the VM's memory anyway
+const MAX_SIZE = 16 * 1024 * 1024;
+
+var t_void = ast.Type { kind: ast.TypeKind.VOID, name: "nothing" };
+var t_bool = ast.Type { kind: ast.TypeKind.BOOL, size: 1, align: 1, name: "bool" };
+var t_i8 = ast.Type { kind: ast.TypeKind.INT, size: 1, align: 1, is_signed: true, name: "i8" };
+var t_i16 = ast.Type { kind: ast.TypeKind.INT, size: 2, align: 2, is_signed: true, name: "i16" };
+var t_i32 = ast.Type { kind: ast.TypeKind.INT, size: 4, align: 4, is_signed: true, name: "int" };
+var t_u8 = ast.Type { kind: ast.TypeKind.INT, size: 1, align: 1, name: "u8" };
+var t_u16 = ast.Type { kind: ast.TypeKind.INT, size: 2, align: 2, name: "u16" };
+var t_u32 = ast.Type { kind: ast.TypeKind.INT, size: 4, align: 4, name: "u32" };
+var t_null = ast.Type { kind: ast.TypeKind.NULL, size: 4, align: 4, name: "null" };
+var t_untyped = ast.Type { kind: ast.TypeKind.UNTYPED, size: 4, align: 4, name: "a number" };
+var syscall_fields = [2]ast.Field {
+    ast.Field { name: "value", type: &t_i32 },
+    ast.Field { name: "status", type: &t_i32, offset: 4 },
+};
+var t_syscall = ast.Type {
+    kind: ast.TypeKind.STRUCT, size: 8, align: 4, name: "SyscallResult", fields: syscall_fields, state: 2,
+};
+
+var universe = [14]ast.Symbol {
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "i8", type: &t_i8 },
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "i16", type: &t_i16 },
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "i32", type: &t_i32 },
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "int", type: &t_i32 },
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "u8", type: &t_u8 },
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "u16", type: &t_u16 },
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "u32", type: &t_u32 },
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "bool", type: &t_bool },
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "SyscallResult", type: &t_syscall },
+    ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "print", builtin: ast.Builtin.PRINT },
+    ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "panic", builtin: ast.Builtin.PANIC },
+    ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "assert", builtin: ast.Builtin.ASSERT },
+    ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "free", builtin: ast.Builtin.FREE },
+    ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "syscall", builtin: ast.Builtin.SYSCALL },
+};
+
+struct Checker {
+    program: *ast.Program;
+    m: *ast.Module;
+    function: *ast.Decl;
+    locals: ast.List;
+    function_start: int;    // the first local of the current function
+    loops: int;
+}
+
+fn error(c: *Checker, line: int, message: []u8) {
+    ast.fail(c.m, line, message);
+}
+
+fn new_type(kind: ast.TypeKind, base: *ast.Type) *ast.Type {
+    var t = ast.allocate(sizeof(ast.Type)) as *ast.Type;
+    t.kind = kind;
+    t.base = base;
+    t.size = 4;
+    if (kind == ast.TypeKind.SLICE) {
+        t.size = 8;
+    }
+    t.align = 4;
+    return t;
+}
+
+pub fn same_type(a: *ast.Type, b: *ast.Type) bool {
+    if (a == b) {
+        return true;
+    }
+    if (a.kind != b.kind) {
+        return false;
+    }
+    switch (a.kind) {
+        case ast.TypeKind.POINTER, ast.TypeKind.SLICE {
+            return same_type(a.base, b.base);
+        }
+        case ast.TypeKind.ARRAY {
+            return a.length == b.length && same_type(a.base, b.base);
+        }
+        case ast.TypeKind.FN {
+            if (a.params.len != b.params.len || a.is_interrupt != b.is_interrupt || !same_type(a.base, b.base)) {
+                return false;
+            }
+            for (var i = 0; i < a.params.len; i += 1) {
+                if (!same_type(a.params[i], b.params[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// Names of types are cut off after 255 bytes
+fn cut(text: []u8) []u8 {
+    if (text.len > 255) {
+        return text[:255];
+    }
+    return text;
+}
+
+pub fn type_name(t: *ast.Type) []u8 {
+    switch (t.kind) {
+        case ast.TypeKind.POINTER {
+            return cut(ast.cat([][]u8 { "*", type_name(t.base) }));
+        }
+        case ast.TypeKind.SLICE {
+            return cut(ast.cat([][]u8 { "[]", type_name(t.base) }));
+        }
+        case ast.TypeKind.ARRAY {
+            return cut(ast.cat([][]u8 { "[", ast.number(t.length), "]", type_name(t.base) }));
+        }
+        case ast.TypeKind.FN {
+            var text = "fn(";
+            for (var i = 0; i < t.params.len && text.len < 256; i += 1) {
+                if (i > 0) {
+                    text = ast.cat([][]u8 { text, ", " });
+                }
+                text = ast.cat([][]u8 { text, type_name(t.params[i]) });
+            }
+            text = ast.cat([][]u8 { text, ")" });
+            if (t.base.kind != ast.TypeKind.VOID) {
+                text = ast.cat([][]u8 { text, " ", type_name(t.base) });
+            }
+            return cut(text);
+        }
+    }
+    return t.name;
+}
+
+pub fn is_scalar(t: *ast.Type) bool {
+    var k = t.kind;
+    return k == ast.TypeKind.BOOL || k == ast.TypeKind.INT || k == ast.TypeKind.POINTER || k == ast.TypeKind.FN ||
+        k == ast.TypeKind.ENUM || k == ast.TypeKind.NULL || k == ast.TypeKind.UNTYPED;
+}
+
+fn is_integer(t: *ast.Type) bool {
+    return t.kind == ast.TypeKind.INT || t.kind == ast.TypeKind.UNTYPED;
+}
+
+// The value a sized integer holds after an operation, as the machine computes it
+fn wrap(value: wide.Wide, t: *ast.Type) wide.Wide {
+    if (t.kind != ast.TypeKind.INT) {
+        return value;
+    }
+    var bits = 32 - 8 * t.size;
+    var low = value.lo << bits;
+    if (t.is_signed) {
+        return wide.of((low as int) >> bits);
+    }
+    return wide.Wide { lo: low >> bits };
+}
+
+// Every value of from is also a value of to
+fn widens(from: *ast.Type, to: *ast.Type) bool {
+    if (from.kind != ast.TypeKind.INT || to.kind != ast.TypeKind.INT || to.size <= from.size) {
+        return false;
+    }
+    return to.is_signed || !from.is_signed;
+}
+
+fn new_expr(kind: ast.ExprKind, line: int) *ast.Expr {
+    var e = ast.allocate(sizeof(ast.Expr)) as *ast.Expr;
+    e.kind = kind;
+    e.line = line;
+    return e;
+}
+
+fn new_symbol() *ast.Symbol {
+    return ast.allocate(sizeof(ast.Symbol)) as *ast.Symbol;
+}
+
+fn layout(c: *Checker, t: *ast.Type, line: int) {
+    if (t.kind == ast.TypeKind.ARRAY) {
+        layout(c, t.base, line);
+        return;
+    }
+    if (t.kind != ast.TypeKind.STRUCT || t.state == 2) {
+        return;
+    }
+    if (t.state == 1) {
+        error(c, line, ast.cat([][]u8 { "struct ", t.name, " contains itself" }));
+    }
+    t.state = 1;
+    var saved = c.m;
+    var saved_locals = c.locals.count;
+    c.m = t.decl.module;
+    c.locals.count = 0;
+    var d = t.decl;
+    var count = d.params.len;
+    t.fields = (ast.allocate(count * sizeof(ast.Field)) as *ast.Field)[:count];
+    for (var i = 0; i < count; i += 1) {
+        var param = d.params[i];
+        for (var k = 0; k < i; k += 1) {
+            if (ast.same(d.params[k].name, param.name)) {
+                error(c, param.line, ast.cat([][]u8 { "field ", param.name, " is declared twice" }));
+            }
+        }
+        t.fields[i] = ast.Field { name: param.name, type: resolve_type(c, param.type_expr), line: param.line };
+    }
+    var offset = 0;
+    var align = 1;
+    for (var i = 0; i < count; i += 1) {
+        var f = &t.fields[i];
+        layout(c, f.type, f.line);
+        if (f.type.kind == ast.TypeKind.VOID) {
+            error(c, f.line, ast.cat([][]u8 { "a field cannot have the type ", type_name(f.type) }));
+        }
+        offset = (offset + f.type.align - 1) / f.type.align * f.type.align;
+        f.offset = offset;
+        offset += f.type.size;
+        if (f.type.align > align) {
+            align = f.type.align;
+        }
+        if (offset > MAX_SIZE) {
+            error(c, f.line, ast.cat([][]u8 { "struct ", t.name, " is too large" }));
+        }
+    }
+    c.m = saved;
+    c.locals.count = saved_locals;
+    t.align = align;
+    t.size = (offset + align - 1) / align * align;
+    t.state = 2;
+}
+
+fn find_local(c: *Checker, from: int, name: []u8) *ast.Symbol {
+    for (var i = c.locals.count - 1; i >= from; i -= 1) {
+        var s = c.locals.items[i] as *ast.Symbol;
+        if (ast.same(s.name, name)) {
+            return s;
+        }
+    }
+    return null;
+}
+
+fn find(m: *ast.Module, name: []u8) *ast.Symbol {
+    return ast.get(&m.symbols, name) as *ast.Symbol;
+}
+
+fn find_universe(name: []u8) *ast.Symbol {
+    for (var i = 0; i < universe.len; i += 1) {
+        if (ast.same(universe[i].name, name)) {
+            return &universe[i];
+        }
+    }
+    return null;
+}
+
+fn lookup(c: *Checker, name: []u8) *ast.Symbol {
+    var s = find_local(c, 0, name);
+    if (s == null) {
+        s = find(c.m, name);
+    }
+    if (s == null) {
+        s = find_universe(name);
+    }
+    return s;
+}
+
+fn member(c: *Checker, m: *ast.Module, name: []u8, line: int) *ast.Symbol {
+    var s = find(m, name);
+    if (s == null || s.kind == ast.SymbolKind.MODULE) {
+        error(c, line, ast.cat([][]u8 { "module ", m.name, " has no ", name }));
+    }
+    if (m != c.m && !s.decl.is_pub) {
+        error(c, line, ast.cat([][]u8 { m.name, ".", name, " is not pub" }));
+    }
+    return s;
+}
+
+fn type_symbol(c: *Checker, t: *ast.TypeExpr) *ast.Symbol {
+    var s: *ast.Symbol;
+    if (t.qualifier.len > 0) {
+        s = lookup(c, t.qualifier);
+        if (s == null || s.kind != ast.SymbolKind.MODULE) {
+            error(c, t.line, ast.cat([][]u8 { t.qualifier, " is not a module" }));
+        }
+        s = member(c, s.module, t.name, t.line);
+    } else {
+        s = lookup(c, t.name);
+    }
+    if (s == null && ast.same(t.name, "f32")) {
+        error(c, t.line, "f32 is not supported yet");
+    }
+    if (s == null || s.kind != ast.SymbolKind.TYPE) {
+        error(c, t.line, ast.cat([][]u8 { t.name, " is not a type" }));
+    }
+    return s;
+}
+
+fn constant_int(c: *Checker, e: *ast.Expr, what: []u8) wide.Wide {
+    var t = check_expr(c, e);
+    if (!e.is_const || !is_integer(t)) {
+        error(c, e.line, ast.cat([][]u8 { what, " must be an integer constant" }));
+    }
+    return e.value;
+}
+
+fn resolve_type(c: *Checker, te: *ast.TypeExpr) *ast.Type {
+    var t: *ast.Type;
+    switch (te.kind) {
+        case ast.TypeExprKind.NAME {
+            return type_symbol(c, te).type;
+        }
+        case ast.TypeExprKind.POINTER {
+            return new_type(ast.TypeKind.POINTER, resolve_type(c, te.base));
+        }
+        case ast.TypeExprKind.SLICE {
+            t = new_type(ast.TypeKind.SLICE, resolve_type(c, te.base));
+            if (t.base.kind == ast.TypeKind.VOID) {
+                error(c, te.line, ast.cat([][]u8 { "a slice cannot hold ", type_name(t.base) }));
+            }
+            return t;
+        }
+        case ast.TypeExprKind.ARRAY {
+            var length = constant_int(c, te.length, "the length of an array");
+            t = new_type(ast.TypeKind.ARRAY, resolve_type(c, te.base));
+            layout(c, t.base, te.line);
+            if (length.hi < 0 || t.base.size != 0 && wide.less(wide.of(MAX_SIZE / t.base.size), length)) {
+                error(c, te.line, ast.cat([][]u8 { "invalid length ", wide.text(length), " for an array" }));
+            }
+            t.length = wide.low(length);
+            t.size = t.length * t.base.size;
+            t.align = t.base.align;
+            return t;
+        }
+    }
+    var result = &t_void;
+    if (te.base != null) {
+        result = resolve_type(c, te.base);
+    }
+    t = new_type(ast.TypeKind.FN, result);
+    var count = te.params.len;
+    t.params = (ast.allocate(count * 4) as **ast.Type)[:count];
+    for (var i = 0; i < count; i += 1) {
+        t.params[i] = resolve_type(c, te.params[i]);
+    }
+    return t;
+}
+
+// A type that a variable, field or parameter can have
+fn value_type(c: *Checker, te: *ast.TypeExpr) *ast.Type {
+    var t = resolve_type(c, te);
+    layout(c, t, te.line);
+    if (t.kind == ast.TypeKind.VOID) {
+        error(c, te.line, ast.cat([][]u8 { type_name(t), " is not a type for values" }));
+    }
+    return t;
+}
+
+// Where a value meets another type: untyped constants take it if they fit, and only conversions that
+// lose nothing happen by themselves
+fn coerce(c: *Checker, slot: **ast.Expr, to: *ast.Type) {
+    var e = *slot;
+    var from = e.type;
+
+    if (same_type(from, to)) {
+        return;
+    }
+    if (from.kind == ast.TypeKind.UNTYPED && to.kind == ast.TypeKind.INT) {
+        if (!wide.equal(wrap(e.value, to), e.value)) {
+            error(c, e.line, ast.cat([][]u8 { wide.text(e.value), " does not fit in ", type_name(to) }));
+        }
+        e.type = to;
+        return;
+    }
+    if (from.kind == ast.TypeKind.NULL && (to.kind == ast.TypeKind.POINTER || to.kind == ast.TypeKind.FN)) {
+        e.type = to;
+        return;
+    }
+    if (widens(from, to) ||
+        from.kind == ast.TypeKind.ARRAY && to.kind == ast.TypeKind.SLICE && same_type(from.base, to.base)) {
+        if (e.is_const) {
+            e.type = to;
+            return;
+        }
+        var conversion = new_expr(ast.ExprKind.CONVERT, e.line);
+        conversion.left = e;
+        conversion.type = to;
+        *slot = conversion;
+        return;
+    }
+    error(c, e.line, ast.cat([][]u8 { "expected ", type_name(to), ", found ", type_name(from) }));
+}
+
+// Untyped constants become int where nothing else decides their type
+fn settle(c: *Checker, slot: **ast.Expr) *ast.Type {
+    if ((*slot).type.kind == ast.TypeKind.UNTYPED) {
+        coerce(c, slot, &t_i32);
+    }
+    return (*slot).type;
+}
+
+fn addressable(e: *ast.Expr) bool {
+    switch (e.kind) {
+        case ast.ExprKind.NAME {
+            return e.symbol.kind == ast.SymbolKind.LOCAL || e.symbol.kind == ast.SymbolKind.GLOBAL;
+        }
+        case ast.ExprKind.INDEX {
+            return e.left.type.kind != ast.TypeKind.ARRAY || addressable(e.left);
+        }
+        case ast.ExprKind.FIELD {
+            return e.left.type.kind == ast.TypeKind.POINTER || addressable(e.left);
+        }
+        case ast.ExprKind.UNARY {
+            return e.op == ast.TokenKind.STAR;
+        }
+    }
+    return false;
+}
+
+fn declare_local(c: *Checker, s: *ast.Symbol) {
+    var old = find_local(c, c.function_start, s.name);
+    if (old != null) {
+        error(c, s.line, ast.cat([][]u8 { s.name, " is already declared at line ", ast.number(old.line) }));
+    }
+    if (ast.same(s.name, "new") || ast.same(s.name, "sizeof")) {
+        error(c, s.line, ast.cat([][]u8 { s.name, " is a builtin" }));
+    }
+    ast.add(&c.locals, s as *u8);
+}
+
+fn fold_binary(c: *Checker, e: *ast.Expr, a: wide.Wide, b: wide.Wide, t: *ast.Type) wide.Wide {
+    var result = wide.Wide {};
+    var untyped = t.kind == ast.TypeKind.UNTYPED;
+    var overflow = false;
+
+    switch (e.op) {
+        case ast.TokenKind.PLUS {
+            result = wide.add(a, b, &overflow);
+        }
+        case ast.TokenKind.MINUS {
+            result = wide.sub(a, b, &overflow);
+        }
+        case ast.TokenKind.STAR {
+            result = wide.mul(a, b, &overflow);
+        }
+        case ast.TokenKind.SLASH, ast.TokenKind.PERCENT {
+            if (wide.is_zero(b)) {
+                error(c, e.line, "division by zero");
+            }
+            var minus_one = wide.equal(b, wide.of(-1));
+            if (untyped && minus_one && a.hi == -2147483648 && a.lo == 0 ||
+                !untyped && t.is_signed && t.size == 4 && minus_one && wide.equal(a, wide.of(-2147483648))) {
+                error(c, e.line, "the division overflows");
+            }
+            if (e.op == ast.TokenKind.SLASH) {
+                result = wide.div(a, b);
+            } else {
+                result = wide.rem(a, b);
+            }
+        }
+        case ast.TokenKind.SHL {
+            if (untyped) {
+                var count = b.lo as int;
+                if (b.hi < 0 || wide.less(wide.of(62), b) ||
+                    wide.less(wide.sar(wide.Wide { lo: 0xFFFFFFFF, hi: 0x7FFFFFFF }, count), a) ||
+                    wide.less(a, wide.sar(wide.Wide { hi: -2147483648 }, count))) {
+                    error(c, e.line, "the shift overflows");
+                }
+                result = wide.shl(a, count);
+            } else {
+                result = wide.shl(a, (b.lo & 31) as int);
+            }
+        }
+        case ast.TokenKind.SHR {
+            if (untyped) {
+                if (b.hi < 0 || wide.less(wide.of(63), b)) {
+                    error(c, e.line, ast.cat([][]u8 { "invalid shift count ", wide.text(b) }));
+                }
+                result = wide.sar(a, b.lo as int);
+            } else if (t.is_signed) {
+                result = wide.sar(a, (b.lo & 31) as int);
+            } else {
+                result = wide.shr(a, (b.lo & 31) as int);
+            }
+        }
+        case ast.TokenKind.AMP {
+            result = wide.and(a, b);
+        }
+        case ast.TokenKind.PIPE {
+            result = wide.or(a, b);
+        }
+        case ast.TokenKind.CARET {
+            result = wide.xor(a, b);
+        }
+        case ast.TokenKind.EQ {
+            return wide.of_bool(wide.equal(a, b));
+        }
+        case ast.TokenKind.NE {
+            return wide.of_bool(!wide.equal(a, b));
+        }
+        case ast.TokenKind.LT {
+            return wide.of_bool(wide.less(a, b));
+        }
+        case ast.TokenKind.LE {
+            return wide.of_bool(!wide.less(b, a));
+        }
+        case ast.TokenKind.GT {
+            return wide.of_bool(wide.less(b, a));
+        }
+        case ast.TokenKind.GE {
+            return wide.of_bool(!wide.less(a, b));
+        }
+        case ast.TokenKind.ANDAND {
+            return wide.of_bool(!wide.is_zero(a) && !wide.is_zero(b));
+        }
+        case ast.TokenKind.OROR {
+            return wide.of_bool(!wide.is_zero(a) || !wide.is_zero(b));
+        }
+    }
+    if (untyped && overflow) {
+        error(c, e.line, "the constant overflows");
+    }
+    return wrap(result, t);
+}
+
+// Gives both operands one type: an untyped constant takes the other's type, and a smaller integer type
+// widens to a larger one that holds all of its values
+fn unify(c: *Checker, e: *ast.Expr) *ast.Type {
+    var l = e.left.type;
+    var r = e.right.type;
+    if (l.kind == ast.TypeKind.UNTYPED && r.kind == ast.TypeKind.UNTYPED) {
+        return l;
+    }
+    if (l.kind == ast.TypeKind.UNTYPED || l.kind == ast.TypeKind.NULL || widens(l, r)) {
+        coerce(c, &e.left, r);
+        return r;
+    }
+    if (r.kind == ast.TypeKind.UNTYPED || r.kind == ast.TypeKind.NULL || widens(r, l)) {
+        coerce(c, &e.right, l);
+        return l;
+    }
+    if (!same_type(l, r)) {
+        error(c, e.line, ast.cat([][]u8 { "mismatched types ", type_name(l), " and ", type_name(r) }));
+    }
+    return l;
+}
+
+// The operator's rules, once both operands are checked
+fn binary_type(c: *Checker, e: *ast.Expr) *ast.Type {
+    var l = e.left.type;
+    var r = e.right.type;
+    var t: *ast.Type;
+
+    switch (e.op) {
+        case ast.TokenKind.ANDAND, ast.TokenKind.OROR {
+            coerce(c, &e.left, &t_bool);
+            coerce(c, &e.right, &t_bool);
+            t = &t_bool;
+        }
+        case ast.TokenKind.EQ, ast.TokenKind.NE, ast.TokenKind.LT, ast.TokenKind.LE, ast.TokenKind.GT,
+             ast.TokenKind.GE {
+            t = unify(c, e);
+            if (t.kind == ast.TypeKind.NULL) {
+                error(c, e.line, "cannot compare null with null");
+            }
+            if (!is_scalar(t)) {
+                error(c, e.line, ast.cat([][]u8 {
+                    type_name(t), " values cannot be compared; the standard library compares their contents",
+                }));
+            }
+            if (e.op != ast.TokenKind.EQ && e.op != ast.TokenKind.NE && t.kind != ast.TypeKind.INT &&
+                t.kind != ast.TypeKind.UNTYPED && t.kind != ast.TypeKind.POINTER) {
+                error(c, e.line, ast.cat([][]u8 { type_name(t), " values only compare with == and !=" }));
+            }
+            if (e.left.is_const && e.right.is_const) {
+                e.value = fold_binary(c, e, e.left.value, e.right.value, t);
+                e.is_const = true;
+            }
+            e.type = &t_bool;
+            return e.type;
+        }
+        case ast.TokenKind.SHL, ast.TokenKind.SHR {
+            if (!is_integer(l) || !is_integer(r)) {
+                error(c, e.line, ast.cat([][]u8 { "shifts take integers, not ", type_name(l), " and ", type_name(r) }));
+            }
+            if (!e.right.is_const) {
+                settle(c, &e.right);
+            }
+            t = l;
+            if (l.kind == ast.TypeKind.UNTYPED && !e.right.is_const) {
+                t = settle(c, &e.left);
+            }
+        }
+        default {
+            if (l.kind == ast.TypeKind.POINTER && (e.op == ast.TokenKind.PLUS ||
+                e.op == ast.TokenKind.MINUS && r.kind != ast.TypeKind.POINTER)) {
+                coerce(c, &e.right, &t_i32);
+                e.type = l;
+                return e.type;
+            }
+            if (l.kind == ast.TypeKind.POINTER && e.op == ast.TokenKind.MINUS) {
+                if (!same_type(l, r)) {
+                    error(c, e.line, ast.cat([][]u8 { "mismatched types ", type_name(l), " and ", type_name(r) }));
+                }
+                e.type = &t_i32;
+                return e.type;
+            }
+            t = unify(c, e);
+            if (!is_integer(t)) {
+                error(c, e.line, ast.cat([][]u8 { lexer.token_text(e.op), " needs integers, not ", type_name(t) }));
+            }
+        }
+    }
+    if (e.left.is_const && e.right.is_const) {
+        e.value = fold_binary(c, e, e.left.value, e.right.value, t);
+        e.is_const = true;
+    }
+    e.type = t;
+    return t;
+}
+
+fn check_binary(c: *Checker, e: *ast.Expr) *ast.Type {
+    check_expr(c, e.left);
+    check_expr(c, e.right);
+    return binary_type(c, e);
+}
+
+fn check_unary(c: *Checker, e: *ast.Expr) *ast.Type {
+    var t = check_expr(c, e.left);
+    switch (e.op) {
+        case ast.TokenKind.MINUS, ast.TokenKind.TILDE {
+            if (!is_integer(t)) {
+                error(c, e.line, ast.cat([][]u8 { lexer.token_text(e.op), " needs an integer, not ", type_name(t) }));
+            }
+            if (e.left.is_const) {
+                var v = e.left.value;
+                if (e.op == ast.TokenKind.MINUS) {
+                    if (t.kind == ast.TypeKind.UNTYPED && v.hi == -2147483648 && v.lo == 0) {
+                        error(c, e.line, "the constant overflows");
+                    }
+                    e.value = wrap(wide.negate(v), t);
+                } else {
+                    e.value = wrap(wide.not(v), t);
+                }
+                e.is_const = true;
+            }
+            e.type = t;
+        }
+        case ast.TokenKind.BANG {
+            coerce(c, &e.left, &t_bool);
+            if (e.left.is_const) {
+                e.value = wide.of_bool(wide.is_zero(e.left.value));
+                e.is_const = true;
+            }
+            e.type = &t_bool;
+        }
+        case ast.TokenKind.STAR {
+            if (t.kind != ast.TypeKind.POINTER) {
+                error(c, e.line, ast.cat([][]u8 { "only pointers can be dereferenced, not ", type_name(t) }));
+            }
+            layout(c, t.base, e.line);
+            if (t.base.kind == ast.TypeKind.VOID) {
+                error(c, e.line, ast.cat([][]u8 { "cannot dereference ", type_name(t) }));
+            }
+            e.type = t.base;
+        }
+        default {
+            if (!addressable(e.left)) {
+                error(c, e.line, "cannot take the address of this");
+            }
+            e.type = new_type(ast.TypeKind.POINTER, t);
+        }
+    }
+    return e.type;
+}
+
+// A name or module.name that refers to a module, a type or anything declared
+fn named(c: *Checker, e: *ast.Expr) *ast.Symbol {
+    if (e.kind == ast.ExprKind.NAME) {
+        return lookup(c, e.name);
+    }
+    if (e.kind == ast.ExprKind.FIELD && e.left.kind == ast.ExprKind.NAME) {
+        var s = lookup(c, e.left.name);
+        if (s != null && s.kind == ast.SymbolKind.MODULE) {
+            return member(c, s.module, e.name, e.line);
+        }
+    }
+    return null;
+}
+
+fn use_symbol(c: *Checker, e: *ast.Expr, s: *ast.Symbol) *ast.Type {
+    e.kind = ast.ExprKind.NAME;
+    e.symbol = s;
+    switch (s.kind) {
+        case ast.SymbolKind.CONST {
+            if (s.decl != null) {
+                check_const(c, s.decl);
+            }
+            e.is_const = s.string == null;
+            e.value = s.value;
+        }
+        case ast.SymbolKind.TYPE {
+            error(c, e.line, ast.cat([][]u8 { s.name, " is a type, not a value" }));
+        }
+        case ast.SymbolKind.MODULE {
+            error(c, e.line, ast.cat([][]u8 { s.name, " is a module, not a value" }));
+        }
+        case ast.SymbolKind.BUILTIN {
+            error(c, e.line, ast.cat([][]u8 { s.name, " can only be called" }));
+        }
+    }
+    e.type = s.type;
+    return e.type;
+}
+
+fn check_field(c: *Checker, e: *ast.Expr) *ast.Type {
+    var s = named(c, e.left);
+    if (s != null && s.kind == ast.SymbolKind.MODULE) {
+        return use_symbol(c, e, member(c, s.module, e.name, e.line));
+    }
+    if (s != null && s.kind == ast.SymbolKind.TYPE) {
+        var enum_type = s.type;
+        if (enum_type.kind != ast.TypeKind.ENUM) {
+            error(c, e.line, ast.cat([][]u8 { type_name(enum_type), " is a type, not a value" }));
+        }
+        var members = enum_type.decl.members;
+        for (var i = 0; i < members.len; i += 1) {
+            if (ast.same(members[i].name, e.name)) {
+                e.is_const = true;
+                e.value = members[i].number;
+                e.type = enum_type;
+                return e.type;
+            }
+        }
+        error(c, e.line, ast.cat([][]u8 { "enum ", enum_type.name, " has no value ", e.name }));
+    }
+
+    var t = check_expr(c, e.left);
+    if (t.kind == ast.TypeKind.POINTER && t.base.kind == ast.TypeKind.STRUCT) {
+        t = t.base;
+    }
+    if (t.kind == ast.TypeKind.STRUCT) {
+        layout(c, t, e.line);
+        for (var i = 0; i < t.fields.len; i += 1) {
+            if (ast.same(t.fields[i].name, e.name)) {
+                e.field = &t.fields[i];
+                e.type = e.field.type;
+                return e.type;
+            }
+        }
+    } else if (t.kind == ast.TypeKind.SLICE && ast.same(e.name, "len")) {
+        e.kind = ast.ExprKind.LEN;
+        e.type = &t_i32;
+        return e.type;
+    } else if (t.kind == ast.TypeKind.SLICE && ast.same(e.name, "ptr")) {
+        e.kind = ast.ExprKind.PTR;
+        e.type = new_type(ast.TypeKind.POINTER, t.base);
+        return e.type;
+    } else if (t.kind == ast.TypeKind.ARRAY && ast.same(e.name, "len")) {
+        e.is_const = true;
+        e.value = wide.of(t.length);
+        e.type = &t_untyped;
+        return e.type;
+    }
+    error(c, e.line, ast.cat([][]u8 { type_name(t), " has no field ", e.name }));
+    return null;
+}
+
+fn check_args(c: *Checker, e: *ast.Expr, function: *ast.Type) {
+    if (e.args.len != function.params.len) {
+        var plural = "s";
+        if (function.params.len == 1) {
+            plural = "";
+        }
+        error(c, e.line, ast.cat([][]u8 {
+            "the function takes ", ast.number(function.params.len), " argument", plural, ", not ", ast.number(e.args.len),
+        }));
+    }
+    for (var i = 0; i < e.args.len; i += 1) {
+        check_expr(c, e.args[i]);
+        coerce(c, &e.args[i], function.params[i]);
+    }
+}
+
+fn check_builtin(c: *Checker, e: *ast.Expr, builtin: ast.Builtin) *ast.Type {
+    e.builtin = builtin;
+    for (var i = 0; i < e.args.len; i += 1) {
+        check_expr(c, e.args[i]);
+    }
+    switch (builtin) {
+        case ast.Builtin.PRINT {
+            for (var i = 0; i < e.args.len; i += 1) {
+                var t = settle(c, &e.args[i]);
+                if (t.kind == ast.TypeKind.ARRAY && same_type(t.base, &t_u8)) {
+                    coerce(c, &e.args[i], new_type(ast.TypeKind.SLICE, &t_u8));
+                    t = e.args[i].type;
+                }
+                if (!is_scalar(t) && !(t.kind == ast.TypeKind.SLICE && same_type(t.base, &t_u8))) {
+                    error(c, e.args[i].line, ast.cat([][]u8 { "print cannot show ", type_name(t) }));
+                }
+                if (t.kind == ast.TypeKind.NULL) {
+                    error(c, e.args[i].line, "print cannot show null");
+                }
+            }
+        }
+        case ast.Builtin.PANIC, ast.Builtin.ASSERT, ast.Builtin.FREE {
+            if (e.args.len != 1) {
+                error(c, e.line, ast.cat([][]u8 { e.left.name, " takes one argument" }));
+            }
+            var k = e.args[0].type.kind;
+            if (builtin == ast.Builtin.PANIC) {
+                coerce(c, &e.args[0], new_type(ast.TypeKind.SLICE, &t_u8));
+            } else if (builtin == ast.Builtin.ASSERT) {
+                coerce(c, &e.args[0], &t_bool);
+            } else if (k != ast.TypeKind.POINTER && k != ast.TypeKind.SLICE) {
+                error(c, e.line, ast.cat([][]u8 {
+                    "free takes a pointer or a slice from new, not ", type_name(e.args[0].type),
+                }));
+            }
+        }
+        case ast.Builtin.SYSCALL {
+            if (e.args.len < 1 || e.args.len > 4) {
+                error(c, e.line, "syscall takes a syscall number and up to three values");
+            }
+            var number = e.args[0];
+            if (!number.is_const || !is_integer(number.type) || number.value.hi != 0 || number.value.lo > 255) {
+                error(c, e.line, "the syscall number must be a constant from 0 to 255");
+            }
+            for (var i = 1; i < e.args.len; i += 1) {
+                var t = settle(c, &e.args[i]);
+                if (t.kind != ast.TypeKind.INT && t.kind != ast.TypeKind.POINTER && t.kind != ast.TypeKind.BOOL &&
+                    t.kind != ast.TypeKind.ENUM) {
+                    error(c, e.args[i].line, ast.cat([][]u8 { "syscall takes integers and pointers, not ", type_name(t) }));
+                }
+            }
+            e.type = &t_syscall;
+            return e.type;
+        }
+    }
+    e.type = &t_void;
+    return e.type;
+}
+
+fn check_call(c: *Checker, e: *ast.Expr) *ast.Type {
+    var s = named(c, e.left);
+    if (s != null && s.kind == ast.SymbolKind.BUILTIN) {
+        e.left.symbol = s;
+        return check_builtin(c, e, s.builtin);
+    }
+    var t = check_expr(c, e.left);
+    if (t.kind != ast.TypeKind.FN) {
+        error(c, e.line, ast.cat([][]u8 { type_name(t), " is not a function" }));
+    }
+    if (t.is_interrupt) {
+        error(c, e.line, "an interrupt function cannot be called");
+    }
+    check_args(c, e, t);
+    e.type = t.base;
+    return e.type;
+}
+
+fn check_index(c: *Checker, e: *ast.Expr) *ast.Type {
+    var t = check_expr(c, e.left);
+    if (t.kind != ast.TypeKind.ARRAY && t.kind != ast.TypeKind.SLICE && t.kind != ast.TypeKind.POINTER) {
+        error(c, e.line, ast.cat([][]u8 { "only arrays, slices and pointers can be indexed, not ", type_name(t) }));
+    }
+    if (e.right != null) {
+        check_expr(c, e.right);
+        coerce(c, &e.right, &t_i32);
+    }
+    if (e.third != null) {
+        check_expr(c, e.third);
+        coerce(c, &e.third, &t_i32);
+    }
+    var start = wide.of(0);
+    if (e.right != null && e.right.is_const) {
+        start = e.right.value;
+    }
+    var end = wide.of(t.length);
+    if (e.third != null && e.third.is_const) {
+        end = e.third.value;
+    }
+    var length = wide.of(t.length);
+    if (t.kind == ast.TypeKind.ARRAY && e.kind == ast.ExprKind.INDEX && e.right.is_const &&
+        (start.hi < 0 || !wide.less(start, length))) {
+        error(c, e.line, ast.cat([][]u8 {
+            "index ", wide.text(start), " is out of bounds for length ", ast.number(t.length),
+        }));
+    }
+    if (e.kind == ast.ExprKind.INDEX) {
+        layout(c, t.base, e.line);
+        e.type = t.base;
+        return e.type;
+    }
+    if (t.kind == ast.TypeKind.POINTER && e.third == null) {
+        error(c, e.line, "slicing a pointer needs an end");
+    }
+    if (t.kind == ast.TypeKind.ARRAY) {
+        if (!addressable(e.left)) {
+            error(c, e.line, "only an array stored in a variable can be sliced");
+        }
+        if ((e.right == null || e.right.is_const) && (e.third == null || e.third.is_const) &&
+            (start.hi < 0 || wide.less(end, start) || wide.less(length, end))) {
+            error(c, e.line, ast.cat([][]u8 {
+                "slice ", wide.text(start), ":", wide.text(end), " is out of bounds for length ", ast.number(t.length),
+            }));
+        }
+    }
+    e.type = new_type(ast.TypeKind.SLICE, t.base);
+    return e.type;
+}
+
+fn check_cast(c: *Checker, e: *ast.Expr) *ast.Type {
+    var from = check_expr(c, e.left);
+    var to = value_type(c, e.type_expr);
+    e.named = to;
+    var ok = same_type(from, to);
+
+    if (is_integer(from) && to.kind == ast.TypeKind.INT) {
+        ok = true;
+        if (e.left.is_const) {
+            e.is_const = true;
+            e.value = wrap(e.left.value, to);
+        }
+    } else if ((from.kind == ast.TypeKind.BOOL || from.kind == ast.TypeKind.ENUM) && to.kind == ast.TypeKind.INT) {
+        ok = true;
+        e.is_const = e.left.is_const;
+        e.value = wrap(e.left.value, to);
+    } else if (is_integer(from) && to.kind == ast.TypeKind.ENUM) {
+        ok = true;
+        settle(c, &e.left);
+        e.is_const = e.left.is_const;
+        e.value = e.left.value;
+    } else if ((from.kind == ast.TypeKind.POINTER || from.kind == ast.TypeKind.FN) && to.kind == ast.TypeKind.INT &&
+               to.size == 4) {
+        ok = true;
+    } else if (is_integer(from) && to.kind == ast.TypeKind.POINTER) {
+        ok = true;
+        settle(c, &e.left);
+    } else if ((from.kind == ast.TypeKind.POINTER || from.kind == ast.TypeKind.NULL) &&
+               to.kind == ast.TypeKind.POINTER) {
+        ok = true;
+    }
+    if (!ok) {
+        error(c, e.line, ast.cat([][]u8 { "cannot convert ", type_name(from), " to ", type_name(to) }));
+    }
+    e.type = to;
+    return to;
+}
+
+fn check_literal(c: *Checker, e: *ast.Expr) *ast.Type {
+    var t: *ast.Type;
+    if (e.kind == ast.ExprKind.STRUCT) {
+        t = type_symbol(c, e.type_expr).type;
+        e.named = t;
+        if (t.kind != ast.TypeKind.STRUCT) {
+            error(c, e.line, ast.cat([][]u8 { type_name(t), " is not a struct" }));
+        }
+        layout(c, t, e.line);
+        for (var i = 0; i < e.args.len; i += 1) {
+            var found = -1;
+            for (var k = 0; k < t.fields.len; k += 1) {
+                if (ast.same(t.fields[k].name, e.fields[i])) {
+                    found = k;
+                }
+            }
+            if (found < 0) {
+                error(c, e.args[i].line, ast.cat([][]u8 { t.name, " has no field ", e.fields[i] }));
+            }
+            for (var k = 0; k < i; k += 1) {
+                if (ast.same(e.fields[k], e.fields[i])) {
+                    error(c, e.args[i].line, ast.cat([][]u8 { "field ", e.fields[i], " is given twice" }));
+                }
+            }
+            check_expr(c, e.args[i]);
+            coerce(c, &e.args[i], t.fields[found].type);
+        }
+        e.type = t;
+        return t;
+    }
+
+    t = value_type(c, e.type_expr);
+    e.named = t;
+    if (t.kind != ast.TypeKind.ARRAY && t.kind != ast.TypeKind.SLICE) {
+        error(c, e.line, ast.cat([][]u8 { type_name(t), " is not an array or slice" }));
+    }
+    if (t.kind == ast.TypeKind.ARRAY && e.args.len > t.length) {
+        error(c, e.line, ast.cat([][]u8 { ast.number(e.args.len), " values do not fit in ", type_name(t) }));
+    }
+    layout(c, t.base, e.line);
+    for (var i = 0; i < e.args.len; i += 1) {
+        check_expr(c, e.args[i]);
+        coerce(c, &e.args[i], t.base);
+    }
+    e.type = t;
+    return t;
+}
+
+fn check_expr(c: *Checker, e: *ast.Expr) *ast.Type {
+    switch (e.kind) {
+        case ast.ExprKind.NAME {
+            var s = lookup(c, e.name);
+            if (s == null) {
+                if (ast.same(e.name, "new") || ast.same(e.name, "sizeof")) {
+                    error(c, e.line, ast.cat([][]u8 { e.name, " can only be called" }));
+                }
+                error(c, e.line, ast.cat([][]u8 { e.name, " is not declared" }));
+            }
+            return use_symbol(c, e, s);
+        }
+        case ast.ExprKind.FIELD {
+            return check_field(c, e);
+        }
+        case ast.ExprKind.CALL {
+            return check_call(c, e);
+        }
+        case ast.ExprKind.BINARY {
+            return check_binary(c, e);
+        }
+        case ast.ExprKind.INT {
+            e.is_const = true;
+            e.type = &t_untyped;
+        }
+        case ast.ExprKind.INDEX, ast.ExprKind.SLICE {
+            return check_index(c, e);
+        }
+        case ast.ExprKind.UNARY {
+            return check_unary(c, e);
+        }
+        case ast.ExprKind.STRING {
+            e.type = new_type(ast.TypeKind.SLICE, &t_u8);
+        }
+        case ast.ExprKind.CAST {
+            return check_cast(c, e);
+        }
+        case ast.ExprKind.BOOL {
+            e.is_const = true;
+            e.type = &t_bool;
+        }
+        case ast.ExprKind.NULL {
+            e.type = &t_null;
+        }
+        case ast.ExprKind.STRUCT, ast.ExprKind.ARRAY {
+            return check_literal(c, e);
+        }
+        case ast.ExprKind.SIZEOF {
+            var t = value_type(c, e.type_expr);
+            e.is_const = true;
+            e.value = wide.of(t.size);
+            e.type = &t_untyped;
+        }
+        case ast.ExprKind.NEW {
+            e.named = value_type(c, e.type_expr);
+            if (e.left != null) {
+                check_expr(c, e.left);
+                coerce(c, &e.left, &t_i32);
+                e.type = new_type(ast.TypeKind.SLICE, e.named);
+            } else {
+                e.type = new_type(ast.TypeKind.POINTER, e.named);
+            }
+        }
+    }
+    return e.type;
+}
+
+// The type a variable takes from its initial value
+fn infer(c: *Checker, slot: **ast.Expr, line: int) *ast.Type {
+    var t = settle(c, slot);
+    if (t.kind == ast.TypeKind.NULL) {
+        error(c, line, "the type of null has to be written out");
+    }
+    if (t.kind == ast.TypeKind.VOID) {
+        error(c, line, "this has no value");
+    }
+    if (t.kind == ast.TypeKind.FN && t.is_interrupt) {
+        error(c, line, "an interrupt function can only be converted to u32");
+    }
+    return t;
+}
+
+fn check_block(c: *Checker, s: *ast.Stmt) {
+    var saved = c.locals.count;
+    for (var i = 0; i < s.body.len; i += 1) {
+        check_stmt(c, s.body[i]);
+    }
+    c.locals.count = saved;
+}
+
+fn check_variable(c: *Checker, s: *ast.Stmt) {
+    var sym = new_symbol();
+    sym.name = s.name;
+    sym.line = s.line;
+    sym.module = c.m;
+    if (s.value != null) {
+        check_expr(c, s.value);
+    }
+    if (s.type_expr != null) {
+        sym.type = value_type(c, s.type_expr);
+        if (s.value != null) {
+            coerce(c, &s.value, sym.type);
+        }
+    } else if (s.kind == ast.StmtKind.CONST) {
+        sym.type = s.value.type;
+    } else {
+        sym.type = infer(c, &s.value, s.line);
+    }
+    if (s.kind == ast.StmtKind.CONST) {
+        if (!s.value.is_const && s.value.kind != ast.ExprKind.STRING) {
+            error(c, s.line, "the value of a constant must be known when compiling");
+        }
+        sym.kind = ast.SymbolKind.CONST;
+        sym.value = s.value.value;
+        if (s.value.kind == ast.ExprKind.STRING) {
+            sym.string = s.value;
+        }
+    } else {
+        sym.kind = ast.SymbolKind.LOCAL;
+    }
+    s.symbol = sym;
+    declare_local(c, sym);
+}
+
+// x op= y is checked like x = x op y
+fn compound(op: ast.TokenKind) ast.TokenKind {
+    switch (op) {
+        case ast.TokenKind.ADD_ASSIGN {
+            return ast.TokenKind.PLUS;
+        }
+        case ast.TokenKind.SUB_ASSIGN {
+            return ast.TokenKind.MINUS;
+        }
+        case ast.TokenKind.MUL_ASSIGN {
+            return ast.TokenKind.STAR;
+        }
+        case ast.TokenKind.DIV_ASSIGN {
+            return ast.TokenKind.SLASH;
+        }
+        case ast.TokenKind.MOD_ASSIGN {
+            return ast.TokenKind.PERCENT;
+        }
+        case ast.TokenKind.AND_ASSIGN {
+            return ast.TokenKind.AMP;
+        }
+        case ast.TokenKind.OR_ASSIGN {
+            return ast.TokenKind.PIPE;
+        }
+        case ast.TokenKind.XOR_ASSIGN {
+            return ast.TokenKind.CARET;
+        }
+        case ast.TokenKind.SHL_ASSIGN {
+            return ast.TokenKind.SHL;
+        }
+    }
+    return ast.TokenKind.SHR;
+}
+
+fn check_assign(c: *Checker, s: *ast.Stmt) {
+    var t = check_expr(c, s.target);
+    if (!addressable(s.target)) {
+        error(c, s.line, "cannot assign to this");
+    }
+    check_expr(c, s.value);
+    if (s.op == ast.TokenKind.ASSIGN) {
+        coerce(c, &s.value, t);
+        return;
+    }
+    var e = ast.Expr { kind: ast.ExprKind.BINARY, line: s.line, op: compound(s.op), left: s.target, right: s.value };
+    var result = binary_type(c, &e);
+    if (!same_type(result, t)) {
+        error(c, s.line, ast.cat([][]u8 { "expected ", type_name(t), ", found ", type_name(result) }));
+    }
+    s.value = e.right;
+}
+
+fn check_condition(c: *Checker, slot: **ast.Expr) {
+    check_expr(c, *slot);
+    coerce(c, slot, &t_bool);
+}
+
+fn check_switch(c: *Checker, s: *ast.Stmt) {
+    check_expr(c, s.cond);
+    var t = settle(c, &s.cond);
+    if (t.kind != ast.TypeKind.INT && t.kind != ast.TypeKind.ENUM) {
+        error(c, s.line, ast.cat([][]u8 { "a switch takes an integer or enum, not ", type_name(t) }));
+    }
+    for (var i = 0; i < s.cases.len; i += 1) {
+        var k = s.cases[i];
+        for (var v = 0; v < k.values.len; v += 1) {
+            check_expr(c, k.values[v]);
+            coerce(c, &k.values[v], t);
+            var value = k.values[v];
+            if (!value.is_const) {
+                error(c, value.line, "a case needs a constant");
+            }
+            for (var j = 0; j <= i; j += 1) {
+                var count = s.cases[j].values.len;
+                if (j == i) {
+                    count = v;
+                }
+                for (var w = 0; w < count; w += 1) {
+                    if (wide.equal(s.cases[j].values[w].value, value.value)) {
+                        error(c, value.line, ast.cat([][]u8 { "case ", wide.text(value.value), " appears twice" }));
+                    }
+                }
+            }
+        }
+        check_block(c, k.body);
+    }
+    if (s.fallback != null) {
+        check_block(c, s.fallback);
+    }
+}
+
+fn check_stmt(c: *Checker, s: *ast.Stmt) {
+    switch (s.kind) {
+        case ast.StmtKind.BLOCK {
+            check_block(c, s);
+        }
+        case ast.StmtKind.VAR, ast.StmtKind.CONST {
+            check_variable(c, s);
+        }
+        case ast.StmtKind.ASSIGN {
+            check_assign(c, s);
+        }
+        case ast.StmtKind.EXPR {
+            check_expr(c, s.value);
+        }
+        case ast.StmtKind.IF {
+            check_condition(c, &s.cond);
+            check_block(c, s.then);
+            if (s.otherwise != null) {
+                check_stmt(c, s.otherwise);
+            }
+        }
+        case ast.StmtKind.WHILE {
+            check_condition(c, &s.cond);
+            c.loops += 1;
+            check_block(c, s.then);
+            c.loops -= 1;
+        }
+        case ast.StmtKind.FOR {
+            var saved = c.locals.count;
+            if (s.init != null) {
+                check_stmt(c, s.init);
+            }
+            if (s.cond != null) {
+                check_condition(c, &s.cond);
+            }
+            if (s.step != null) {
+                check_stmt(c, s.step);
+            }
+            c.loops += 1;
+            check_block(c, s.then);
+            c.loops -= 1;
+            c.locals.count = saved;
+        }
+        case ast.StmtKind.SWITCH {
+            check_switch(c, s);
+        }
+        case ast.StmtKind.BREAK, ast.StmtKind.CONTINUE {
+            if (c.loops == 0) {
+                var what = "continue";
+                if (s.kind == ast.StmtKind.BREAK) {
+                    what = "break";
+                }
+                error(c, s.line, ast.cat([][]u8 { what, " is only allowed in a loop" }));
+            }
+        }
+        case ast.StmtKind.RETURN {
+            var result = c.function.symbol.type.base;
+            if (s.value == null) {
+                if (result.kind != ast.TypeKind.VOID) {
+                    error(c, s.line, ast.cat([][]u8 { c.function.name, " has to return ", type_name(result) }));
+                }
+                return;
+            }
+            if (result.kind == ast.TypeKind.VOID) {
+                error(c, s.line, ast.cat([][]u8 { c.function.name, " does not return a value" }));
+            }
+            check_expr(c, s.value);
+            coerce(c, &s.value, result);
+        }
+    }
+}
+
+// A break inside the loop, not inside a loop nested in it
+fn breaks(s: *ast.Stmt) bool {
+    if (s == null) {
+        return false;
+    }
+    switch (s.kind) {
+        case ast.StmtKind.BREAK {
+            return true;
+        }
+        case ast.StmtKind.BLOCK {
+            for (var i = 0; i < s.body.len; i += 1) {
+                if (breaks(s.body[i])) {
+                    return true;
+                }
+            }
+        }
+        case ast.StmtKind.IF {
+            return breaks(s.then) || breaks(s.otherwise);
+        }
+        case ast.StmtKind.SWITCH {
+            for (var i = 0; i < s.cases.len; i += 1) {
+                if (breaks(s.cases[i].body)) {
+                    return true;
+                }
+            }
+            return breaks(s.fallback);
+        }
+    }
+    return false;
+}
+
+fn always(cond: *ast.Expr) bool {
+    return cond.is_const && !wide.is_zero(cond.value);
+}
+
+// Execution cannot run past the end of the statement
+fn terminates(s: *ast.Stmt) bool {
+    switch (s.kind) {
+        case ast.StmtKind.RETURN {
+            return true;
+        }
+        case ast.StmtKind.BLOCK {
+            return s.body.len > 0 && terminates(s.body[s.body.len - 1]);
+        }
+        case ast.StmtKind.IF {
+            return s.otherwise != null && terminates(s.then) && terminates(s.otherwise);
+        }
+        case ast.StmtKind.WHILE {
+            return always(s.cond) && !breaks(s.then);
+        }
+        case ast.StmtKind.FOR {
+            return (s.cond == null || always(s.cond)) && !breaks(s.then);
+        }
+        case ast.StmtKind.SWITCH {
+            if (s.fallback == null || !terminates(s.fallback)) {
+                return false;
+            }
+            for (var i = 0; i < s.cases.len; i += 1) {
+                if (!terminates(s.cases[i].body)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        case ast.StmtKind.EXPR {
+            return s.value.kind == ast.ExprKind.CALL && s.value.builtin == ast.Builtin.PANIC;
+        }
+    }
+    return false;
+}
+
+fn check_function(c: *Checker, d: *ast.Decl) {
+    var t = d.symbol.type;
+    c.function = d;
+    c.function_start = 0;
+    c.locals.count = 0;
+    c.loops = 0;
+    for (var i = 0; i < d.params.len; i += 1) {
+        var s = new_symbol();
+        s.kind = ast.SymbolKind.LOCAL;
+        s.name = d.params[i].name;
+        s.type = t.params[i];
+        s.line = d.params[i].line;
+        s.module = c.m;
+        d.params[i].symbol = s;
+        declare_local(c, s);
+    }
+    check_block(c, d.body);
+    if (t.base.kind != ast.TypeKind.VOID && !terminates(d.body)) {
+        error(c, d.body.end_line, ast.cat([][]u8 { d.name, " has to return ", type_name(t.base), " at its end" }));
+    }
+}
+
+fn check_const(c: *Checker, d: *ast.Decl) {
+    if (d.state == 2) {
+        return;
+    }
+    if (d.state == 1) {
+        error(c, d.line, ast.cat([][]u8 { "the constant ", d.name, " depends on itself" }));
+    }
+    d.state = 1;
+    var saved = c.m;
+    var saved_locals = c.locals.count;
+    c.m = d.module;
+    c.locals.count = 0;
+    var s = d.symbol;
+    check_expr(c, d.value);
+    if (d.type_expr != null) {
+        s.type = value_type(c, d.type_expr);
+        coerce(c, &d.value, s.type);
+    } else {
+        s.type = d.value.type;
+    }
+    if (d.value.kind == ast.ExprKind.STRING) {
+        s.string = d.value;
+    } else if (!d.value.is_const) {
+        error(c, d.line, "the value of a constant must be known when compiling");
+    }
+    s.value = d.value.value;
+    c.m = saved;
+    c.locals.count = saved_locals;
+    d.state = 2;
+}
+
+// Data can only start out holding what is known before the program runs
+fn static_value(e: *ast.Expr) bool {
+    if (e.is_const) {
+        return true;
+    }
+    switch (e.kind) {
+        case ast.ExprKind.NULL, ast.ExprKind.STRING {
+            return true;
+        }
+        case ast.ExprKind.NAME {
+            return e.symbol.kind == ast.SymbolKind.FN || e.symbol.kind == ast.SymbolKind.CONST;
+        }
+        case ast.ExprKind.UNARY {
+            return e.op == ast.TokenKind.AMP && e.left.kind == ast.ExprKind.NAME &&
+                e.left.symbol.kind == ast.SymbolKind.GLOBAL;
+        }
+        case ast.ExprKind.CONVERT {
+            return e.left.kind == ast.ExprKind.NAME && e.left.symbol.kind == ast.SymbolKind.GLOBAL &&
+                e.type.kind == ast.TypeKind.SLICE;
+        }
+        case ast.ExprKind.CAST {
+            return static_value(e.left) && e.left.type.kind != ast.TypeKind.INT;
+        }
+        case ast.ExprKind.STRUCT, ast.ExprKind.ARRAY {
+            for (var i = 0; i < e.args.len; i += 1) {
+                if (!static_value(e.args[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+fn declare(c: *Checker, m: *ast.Module, d: *ast.Decl) {
+    var s = new_symbol();
+    s.name = d.name;
+    s.decl = d;
+    s.module = m;
+    s.line = d.line;
+    d.symbol = s;
+    switch (d.kind) {
+        case ast.DeclKind.IMPORT {
+            s.kind = ast.SymbolKind.MODULE;
+            s.module = d.imported;
+        }
+        case ast.DeclKind.CONST {
+            s.kind = ast.SymbolKind.CONST;
+        }
+        case ast.DeclKind.VAR {
+            s.kind = ast.SymbolKind.GLOBAL;
+        }
+        case ast.DeclKind.FN {
+            s.kind = ast.SymbolKind.FN;
+        }
+        default {
+            s.kind = ast.SymbolKind.TYPE;
+            var t = ast.allocate(sizeof(ast.Type)) as *ast.Type;
+            t.kind = ast.TypeKind.ENUM;
+            if (d.kind == ast.DeclKind.STRUCT) {
+                t.kind = ast.TypeKind.STRUCT;
+            }
+            t.name = d.name;
+            t.decl = d;
+            t.size = 4;
+            t.align = 4;
+            s.type = t;
+        }
+    }
+    if (find_universe(d.name) != null || ast.same(d.name, "new") || ast.same(d.name, "sizeof")) {
+        error(c, d.line, ast.cat([][]u8 { d.name, " is predeclared" }));
+    }
+    var old = find(m, d.name);
+    if (old != null) {
+        error(c, d.line, ast.cat([][]u8 { d.name, " is already declared at line ", ast.number(old.line) }));
+    }
+    ast.put(&m.symbols, d.name, s as *u8);
+}
+
+fn check_types(c: *Checker, d: *ast.Decl) {
+    if (d.kind == ast.DeclKind.STRUCT) {
+        layout(c, d.symbol.type, d.line);
+    } else if (d.kind == ast.DeclKind.ENUM) {
+        var next = wide.of(0);
+        for (var i = 0; i < d.members.len; i += 1) {
+            var m = d.members[i];
+            for (var k = 0; k < i; k += 1) {
+                if (ast.same(d.members[k].name, m.name)) {
+                    error(c, m.line, ast.cat([][]u8 { m.name, " is declared twice" }));
+                }
+            }
+            if (m.value != null) {
+                next = constant_int(c, m.value, "the value of an enum");
+            }
+            if (!wide.fits(next)) {
+                error(c, m.line, ast.cat([][]u8 { wide.text(next), " does not fit in an enum" }));
+            }
+            m.number = next;
+            var overflow = false;
+            next = wide.add(next, wide.of(1), &overflow);
+        }
+    }
+}
+
+fn check_signature(c: *Checker, d: *ast.Decl) {
+    var result = &t_void;
+    if (d.type_expr != null) {
+        result = value_type(c, d.type_expr);
+    }
+    var t = new_type(ast.TypeKind.FN, result);
+    t.is_interrupt = d.is_interrupt;
+    var count = d.params.len;
+    t.params = (ast.allocate(count * 4) as **ast.Type)[:count];
+    for (var i = 0; i < count; i += 1) {
+        for (var k = 0; k < i; k += 1) {
+            if (ast.same(d.params[k].name, d.params[i].name)) {
+                error(c, d.params[i].line, ast.cat([][]u8 { "parameter ", d.params[i].name, " is declared twice" }));
+            }
+        }
+        t.params[i] = value_type(c, d.params[i].type_expr);
+    }
+    if (d.is_interrupt && (count > 0 || d.type_expr != null)) {
+        error(c, d.line, "an interrupt function takes no parameters and returns nothing");
+    }
+    d.symbol.type = t;
+}
+
+fn check_global(c: *Checker, d: *ast.Decl) {
+    var s = d.symbol;
+    if (d.value != null) {
+        check_expr(c, d.value);
+    }
+    if (d.type_expr != null) {
+        s.type = value_type(c, d.type_expr);
+        if (d.value != null) {
+            coerce(c, &d.value, s.type);
+        }
+    } else {
+        s.type = infer(c, &d.value, d.line);
+    }
+    if (d.value != null && !static_value(d.value)) {
+        error(c, d.line, "a global variable needs a value known before the program runs");
+    }
+}
+
+fn check_main(c: *Checker, m: *ast.Module) {
+    var s = find(m, "main");
+    c.m = m;
+    if (s == null || s.kind != ast.SymbolKind.FN) {
+        error(c, 1, "the program has no main function");
+    }
+    var t = s.type;
+    var args = t.params.len == 1 && t.params[0].kind == ast.TypeKind.SLICE &&
+        t.params[0].base.kind == ast.TypeKind.SLICE && same_type(t.params[0].base.base, &t_u8);
+    if (s.decl.is_extern || s.decl.is_interrupt || t.params.len > 0 && !args ||
+        t.base.kind != ast.TypeKind.VOID && !same_type(t.base, &t_i32)) {
+        error(c, s.line, "main takes nothing or args: [][]u8, and returns nothing or an int");
+    }
+    c.program.main = s;
+}
+
+pub fn check_program(program: *ast.Program) {
+    var c = Checker { program: program };
+    var count = program.modules.count;
+
+    for (var i = 0; i < count; i += 1) {
+        c.m = ast.module_at(program, i);
+        for (var k = 0; k < c.m.decls.len; k += 1) {
+            declare(&c, c.m, c.m.decls[k]);
+        }
+    }
+    for (var i = 0; i < count; i += 1) {
+        c.m = ast.module_at(program, i);
+        for (var k = 0; k < c.m.decls.len; k += 1) {
+            check_types(&c, c.m.decls[k]);
+        }
+    }
+    for (var i = 0; i < count; i += 1) {
+        c.m = ast.module_at(program, i);
+        for (var k = 0; k < c.m.decls.len; k += 1) {
+            var d = c.m.decls[k];
+            if (d.kind == ast.DeclKind.CONST) {
+                check_const(&c, d);
+            } else if (d.kind == ast.DeclKind.FN) {
+                check_signature(&c, d);
+            }
+        }
+    }
+    for (var i = 0; i < count; i += 1) {
+        c.m = ast.module_at(program, i);
+        for (var k = 0; k < c.m.decls.len; k += 1) {
+            if (c.m.decls[k].kind == ast.DeclKind.VAR) {
+                check_global(&c, c.m.decls[k]);
+            }
+        }
+    }
+    for (var i = 0; i < count; i += 1) {
+        c.m = ast.module_at(program, i);
+        for (var k = 0; k < c.m.decls.len; k += 1) {
+            var d = c.m.decls[k];
+            if (d.kind == ast.DeclKind.FN && d.body != null) {
+                check_function(&c, d);
+            }
+        }
+    }
+    check_main(&c, ast.module_at(program, 0));
+}
