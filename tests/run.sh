@@ -3,8 +3,9 @@
 # Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble, or only the
 # tests named. Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:",
 # "; expect-error:", "; asm-args:", "; vm-args:" and "; program-args:" lines; "; disk-sectors:" attaches
-# an empty disk image and NAME.x holds debugger commands. -u rewrites NAME.out from the actual output of
-# every program that exits as expected.
+# an empty disk image, NAME.x holds debugger commands and NAME.err, if present, the whole expected stderr.
+# -u rewrites NAME.out and an existing NAME.err from the actual output of every program that exits as
+# expected.
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 vm="$root/vm"
@@ -85,6 +86,11 @@ for src in "$root"/tests/programs/*.asm; do
         expected_out="$tmp/$name.out"
         echo "updated $name.out"
     fi
+    if [ "$update" -eq 1 ] && [ "$status" = "${expected_status:-0}" ] && [ -f "$base.err" ] &&
+        ! cmp -s "$base.err" "$tmp/$name.err"; then
+        cp "$tmp/$name.err" "$base.err"
+        echo "updated $name.err"
+    fi
 
     if [ "$status" != "${expected_status:-0}" ]; then
         fail "$name" "exit status $status, expected ${expected_status:-0}: $(head -n 1 "$tmp/$name.err")"
@@ -93,6 +99,9 @@ for src in "$root"/tests/programs/*.asm; do
         diff "$expected_out" "$tmp/$name.out" | cat -v | head -n 20
     elif [ -n "$expected_stderr" ] && ! grep -qF -- "$expected_stderr" "$tmp/$name.err"; then
         fail "$name" "stderr lacks '$expected_stderr': $(head -n 1 "$tmp/$name.err")"
+    elif [ -f "$base.err" ] && ! cmp -s "$base.err" "$tmp/$name.err"; then
+        fail "$name" "unexpected stderr"
+        diff "$base.err" "$tmp/$name.err" | cat -v | head -n 20
     else
         passed=$((passed + 1))
     fi
