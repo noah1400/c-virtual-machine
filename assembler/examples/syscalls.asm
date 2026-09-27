@@ -67,7 +67,7 @@ roll:
 
 .data
 pi:
-    .dword 0x40490FDB           ; pi as a float
+    .float 3.14159265
 console_text:
     .asciiz "Console: "
 memory_text:

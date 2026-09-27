@@ -92,6 +92,40 @@ static int parse_number(const char **p, int64_t *value) {
     return 1;
 }
 
+// Decimal numbers with a fraction or an exponent are single-precision floats, kept as their bits
+static int parse_float(const char **p, Token *t) {
+    const char *s = *p, *q = *p;
+    char text[64];
+
+    while (isdigit((unsigned char)*q)) {
+        q++;
+    }
+    int fraction = *q == '.' && isdigit((unsigned char)q[1]);
+    if (fraction) {
+        for (q++; isdigit((unsigned char)*q); q++) {
+        }
+    }
+    int exponent = (*q == 'e' || *q == 'E') &&
+                   (isdigit((unsigned char)q[1]) || ((q[1] == '+' || q[1] == '-') && isdigit((unsigned char)q[2])));
+    if (exponent) {
+        for (q += 2; isdigit((unsigned char)*q); q++) {
+        }
+    }
+    if ((!fraction && !exponent) || is_ident_char((unsigned char)*q) || (size_t)(q - s) >= sizeof(text)) {
+        return 0;
+    }
+
+    memcpy(text, s, (size_t)(q - s));
+    text[q - s] = '\0';
+    float value = strtof(text, NULL);
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    t->number = bits;
+    t->is_float = 1;
+    *p = q;
+    return 1;
+}
+
 static int two_char_operator(const char *p) {
     static const struct {
         char text[3];
@@ -144,7 +178,7 @@ int lex_line(const char *line, TokenList *out, char *error, size_t error_size) {
             *arena++ = '\0';
         } else if (isdigit((unsigned char)*p)) {
             t->kind = TOK_NUMBER;
-            if (!parse_number(&p, &t->number)) {
+            if (!parse_float(&p, t) && !parse_number(&p, &t->number)) {
                 snprintf(error, error_size, "invalid number");
                 tokens_free(out);
                 return 0;

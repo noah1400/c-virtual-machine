@@ -41,6 +41,7 @@ static int64_t parse_primary(Parser *p) {
 
     if (t->kind == TOK_NUMBER) {
         p->pos++;
+        p->floats += t->is_float;
         return t->number;
     }
     if (t->kind == TOK_IDENT) {
@@ -77,15 +78,20 @@ static int64_t parse_primary(Parser *p) {
 
 static int64_t parse_unary(Parser *p) {
     if (accept(p, '-')) {
-        return (int64_t)(0 - (uint64_t)parse_unary(p));
+        int floats = p->floats;
+        int64_t value = parse_unary(p);
+        // Negating a float flips its sign bit
+        return p->floats > floats ? value ^ 0x80000000 : (int64_t)(0 - (uint64_t)value);
     }
     if (accept(p, '+')) {
         return parse_unary(p);
     }
     if (accept(p, '~')) {
+        p->operators++;
         return ~parse_unary(p);
     }
     if (accept(p, '!')) {
+        p->operators++;
         return !parse_unary(p);
     }
     return parse_primary(p);
@@ -95,10 +101,12 @@ static int64_t parse_mul(Parser *p) {
     int64_t value = parse_unary(p);
     for (;;) {
         if (accept(p, '*')) {
+            p->operators++;
             value = (int64_t)((uint64_t)value * (uint64_t)parse_unary(p));
         } else if (token_is_punct(peek(p), '/') || token_is_punct(peek(p), '%')) {
             int op = peek(p)->punct;
             p->pos++;
+            p->operators++;
             int64_t divisor = parse_unary(p);
             if (divisor == 0) {
                 if (!p->unresolved) {
@@ -120,8 +128,10 @@ static int64_t parse_add(Parser *p) {
     int64_t value = parse_mul(p);
     for (;;) {
         if (accept(p, '+')) {
+            p->operators++;
             value = (int64_t)((uint64_t)value + (uint64_t)parse_mul(p));
         } else if (accept(p, '-')) {
+            p->operators++;
             value = (int64_t)((uint64_t)value - (uint64_t)parse_mul(p));
         } else {
             return value;
@@ -136,6 +146,7 @@ static int64_t parse_shift(Parser *p) {
         if (!left && !accept(p, OP_SHR)) {
             return value;
         }
+        p->operators++;
         int64_t amount = parse_add(p);
         if (amount < 0 || amount > 63) {
             if (!p->unresolved) {
@@ -155,12 +166,16 @@ static int64_t parse_relational(Parser *p) {
     int64_t value = parse_shift(p);
     for (;;) {
         if (accept(p, '<')) {
+            p->operators++;
             value = value < parse_shift(p);
         } else if (accept(p, '>')) {
+            p->operators++;
             value = value > parse_shift(p);
         } else if (accept(p, OP_LE)) {
+            p->operators++;
             value = value <= parse_shift(p);
         } else if (accept(p, OP_GE)) {
+            p->operators++;
             value = value >= parse_shift(p);
         } else {
             return value;
@@ -172,8 +187,10 @@ static int64_t parse_equality(Parser *p) {
     int64_t value = parse_relational(p);
     for (;;) {
         if (accept(p, OP_EQ)) {
+            p->operators++;
             value = value == parse_relational(p);
         } else if (accept(p, OP_NE)) {
+            p->operators++;
             value = value != parse_relational(p);
         } else {
             return value;
@@ -184,6 +201,7 @@ static int64_t parse_equality(Parser *p) {
 static int64_t parse_and(Parser *p) {
     int64_t value = parse_equality(p);
     while (accept(p, '&')) {
+        p->operators++;
         value &= parse_equality(p);
     }
     return value;
@@ -192,6 +210,7 @@ static int64_t parse_and(Parser *p) {
 static int64_t parse_xor(Parser *p) {
     int64_t value = parse_and(p);
     while (accept(p, '^')) {
+        p->operators++;
         value ^= parse_and(p);
     }
     return value;
@@ -200,6 +219,7 @@ static int64_t parse_xor(Parser *p) {
 static int64_t parse_or(Parser *p) {
     int64_t value = parse_xor(p);
     while (accept(p, '|')) {
+        p->operators++;
         value |= parse_xor(p);
     }
     return value;
@@ -208,6 +228,7 @@ static int64_t parse_or(Parser *p) {
 static int64_t parse_logical_and(Parser *p) {
     int64_t value = parse_or(p);
     while (accept(p, OP_AND)) {
+        p->operators++;
         int64_t right = parse_or(p);
         value = value && right;
     }
@@ -217,12 +238,19 @@ static int64_t parse_logical_and(Parser *p) {
 static int64_t parse_logical_or(Parser *p) {
     int64_t value = parse_logical_and(p);
     while (accept(p, OP_OR)) {
+        p->operators++;
         int64_t right = parse_logical_and(p);
         value = value || right;
     }
     return value;
 }
 
+// Float literals may only stand alone, with an optional sign, since expressions use integer arithmetic
 int64_t parse_expression(Parser *p) {
-    return parse_logical_or(p);
+    int floats = p->floats, operators = p->operators;
+    int64_t value = parse_logical_or(p);
+    if (p->floats > floats && (p->floats - floats > 1 || p->operators > operators)) {
+        return fail(p, "floating-point constants cannot be combined with operators");
+    }
+    return value;
 }

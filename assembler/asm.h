@@ -24,6 +24,7 @@ typedef struct {
     char *text;         // identifier or string bytes, NUL-terminated
     size_t length;      // string length, which may include embedded NULs
     size_t start;       // offset of the token in the line
+    int is_float;       // number holds the bits of a single-precision float
 } Token;
 
 typedef struct {
@@ -161,6 +162,8 @@ typedef struct {
     int pos;
     int unresolved;     // an undefined symbol was referenced before the final pass
     int failed;
+    int floats;         // float literals read so far
+    int operators;      // operators applied so far, which floats must not take part in
 } Parser;
 
 int64_t parse_expression(Parser *p);

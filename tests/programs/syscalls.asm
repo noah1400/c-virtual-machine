@@ -14,8 +14,8 @@
     LOAD R0, #'\n'
     SYSCALL #0
 
-    ; -2.25 as a single-precision float
-    LOAD R0, #0xC0100000
+    ; Floats are printed with up to six significant digits
+    LOAD R0, #-2.25
     SYSCALL #7
     LOAD R0, #'\n'
     SYSCALL #0

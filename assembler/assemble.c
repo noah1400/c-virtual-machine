@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "asm.h"
+#include "binfmt.h"
 #include "vm_types.h"
 
 typedef struct {
@@ -249,6 +250,28 @@ static void directive_values(Assembler *as, Parser *p, int width) {
     expect_end(p);
 }
 
+// Single-precision values; integer expressions are converted
+static void directive_floats(Assembler *as, Parser *p) {
+    do {
+        int floats = p->floats;
+        int64_t value = parse_expression(p);
+        if (p->failed) {
+            return;
+        }
+
+        uint32_t bits = (uint32_t)value;
+        if (p->floats == floats) {
+            float converted = (float)value;
+            memcpy(&bits, &converted, sizeof(bits));
+        }
+        uint8_t bytes[4];
+        write_le32(bytes, bits);
+        emit(as, bytes, 4);
+    } while (accept(p, ','));
+
+    expect_end(p);
+}
+
 static void directive_strings(Assembler *as, Parser *p, int terminate) {
     do {
         Token *t = peek(p);
@@ -394,6 +417,8 @@ static void directive(Assembler *as, Parser *p) {
         directive_values(as, p, 2);
     } else if (name_equals(name, ".dword")) {
         directive_values(as, p, 4);
+    } else if (name_equals(name, ".float")) {
+        directive_floats(as, p);
     } else if (name_equals(name, ".ascii")) {
         directive_strings(as, p, 0);
     } else if (name_equals(name, ".asciiz") || name_equals(name, ".string")) {
@@ -862,7 +887,7 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
         return;
     }
 
-    Parser p = { as, &tokens, 0, 0, 0 };
+    Parser p = { .as = as, .tokens = &tokens };
     int active = conditions_active(as);
     while (tokens.items[p.pos].kind == TOK_IDENT && token_is_punct(&tokens.items[p.pos + 1], ':')) {
         if (active) {
@@ -959,7 +984,7 @@ static void define_command_line_constants(Assembler *as) {
                 asm_error(as, "invalid value for -D %s", name);
                 continue;
             }
-            Parser p = { as, &tokens, 0, 0, 0 };
+            Parser p = { .as = as, .tokens = &tokens };
             as->pass = PASS_DEFINE;
             value = parse_expression(&p);
             if (!p.failed && (p.unresolved || tokens.items[p.pos].kind != TOK_END)) {

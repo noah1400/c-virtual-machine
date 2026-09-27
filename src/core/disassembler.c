@@ -13,13 +13,30 @@ static void format_displacement(char *out, size_t size, const char *base, int32_
     }
 }
 
+// Floats keep a decimal point or an exponent so that they do not read as integers
+static void format_float(char *out, size_t size, uint32_t bits) {
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    snprintf(out, size, "#%g", value);
+    if (!strpbrk(out, ".en")) {
+        strncat(out, ".0", size - strlen(out) - 1);
+    }
+}
+
+// FPU instructions other than ITOF take float operands
+static int takes_float(uint8_t opcode) {
+    return opcode >= FADD_OP && opcode <= FTOI_OP && opcode != ITOF_OP;
+}
+
 static void format_operand(char *out, size_t size, const Instruction *instr, uint8_t reg,
                            const DebugInfo *info, int target, uint32_t next) {
     const Symbol *sym;
 
     switch (instr->mode) {
         case IMM_MODE:
-            if (target && (sym = debug_symbol_at(info, next + instr->immediate))) {
+            if (takes_float(instr->opcode)) {
+                format_float(out, size, instr->immediate);
+            } else if (target && (sym = debug_symbol_at(info, next + instr->immediate))) {
                 snprintf(out, size, "%s", sym->name);
             } else if (target) {
                 snprintf(out, size, "0x%04X", next + instr->immediate);
