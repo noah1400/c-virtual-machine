@@ -1,9 +1,10 @@
 # VM32
 
-A 32-bit virtual machine written in C, with its own assembler, disassembler and interactive debugger.
+A 32-bit virtual machine written in C, with its own assembler, linker, disassembler and interactive debugger.
 
 - **`vm`** runs VM32 programs and can trace, disassemble or debug them.
-- **`vmasm`** turns assembly source into VM32 binaries. It supports expressions, local labels, macros, conditional assembly, includes and listings.
+- **`vmasm`** turns assembly source into VM32 binaries or object files. It supports expressions, local labels, macros, structures, conditional assembly, includes and listings.
+- **`vmld`** links object files into one program.
 
 ## Contents
 
@@ -13,6 +14,7 @@ A 32-bit virtual machine written in C, with its own assembler, disassembler and 
 - [The machine](#the-machine)
 - [Instruction set](#instruction-set)
 - [Assembly language](#assembly-language)
+- [Linking](#linking)
 - [Syscalls](#syscalls)
 - [Debugger](#debugger)
 - [Binary format](#binary-format)
@@ -24,8 +26,8 @@ A 32-bit virtual machine written in C, with its own assembler, disassembler and 
 You need a C11 compiler and a POSIX system.
 
 ```sh
-make          # builds ./vm and ./vmasm
-make test     # builds both and runs the test suite
+make          # builds ./vm, ./vmasm and ./vmld
+make test     # builds them and runs the test suite
 make clean
 ```
 
@@ -693,6 +695,8 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.struct NAME` ... `.ends` | Define a [structure](#structures) |
 | `.rept count` ... `.endr` | Repeat the lines in between *count* times (see below) |
 | `.entry expr` | Start execution here instead of at 0x0000 |
+| `.global name, ...` | Export symbols from an object file to the others it is [linked](#linking) with |
+| `.extern name, ...` | Use symbols that another object file exports |
 | `.error "message"` | Stop assembly with this message. Useful inside `.if` |
 | `.include "file"` | Insert a file. It is searched for next to the including file, then in `-I` directories |
 | `.incbin "file"[, offset[, length]]` | Insert the bytes of a file, found like an include, or *length* of them from *offset* on |
@@ -774,7 +778,8 @@ Includes and macro definitions are processed even inside a false block. The incl
 
 | Option | Effect |
 |---|---|
-| `-o FILE` | Output file (default: the input with a `.bin` extension) |
+| `-o FILE` | Output file (default: the input with a `.bin` extension, or `.o` with `-c`) |
+| `-c` | Write an object file for [vmld](#linking) instead of a program |
 | `-l FILE` | Write a listing: line number, address, encoded bytes and source. Lines from macros are marked with `+` |
 | `-I DIR` | Also search DIR for included files |
 | `-D NAME[=VALUE]` | Define a constant, 1 unless a value is given |
@@ -795,6 +800,51 @@ disk.asm:80: warning: R6 set at line 74 is overwritten by CALL load_directory at
 A value counts as overwritten when the call changes the register without returning it, or when the program set the register itself and the call returns a result there, as every syscall does with its status in R5. Routines that jump through registers or move SP other than by constants are taken to read and change everything, so they cause no warnings. The check is a heuristic: it can miss mistakes, and it warns about a register that a routine returns on only some paths.
 
 By default, a binary includes the symbols and source lines that the disassembler, the debugger and fault reports use. Errors are reported as `file:line: error: message`, and vmasm then exits with status 1.
+
+## Linking
+
+A program can be split into files that are assembled on their own with `vmasm -c` and linked with `vmld`. A file exports the labels and constants that others may use with `.global`, and declares the ones it uses from others with `.extern`:
+
+```asm
+; main.asm                          ; print.asm
+.extern print_line                  .global print_line
+.text                               .text
+main:                               print_line:
+    LOAD R0, greeting                   SYSCALL #2
+    CALL print_line                     LOAD R0, #'\n'
+    HALT                                SYSCALL #0
+.data                                   RET
+greeting:
+    .asciiz "hello"
+```
+
+```console
+$ ./vmasm -c main.asm
+$ ./vmasm -c print.asm
+$ ./vmld main.o print.o -o hello.bin
+$ ./vm hello.bin
+hello
+```
+
+In an object file, labels are offsets into their section until the linker places it, so an address can only be stored where the linker can fill it in:
+
+- An instruction operand, which then takes the extension word. Jumps to labels in the same file's code stay as they are.
+- A `.dword` value. `.byte` and `.word` cannot hold an address.
+- An `.equ` constant, which can in turn be exported.
+
+An address may be added to or subtracted from a number, and two addresses in the same section may be subtracted from each other. Every other use needs a constant, including `.space`, `.align`, `.org` and `.if`. Symbols that a file uses have to be defined in it or declared with `.extern`.
+
+`vmld` places the code of all files from address 0 in the order they are given, and their data from the page after the code, each aligned to the largest `.align` of its section. The program starts at the `.entry` of the one file that has one, at the exported code label given with `-e`, or at address 0. Symbols and source lines of all files end up in the program, so fault reports, backtraces and the debugger work across files.
+
+| Option | Effect |
+|---|---|
+| `-o FILE` | Output file (default: the first object file with a `.bin` extension) |
+| `-e NAME` | Start at the exported code label NAME |
+| `-M` | Print where each file's sections and exported symbols went |
+| `-S` | Leave out debug information |
+| `-h` | Show help |
+
+Linking fails, and names the file, when a symbol is undefined, two files export the same name, or more than one file sets an entry point. `vm` refuses to run an object file.
 
 ## Syscalls
 
@@ -955,6 +1005,21 @@ u32 line count
     u32 address, u32 line, string source text, string file
 ```
 
+Object files from `vmasm -c` start with `VMOB` and hold both sections, the symbols, the places the linker fills in and the source lines:
+
+```
+"VMOB", u16 version (1), u16 flags (1: sets an entry point), u32 entry offset in the code
+u32 code size, u32 code alignment, u32 data size, u32 data alignment, code bytes, data bytes
+u32 symbol count
+    string name, u8 kind (0 code, 1 data, 2 constant, 3 external), u8 exported, u32 value, u32 line, string file
+u32 relocation count
+    u8 section (0 code, 1 data), u8 type, u32 offset, u32 target, u32 addend
+u32 line count
+    u8 section, u32 offset, u32 line, string source text, string file
+```
+
+Code and data symbols hold offsets into their section. A relocation stores the address of its target plus the addend at the offset. For type 1 it stores that minus the address of the word after it, as jumps expect. The target is the file's own code (0) or data (1), or 2 plus the index of a symbol.
+
 ## Tests
 
 `make test` runs `tests/run.sh`, which does two things:
@@ -970,6 +1035,8 @@ Comment lines in a test adjust the checks:
 | `; expect-stderr: text` | Text that must appear on stderr |
 | `; expect-error: text` | Expected assembler error (only in `tests/errors`) |
 | `; expect-warning: text` | A warning of `vmasm -W` that has to appear. Programs are assembled with `-W`, and every warning needs such a line |
+| `; link: modules/a.asm ...` | Assemble the program and these files from `tests/programs` with `-c`, and link them |
+| `; expect-link-error: text` | Expected linker error |
 | `; asm-args: ...` | Extra arguments for the assembler |
 | `; vm-args: ...` | Extra options for the VM |
 | `; program-args: ...` | Arguments passed to the program |
@@ -991,8 +1058,9 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `src/debugger.c` | The interactive debugger |
 | `src/core/` | CPU helpers, instruction execution, memory and heap, syscalls, disassembler, debug info |
 | `src/io/` | The I/O devices: console, timer, display, keyboard and disk |
-| `src/common/` | Instruction table, encoding and binary format, shared with the assembler |
+| `src/common/` | Instruction table, encoding, byte buffers and the binary format, shared by all three tools |
 | `assembler/` | `vmasm`: lexer, expressions, symbols, includes and macros, the two passes, output and the register check |
+| `linker/` | `vmld` |
 | `assembler/examples/` | Example programs |
 | `include/` | Headers |
 | `tests/` | Test programs and the test runner |
