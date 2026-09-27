@@ -1,0 +1,53 @@
+// std/str: comparing, searching, trimming, numbers and building text
+import "std/str";
+
+fn show_number(text: []u8) {
+    var n = str.parse_int(text);
+    if (n.ok) {
+        print("'", text, "' is ", n.value, "\n");
+    } else {
+        print("'", text, "' is not a number\n");
+    }
+}
+
+fn main() {
+    var path = "ore/lib/std/str.ore";
+    print(str.starts_with(path, "ore/"), " ", str.ends_with(path, ".ore"), " ", str.ends_with(path, ".asm"),
+          " ", str.starts_with("", ""), "\n");
+    print(str.find(path, "std"), " ", str.find(path, "nothing"), " ", str.find(path, ""), " ",
+          str.find_byte(path, '/'), " ", str.find_last_byte(path, '/'), " ", str.find_last_byte(path, 'x'), "\n");
+    var name = path[str.find_last_byte(path, '/') + 1:str.find_last_byte(path, '.')];
+    print("module ", name, ", equal to str: ", str.equal(name, "str"), ", compare ", str.compare(name, "sts") < 0, "\n");
+    print("[", str.trim("  \t spaced out \n"), "] [", str.trim("   "), "] [", str.trim("x"), "]\n");
+
+    show_number("12345");
+    show_number("-2147483648");
+    show_number("2147483647");
+    show_number("2147483648");
+    show_number("0x7fffFFFF");
+    show_number("-0x10");
+    show_number("12a");
+    show_number("-");
+    show_number("");
+
+    var digits: [11]u8;
+    print(str.format_int(0, digits), " ", str.format_int(-2147483648, digits), " ", str.format_int(907, digits), " ",
+          str.format_hex(3735928559, digits), " ", str.format_hex(0, digits), "\n");
+
+    var b = str.builder(4);
+    for (var i = 1; i <= 12; i += 1) {
+        str.append(&b, "item ");
+        str.append_int(&b, i * i - 20);
+        str.append_byte(&b, ',');
+    }
+    str.append_hex(&b, 255);
+    print(str.text(&b), "\n", b.len, " bytes\n");
+    str.clear(&b);
+    str.append(&b, "again");
+    var copy = str.clone(str.text(&b));
+    str.release(&b);
+    str.append(&b, " and after release");
+    print(copy, str.text(&b), "\n");
+    free(copy);
+    str.release(&b);
+}

@@ -1,0 +1,231 @@
+// Strings are []u8: comparing, searching, trimming, numbers, and building text piece by piece
+import "mem";
+
+pub fn equal(a: []u8, b: []u8) bool {
+    return mem.equal(a, b);
+}
+
+// Negative, zero or positive as a sorts before, with or after b
+pub fn compare(a: []u8, b: []u8) int {
+    return mem.compare(a, b);
+}
+
+pub fn starts_with(text: []u8, prefix: []u8) bool {
+    return text.len >= prefix.len && mem.equal(text[:prefix.len], prefix);
+}
+
+pub fn ends_with(text: []u8, suffix: []u8) bool {
+    return text.len >= suffix.len && mem.equal(text[text.len - suffix.len:], suffix);
+}
+
+// The index of the first c in text, or -1
+pub fn find_byte(text: []u8, c: u8) int {
+    for (var i = 0; i < text.len; i += 1) {
+        if (text[i] == c) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// The index of the last c in text, or -1
+pub fn find_last_byte(text: []u8, c: u8) int {
+    for (var i = text.len - 1; i >= 0; i -= 1) {
+        if (text[i] == c) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// The index where part first occurs in text, or -1; an empty part occurs at 0
+pub fn find(text: []u8, part: []u8) int {
+    for (var i = 0; i + part.len <= text.len; i += 1) {
+        if (mem.equal(text[i:i + part.len], part)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+pub fn is_space(c: u8) bool {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+pub fn is_digit(c: u8) bool {
+    return c >= '0' && c <= '9';
+}
+
+pub fn is_letter(c: u8) bool {
+    return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z';
+}
+
+// text without spaces, tabs and line ends at either end
+pub fn trim(text: []u8) []u8 {
+    var start = 0;
+    var end = text.len;
+    while (start < end && is_space(text[start])) {
+        start += 1;
+    }
+    while (end > start && is_space(text[end - 1])) {
+        end -= 1;
+    }
+    return text[start:end];
+}
+
+// A copy of text on the heap, which free gives back
+pub fn clone(text: []u8) []u8 {
+    var copy = new(u8, text.len);
+    mem.copy(copy, text);
+    return copy;
+}
+
+pub struct Number {
+    value: int;
+    ok: bool;
+}
+
+// Reads a whole decimal number, or a hexadecimal one starting with 0x, with an optional minus sign.
+// ok is false when text is not a number or it does not fit in an int.
+pub fn parse_int(text: []u8) Number {
+    var result = Number {};
+    var negative = starts_with(text, "-");
+    if (negative) {
+        text = text[1:];
+    }
+    var base: u32 = 10;
+    if (starts_with(text, "0x") || starts_with(text, "0X")) {
+        base = 16;
+        text = text[2:];
+    }
+    if (text.len == 0) {
+        return result;
+    }
+    var value: u32 = 0;
+    var limit: u32 = 2147483647;
+    if (negative) {
+        limit = 2147483648;
+    }
+    for (var i = 0; i < text.len; i += 1) {
+        var c = text[i];
+        var digit: u32 = 99;
+        if (is_digit(c)) {
+            digit = (c - '0') as u32;
+        } else if (c >= 'a' && c <= 'f') {
+            digit = (c - 'a') as u32 + 10;
+        } else if (c >= 'A' && c <= 'F') {
+            digit = (c - 'A') as u32 + 10;
+        }
+        if (digit >= base || value > (limit - digit) / base) {
+            return result;
+        }
+        value = value * base + digit;
+    }
+    result.value = value as int;
+    if (negative) {
+        result.value = -result.value;
+    }
+    result.ok = true;
+    return result;
+}
+
+// Writes value in decimal at the end of buffer and returns that part; 11 bytes hold any int
+pub fn format_int(value: int, buffer: []u8) []u8 {
+    var magnitude = value as u32;
+    if (value < 0) {
+        magnitude = 0 - magnitude;
+    }
+    var i = buffer.len;
+    for (;;) {
+        i -= 1;
+        buffer[i] = '0' + (magnitude % 10) as u8;
+        magnitude /= 10;
+        if (magnitude == 0) {
+            break;
+        }
+    }
+    if (value < 0) {
+        i -= 1;
+        buffer[i] = '-';
+    }
+    return buffer[i:];
+}
+
+// Writes value in hexadecimal, without 0x, at the end of buffer and returns that part
+pub fn format_hex(value: u32, buffer: []u8) []u8 {
+    var i = buffer.len;
+    for (;;) {
+        i -= 1;
+        buffer[i] = "0123456789abcdef"[(value & 15) as int];
+        value >>= 4;
+        if (value == 0) {
+            return buffer[i:];
+        }
+    }
+}
+
+// Text that grows as pieces are appended. It lives on the heap until release.
+pub struct Builder {
+    bytes: []u8;
+    len: int;
+}
+
+pub fn builder(capacity: int) Builder {
+    if (capacity < 16) {
+        capacity = 16;
+    }
+    return Builder { bytes: new(u8, capacity) };
+}
+
+// Makes room for count more bytes
+pub fn reserve(b: *Builder, count: int) {
+    if (b.len + count <= b.bytes.len) {
+        return;
+    }
+    var capacity = b.bytes.len * 2;
+    if (capacity < b.len + count) {
+        capacity = b.len + count;
+    }
+    var larger = new(u8, capacity);
+    mem.copy(larger, b.bytes[:b.len]);
+    free(b.bytes);
+    b.bytes = larger;
+}
+
+pub fn append(b: *Builder, text: []u8) {
+    reserve(b, text.len);
+    mem.copy(b.bytes[b.len:], text);
+    b.len += text.len;
+}
+
+pub fn append_byte(b: *Builder, c: u8) {
+    reserve(b, 1);
+    b.bytes[b.len] = c;
+    b.len += 1;
+}
+
+pub fn append_int(b: *Builder, value: int) {
+    var digits: [11]u8;
+    append(b, format_int(value, digits));
+}
+
+pub fn append_hex(b: *Builder, value: u32) {
+    var digits: [8]u8;
+    append(b, format_hex(value, digits));
+}
+
+// What was built so far; it moves when the builder grows
+pub fn text(b: *Builder) []u8 {
+    return b.bytes[:b.len];
+}
+
+pub fn clear(b: *Builder) {
+    b.len = 0;
+}
+
+pub fn release(b: *Builder) {
+    var none: []u8;
+    free(b.bytes);
+    b.bytes = none;
+    b.len = 0;
+}

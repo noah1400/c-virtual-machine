@@ -1,0 +1,17 @@
+true true false true
+8 -1 0 3 11 -1
+module str, equal to str: true, compare true
+[spaced out] [] [x]
+'12345' is 12345
+'-2147483648' is -2147483648
+'2147483647' is 2147483647
+'2147483648' is not a number
+'0x7fffFFFF' is 2147483647
+'-0x10' is -16
+'12a' is not a number
+'-' is not a number
+'' is not a number
+0 -2147483648 907 deadbeef 0
+item -19,item -16,item -11,item -4,item 5,item 16,item 29,item 44,item 61,item 80,item 101,item 124,ff
+102 bytes
+again and after release
