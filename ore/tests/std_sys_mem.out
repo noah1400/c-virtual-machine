@@ -1,0 +1,9 @@
+random repeats after seeding: true, below the limit: true
+time runs forward: true, memory: 1048576 bytes
+ticks count up: true
+6 bytes: ..copied....
+overlapping: ...copied...
+copy stops at the shorter: 3 abcco
+equal: true false false
+compare: true true true 0
+a struct copied as bytes: 1 2

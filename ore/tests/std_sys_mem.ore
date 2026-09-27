@@ -1,0 +1,39 @@
+// std/sys and std/mem
+// expect-exit: 3
+import "std/sys";
+import "std/mem";
+
+struct Pair {
+    a: int;
+    b: int;
+}
+
+fn main() {
+    var start = sys.time();
+    sys.seed(42);
+    var first = sys.random(100);
+    sys.seed(42);
+    print("random repeats after seeding: ", sys.random(100) == first, ", below the limit: ", first < 100, "\n");
+    print("time runs forward: ", sys.time() >= start, ", memory: ", sys.memory_size(), " bytes\n");
+    var before = sys.ticks();
+    print("ticks count up: ", sys.ticks() > before, "\n");
+
+    var buffer: [12]u8;
+    mem.fill(buffer, '.');
+    var n = mem.copy(buffer[2:], "copied");
+    print(n, " bytes: ", buffer, "\n");
+    mem.copy(buffer[1:], buffer[:8]);
+    print("overlapping: ", buffer, "\n");
+    print("copy stops at the shorter: ", mem.copy(buffer[:3], "abcdef"), " ", buffer[:5], "\n");
+
+    print("equal: ", mem.equal("abc", "abc"), " ", mem.equal("abc", "abd"), " ", mem.equal("ab", "abc"), "\n");
+    print("compare: ", mem.compare("apple", "apply") < 0, " ", mem.compare("b", "a") > 0, " ",
+          mem.compare("ab", "abc") < 0, " ", mem.compare("same", "same"), "\n");
+
+    var p = Pair { a: 1, b: 2 };
+    var q: Pair;
+    mem.copy(mem.bytes(&q as *u8, sizeof(Pair)), mem.bytes(&p as *u8, sizeof(Pair)));
+    print("a struct copied as bytes: ", q.a, " ", q.b, "\n");
+    sys.exit(3);
+    print("not reached\n");
+}

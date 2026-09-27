@@ -1,0 +1,34 @@
+// The process: leaving, time, and random numbers from the VM
+
+// Stops the program with an exit status
+pub fn exit(status: int) {
+    syscall(30, status);
+}
+
+// Milliseconds since the program started
+pub fn time() int {
+    return syscall(32).value;
+}
+
+// Instructions executed so far, counting up from 0 and wrapping around
+pub fn ticks() u32 {
+    return syscall(33).value as u32;
+}
+
+pub fn sleep(milliseconds: int) {
+    syscall(31, milliseconds);
+}
+
+// A number below limit, or any 32-bit value when limit is 0. The sequence repeats unless seeded.
+pub fn random(limit: u32) u32 {
+    return syscall(40, limit).value as u32;
+}
+
+pub fn seed(value: u32) {
+    syscall(41, value);
+}
+
+// The size of the VM's memory in bytes
+pub fn memory_size() int {
+    return syscall(23).value;
+}

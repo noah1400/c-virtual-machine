@@ -1,0 +1,42 @@
+// Copying, filling and comparing bytes
+
+// Copies as many bytes as both slices hold, even when they overlap, and returns how many
+pub fn copy(to: []u8, from: []u8) int {
+    var count = to.len;
+    if (from.len < count) {
+        count = from.len;
+    }
+    if (count > 0) {
+        syscall(22, to.ptr, from.ptr, count);
+    }
+    return count;
+}
+
+pub fn fill(to: []u8, value: u8) {
+    for (var i = 0; i < to.len; i += 1) {
+        to[i] = value;
+    }
+}
+
+pub fn equal(a: []u8, b: []u8) bool {
+    return a.len == b.len && compare(a, b) == 0;
+}
+
+// Negative, zero or positive as a sorts before, with or after b, byte by byte
+pub fn compare(a: []u8, b: []u8) int {
+    var count = a.len;
+    if (b.len < count) {
+        count = b.len;
+    }
+    for (var i = 0; i < count; i += 1) {
+        if (a[i] != b[i]) {
+            return a[i] as int - b[i] as int;
+        }
+    }
+    return a.len - b.len;
+}
+
+// The bytes of any memory, for copying and comparing values of other types
+pub fn bytes(address: *u8, size: int) []u8 {
+    return address[0:size];
+}
