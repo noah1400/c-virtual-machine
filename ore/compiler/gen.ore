@@ -1935,6 +1935,10 @@ fn count_expr(e: *ast.Expr, weight: int) {
     if (is_comparison(e) && local_of(e.left) != null && is_simple(e.right) || is_through_local(e)) {
         e.left.symbol.gain += weight;
     }
+    // Indexing an array or slice at a fixed place saves saving its address or its pointer and length
+    if (e.kind == ast.ExprKind.INDEX && e.left.type.kind != ast.TypeKind.POINTER && is_through_local(e.left)) {
+        e.left.left.symbol.gain += 3 * weight;
+    }
     count_expr(e.left, weight);
     count_expr(e.right, weight);
     count_expr(e.third, weight);
