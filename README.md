@@ -293,7 +293,7 @@ Syscall buffers and heap blocks are virtual addresses too. The vector table is r
 
 ### Encoding
 
-Each instruction is one little-endian 32-bit word at a 4-byte aligned address. Jumping to an unaligned address faults.
+Each instruction is one or two little-endian 32-bit words at a 4-byte aligned address. Jumping to an unaligned address faults.
 
 ```
  31        24 23    20 19    16 15    12 11                0
@@ -302,19 +302,21 @@ Each instruction is one little-endian 32-bit word at a 4-byte aligned address. J
 +------------+--------+--------+--------+-------------------+
 ```
 
-In the IMM, MEM, STK and BAS modes, the r2 field holds the upper 4 bits of a 16-bit immediate. The top three bits of the opcode select the instruction group.
+In the IMM, MEM, STK and BAS modes, the r2 field holds the upper 4 bits of a 16-bit immediate. When bit 3 of the mode is set, a second word follows and holds the whole 32-bit immediate or displacement. The assembler adds that extension word whenever a value does not fit the first word. The top three bits of the opcode select the instruction group.
 
 ### Addressing modes
 
-| Mode | Syntax | Operand | Range |
+| Mode | Syntax | Operand | Range in the first word |
 |---|---|---|---|
-| IMM | `#expr` or `expr` | The value itself, zero-extended | 0 to 65535 |
+| IMM | `#expr` or `expr` | The value itself, sign-extended | −32768 to 32767 |
 | REG | `R5` | The register | |
 | MEM | `[expr]` | Memory at an absolute address | 0 to 0xFFFF |
 | REGM | `[R5]` | Memory at the address in a register | |
 | IDX | `[R5+expr]`, `[R5-expr]` | Register plus displacement | −2048 to 2047 |
 | STK | `[SP]`, `[SP+expr]` | SP plus displacement | −32768 to 32767 |
 | BAS | `[BP]`, `[BP-expr]` | BP plus displacement | −32768 to 32767 |
+
+Values outside these ranges go in an extension word, which holds any 32-bit value.
 
 A bare label is an immediate. `LOAD R0, msg` loads the address of `msg`, while `LOAD R0, [msg]` loads the word stored there.
 
@@ -337,9 +339,8 @@ The tables below use three operand kinds:
 | `LOADW Rd, src` | 0x06 | Rd = src, zero-extended from 16 bits |
 | `STOREW Rs, addr` | 0x07 | Stores the low 16 bits of Rs |
 | `LEA Rd, addr` | 0x08 | Rd = the effective address |
-| `LOADHI Rd, #imm` | 0x09 | Replaces the upper 16 bits of Rd |
 
-`LOAD Rd, #value` accepts any 32-bit constant, including negative ones. If the constant does not fit in 16 bits, the assembler emits `LOAD` followed by `LOADHI`. The value must be known when the assembler reaches that line, so define large constants before you use them.
+`LOAD Rd, #value` accepts any 32-bit constant, including negative numbers and [floats](#floating-point).
 
 ### Arithmetic
 
@@ -358,8 +359,30 @@ The tables below use three operand kinds:
 | `SUBC Rd, src` | 0x2B | Rd −= src + C | Z N C O |
 | `IDIV Rd, src` | 0x2C | Signed division, rounding toward zero | Z N |
 | `IMOD Rd, src` | 0x2D | Signed remainder, with the sign of the dividend | Z N |
+| `MULH Rd, src` | 0x2E | Rd = the upper 32 bits of the signed 64-bit product | Z N |
+| `UMULH Rd, src` | 0x2F | Rd = the upper 32 bits of the unsigned 64-bit product | Z N |
 
 Division by zero faults. So does signed division of −2147483648 by −1.
+
+### Floating point
+
+Floats are IEEE single-precision values kept in the general registers. The assembler writes them as literals such as `#1.5` or `#-2e-3`, and [syscall 7](#console) prints them.
+
+| Instruction | Opcode | Operation | Flags |
+|---|---|---|---|
+| `FADD Rd, src` | 0x30 | Rd += src | Z N; clears C and O |
+| `FSUB Rd, src` | 0x31 | Rd −= src | Z N; clears C and O |
+| `FMUL Rd, src` | 0x32 | Rd *= src | Z N; clears C and O |
+| `FDIV Rd, src` | 0x33 | Rd /= src. Dividing by zero gives an infinity or NaN | Z N; clears C and O |
+| `FCMP Rd, src` | 0x34 | Compares Rd with src | Z C O; clears N |
+| `FSQRT Rd, src` | 0x35 | Rd = the square root of src | Z N; clears C and O |
+| `FNEG Rd` | 0x36 | Flips the sign of Rd | Z N; clears C and O |
+| `FABS Rd` | 0x37 | Clears the sign of Rd | Z N; clears C and O |
+| `ITOF Rd, src` | 0x38 | Rd = the signed integer src as a float | Z N; clears C and O |
+| `FTOI Rd, src` | 0x39 | Rd = src truncated to a signed integer | Z N O; clears C |
+
+- **Comparing:** `FCMP` sets Z when the values are equal and C when Rd is smaller, so the unsigned jumps `JB`, `JBE`, `JA` and `JAE` apply. If either value is NaN, the comparison is unordered and sets Z, C and O.
+- **Converting:** `FTOI` gives −2147483648 and sets O for NaN and for values outside the 32-bit range.
 
 ### Logic and shifts
 
@@ -375,6 +398,13 @@ Division by zero faults. So does signed division of −2147483648 by −1.
 | `ROL Rd, src` | 0x47 | Rotate left | Z N C |
 | `ROR Rd, src` | 0x48 | Rotate right | Z N C |
 | `TEST Rd, src` | 0x49 | Sets the flags of Rd & src | Z N; clears C and O |
+| `POPCNT Rd, src` | 0x4A | Rd = the number of set bits in src | Z N; clears C and O |
+| `CLZ Rd, src` | 0x4B | Rd = the number of leading zero bits in src, 32 for 0 | Z N; clears C and O |
+| `CTZ Rd, src` | 0x4C | Rd = the number of trailing zero bits in src, 32 for 0 | Z N; clears C and O |
+| `BSWAP Rd` | 0x4D | Reverses the byte order of Rd | Z N |
+| `SETcc Rd` | 0x4E | Rd = 1 if condition *cc* holds, otherwise 0 | None |
+
+`SETcc` takes every condition of the [conditional jumps](#control-flow), under all their names: `SETZ`, `SETNE`, `SETL`, `SETAE` and so on.
 
 Shifts and rotates use the low 5 bits of the operand as the count.
 
@@ -395,7 +425,7 @@ Shifts and rotates use the low 5 bits of the operand as the count.
 
 A *target* can be:
 
-- A label or address, as in `JMP loop`.
+- A label or address, as in `JMP loop`. It is stored as an offset from the next instruction, so the code runs at any address.
 - A register, as in `JMP R8`.
 - A memory operand that holds the address, as in `JMP [table+8]`.
 
@@ -442,16 +472,20 @@ After `CALL` and `ENTER`, `[BP+4]` is the return address and `[BP+8]` is the las
 | `IN Rd, val` | 0xA5 | Reads a port |
 | `OUT val, Rs` | 0xA6 | Writes Rs to a port |
 | `CPUID` | 0xA7 | Reports machine information, selected by R0 (see the table below) |
-| `RESET` | 0xA8 | Clears the registers, resets SP and BP, and jumps to the entry point. Memory is kept |
+| `RESET` | 0xA8 | Restores the initial registers and control registers, empties the heap and jumps to the entry point. Memory is kept |
 | `DEBUG` | 0xA9 | A breakpoint under `vm -d`. Does nothing otherwise |
+| `MFCR Rd, NAME` | 0xAA | Reads a [control register](#control-registers) |
+| `MTCR NAME, Rs` | 0xAB | Writes a control register |
+
+`HALT`, `CLI`, `STI`, `IRET`, `IN`, `OUT`, `RESET`, `MFCR` and `MTCR` are privileged, as are `SYSCALL` and `PROTECT`.
 
 | R0 | `CPUID` result |
 |---|---|
 | 0 | R0 = highest function (4). R5 and R6 = the vendor string "VM32CPU" |
-| 1 | R0 = version, 0x00010001. R5 and R6 = feature bits |
-| 2 | R0 = memory size. R5 = segment bases / 256, one byte per segment. R6 = segment sizes in KB |
+| 1 | R0 = version, 0x00020000. R5 and R6 = feature bits |
+| 2 | R0 = memory size. R5 = page size. R6 = stack size |
 | 3 | R0 = number of instructions. R5 = mask of addressing modes. R6 = mask of instruction groups |
-| 4 | R0 = instructions executed. R5 = 2 under the debugger, plus 4 while I is set. R6 = the last error code |
+| 4 | R0 = instructions executed. R5 = 2 under the debugger, plus 4 while I is set, 8 in supervisor mode and 16 while paging is on. R6 = the last error code |
 
 ### Memory management
 
@@ -463,7 +497,7 @@ After `CALL` and `ENTER`, `[BP+4]` is the return address and `[BP+8]` is the las
 | `MEMSET Rd, Rv, size` | 0xC3 | Fills *size* bytes at Rd with the low byte of Rv |
 | `PROTECT Ra, val` | 0xC4 | Sets the permissions of the block at Ra |
 
-*size* is an immediate from 0 to 4095, or a register. Syscalls 20 to 22 do the same jobs, but they report failures in R5 instead of faulting.
+*size* is an immediate or a register. Syscalls 20 to 22 do the same jobs, but they report failures in R5 instead of faulting.
 
 ## Assembly language
 
