@@ -508,13 +508,15 @@ label:  MNEMONIC operand, operand   ; comment
 - Each line holds at most one statement, which can follow a label. Comments start with `;`.
 - Mnemonics, registers and directives are case-insensitive. Symbols are case-sensitive.
 - A label that starts with a dot is local to the global label before it. For example, `.loop` after `main:` defines `main.loop`, and other code can reach it under that full name.
-- Instructions go in `.text`, which starts at 0x0000. Data goes in `.data`, which starts at 0x4000. You can switch between the two sections as often as you like.
+- Instructions go in `.text`, which starts at 0x0000. Data goes in `.data`, which starts on the first page boundary after the code. You can switch between the two sections as often as you like.
+- An instruction gets an extension word when an operand needs one. For operands that refer to later symbols, the assembler repeats its layout pass until no address moves.
 
 ### Expressions
 
 Operands and directive arguments are integer expressions. An expression can contain:
 
 - **Numbers:** `42`, `0x2A`, `0b101010`, `0o52`, or C-style octal such as `052`.
+- **Floats:** decimal numbers with a fraction or an exponent, such as `1.5` or `3e8`, stand for the bits of a single-precision float. They can take a sign, but no other operator.
 - **Characters:** `'A'`, `'\n'`.
 - **Symbols.**
 - **`$`:** the address of the current statement.
@@ -544,11 +546,12 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.byte v, ...` | 8-bit values. Strings are allowed too |
 | `.word v, ...` | 16-bit values |
 | `.dword v, ...` | 32-bit values |
+| `.float v, ...` | Single-precision floats. Integers are converted |
 | `.ascii "s", ...` | String bytes |
 | `.asciiz "s", ...` or `.string` | NUL-terminated strings |
 | `.space n[, fill]` or `.skip` | *n* bytes of *fill* (default 0) |
 | `.align n` | Pad to a multiple of *n*, a power of two up to 4096 |
-| `.org address` | Pad forward to an address in the current section |
+| `.org offset` | Pad forward to an offset from the start of the current section |
 | `.equ NAME, expr` or `.set` | Define a constant. A constant cannot be redefined |
 | `.entry expr` | Start execution here instead of at 0x0000 |
 | `.error "message"` | Stop assembly with this message. Useful inside `.if` |
@@ -557,6 +560,8 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.if`, `.ifdef`, `.ifndef`, `.else`, `.endif` | Conditional assembly |
 
 A value can be written signed or unsigned, but it must fit its width. For example, `.byte` accepts −128 to 255.
+
+The arguments of `.space`, `.align`, `.org` and `.if` decide the layout. They may only use symbols defined earlier, and must not depend on labels whose addresses move when instructions grow.
 
 ### Macros
 
@@ -631,6 +636,8 @@ By default, a binary includes the symbols and source lines that the disassembler
 - File and memory syscalls report problems in R5 instead, and the program keeps running.
 - An unknown syscall number faults.
 
+`SYSCALL` is privileged. Under a kernel, user programs ask the kernel through `INT`, and the kernel makes the syscall. Buffer addresses are virtual addresses.
+
 ### Console
 
 | # | Name | Arguments | Result |
@@ -642,7 +649,7 @@ By default, a binary includes the symbols and source lines that the disassembler
 | 4 | Read line | R0 = buffer, R5 = buffer size | R0 = length. The newline is dropped and a NUL is added. At end of input, R5 = 11 |
 | 5 | Print hex | R0 = value | Printed like `0x1f` |
 | 6 | Print in base | R0 = unsigned value, R5 = base (2–36) | |
-| 7 | Print fixed-point | R0 = signed 16.16 value | Printed with four decimals |
+| 7 | Print float | R0 = single-precision float | Printed with up to six significant digits |
 | 8 | Clear screen | | |
 | 9 | Set color | R0 = foreground + background × 256, each 0–7 | Foreground 0xFF resets the colors. A background of 8 or more selects the terminal's default background |
 
@@ -689,7 +696,7 @@ The random generator is xorshift32 with a fixed default seed. Runs are therefore
 
 ### Error codes
 
-These codes appear in R5 after syscalls and in `CPUID` function 4.
+These codes appear in R5 after syscalls and in `CPUID` function 4. Codes 1 to 14 are also the [exception](#interrupts-and-exceptions) vectors of those faults.
 
 | Code | Meaning |
 |---|---|
@@ -706,7 +713,10 @@ These codes appear in R5 after syscalls and in `CPUID` function 4.
 | 10 | Unhandled interrupt |
 | 11 | I/O error or end of input |
 | 12 | Memory protection fault |
-| 14 | Instruction limit reached |
+| 13 | Privilege violation |
+| 14 | Page fault |
+| 15 | Single-step trap (a vector only) |
+| 16 | Instruction limit reached (never delivered to the program) |
 
 ## Debugger
 
@@ -717,7 +727,7 @@ These codes appear in R5 after syscalls and in `CPUID` function 4.
 | `s`, `step [N]` | Execute N instructions (default 1) |
 | `n`, `next` | Run to the next source line, stepping over calls |
 | `f`, `finish` | Run until the current subroutine returns |
-| `c`, `continue` | Run until a breakpoint, a `DEBUG` instruction, `HALT` or a fault |
+| `c`, `continue` | Run until a breakpoint, a `DEBUG` instruction, an exception, `HALT` or a fault |
 | `b`, `break ADDR\|SYMBOL` | Set a breakpoint, for example `b main.loop` or `b 0x10` |
 | `w`, `watch ADDR\|SYMBOL` | Stop after an instruction changes the 32-bit word at ADDR |
 | `d`, `delete N` | Delete breakpoint or watchpoint N |
@@ -727,10 +737,11 @@ These codes appear in R5 after syscalls and in `CPUID` function 4.
 | `m`, `memory ADDR [N]` | Dump N bytes (default 16) |
 | `stack [N]` | Show N words from the top of the stack (default 8) |
 | `r`, `registers` | Show registers and flags |
+| `cr` | Show control registers |
 | `h`, `help` | Show help |
 | `q`, `quit` | Leave the debugger |
 
-The program's input and output share the terminal with the debugger.
+Any command that runs the program stops when an exception is delivered to a handler, and names the exception. The program's input and output share the terminal with the debugger.
 
 ## Binary format
 
@@ -746,8 +757,8 @@ All fields are little-endian.
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 4 | Magic `VM32` |
-| 4 | 2 | Major version (1) |
-| 6 | 2 | Minor version (1) |
+| 4 | 2 | Major version (2) |
+| 6 | 2 | Minor version (0) |
 | 8 | 4 | Header size (36) |
 | 12 | 4 | Code base |
 | 16 | 4 | Code size |
@@ -756,7 +767,7 @@ All fields are little-endian.
 | 28 | 4 | Size of the debug information |
 | 32 | 4 | Entry point |
 
-Version 1.0 files have a 32-byte header without the entry point. They start at the code base.
+The VM loads code and data at their bases, which must leave the top 64 KB for the stack. It rejects other major versions, since their instruction encoding differs.
 
 The debug information holds the symbols, then the source lines. Each string is stored as a 16-bit length followed by its bytes:
 
