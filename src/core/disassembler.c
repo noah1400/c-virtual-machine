@@ -208,7 +208,8 @@ int disassemble_file(const char *filename) {
     // Raw images are plain code loaded at the start of the code segment
     Vm32Image bin = { .code_size = size, .code = buffer };
     int raw = !vm32_is_image(buffer, size);
-    problem = raw ? NULL : vm32_parse(buffer, size, &bin);
+    problem = vm32_is_object(buffer, size) ? "This is an object file, which vmld has to link first"
+              : raw ? NULL : vm32_parse(buffer, size, &bin);
     if (problem) {
         fprintf(stderr, "Error: %s: %s\n", problem, filename);
         free(buffer);

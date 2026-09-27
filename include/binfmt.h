@@ -59,6 +59,7 @@ void vm32_write_symbol(struct Buffer *b, const char *name, uint32_t address, uin
 void vm32_write_line(struct Buffer *b, uint32_t address, uint32_t line, const char *text, const char *file);
 
 int vm32_is_image(const uint8_t *image, uint32_t size);
+int vm32_is_object(const uint8_t *image, uint32_t size);
 
 // Returns NULL on success, otherwise a description of the problem
 const char *vm32_parse(const uint8_t *image, uint32_t size, Vm32Image *out);

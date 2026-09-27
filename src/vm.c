@@ -221,6 +221,9 @@ int vm_load_program(VM *vm, const uint8_t *program, uint32_t size) {
     if (vm32_is_image(program, size)) {
         return load_vm32_image(vm, program, size);
     }
+    if (vm32_is_object(program, size)) {
+        return vm_raise(vm, VM_ERROR_IO_ERROR, "This is an object file, which vmld has to link first");
+    }
     return load_raw_image(vm, program, size);
 }
 

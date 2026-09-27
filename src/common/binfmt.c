@@ -3,6 +3,7 @@
 #include <string.h>
 #include "binfmt.h"
 #include "buffer.h"
+#include "objfmt.h"
 
 void vm32_write_header(Buffer *b, uint32_t code_base, uint32_t code_size, uint32_t data_base, uint32_t data_size,
                        uint32_t entry) {
@@ -41,6 +42,10 @@ void vm32_write_line(Buffer *b, uint32_t address, uint32_t line, const char *tex
 
 int vm32_is_image(const uint8_t *image, uint32_t size) {
     return size >= 4 && memcmp(image, VM32_MAGIC, 4) == 0;
+}
+
+int vm32_is_object(const uint8_t *image, uint32_t size) {
+    return size >= 4 && memcmp(image, VMO_MAGIC, 4) == 0;
 }
 
 const char *vm32_parse(const uint8_t *image, uint32_t size, Vm32Image *out) {
