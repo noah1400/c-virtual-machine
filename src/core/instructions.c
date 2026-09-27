@@ -463,8 +463,12 @@ static int execute_system(VM *vm, const Instruction *instr) {
             }
             if (instr->opcode == MFCR_OP) {
                 vm->registers[instr->reg1] = vm->control[instr->immediate];
-            } else {
-                vm->control[instr->immediate] = vm->registers[instr->reg1];
+                break;
+            }
+            vm->control[instr->immediate] = vm->registers[instr->reg1];
+            // Moving the heap forgets every block in it
+            if (instr->immediate == CR_HEAPLO || instr->immediate == CR_HEAPHI) {
+                memory_heap_reset(vm);
             }
             break;
     }

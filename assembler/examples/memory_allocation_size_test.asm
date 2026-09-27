@@ -13,8 +13,8 @@
     LOAD R0, test1_text
     SYSCALL #2
     
-    ; Try to allocate 32KB (heap segment is only 16KB)
-    LOAD R12, #32768
+    ; Try to allocate 1 GB, more than the heap can hold
+    LOAD R12, #0x40000000
     
     ; Print the size we're trying to allocate
     LOAD R0, size_text

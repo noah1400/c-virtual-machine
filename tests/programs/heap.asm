@@ -33,7 +33,7 @@
     CALL print_int
 
     ; Heap syscalls report failures in R5 instead of stopping the program
-    LOAD R0, #0xFFFF
+    LOAD R0, #0x7FFFFFFF
     SYSCALL #20
     MOVE R8, R5
     CALL print_int

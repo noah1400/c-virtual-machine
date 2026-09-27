@@ -31,6 +31,7 @@ int memory_copy(VM *vm, uint32_t dest, uint32_t src, uint32_t size);
 int memory_set(VM *vm, uint32_t address, uint8_t value, uint32_t size);
 
 // Heap memory management
+void memory_heap_reset(VM *vm);
 uint32_t memory_allocate(VM *vm, uint32_t size);
 int memory_free(VM *vm, uint32_t address);
 int memory_protect(VM *vm, uint32_t address, uint8_t flags);

@@ -138,6 +138,7 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
 
     vm->entry_point = bin.entry;
     vm->code_end = code_base + code_size;
+    vm->image_end = data_size && data_base + data_size > vm->code_end ? data_base + data_size : vm->code_end;
     cpu_reset(vm);
     return VM_ERROR_NONE;
 }
@@ -151,6 +152,7 @@ static int load_raw_image(VM *vm, const uint8_t *image, uint32_t size) {
     memcpy(vm->memory + CODE_SEGMENT_BASE, image, size);
     vm->entry_point = CODE_SEGMENT_BASE;
     vm->code_end = CODE_SEGMENT_BASE + size;
+    vm->image_end = vm->code_end;
     cpu_reset(vm);
     return VM_ERROR_NONE;
 }

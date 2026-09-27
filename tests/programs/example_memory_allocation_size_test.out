@@ -1,4 +1,4 @@
 Allocation Size Error Test
 
-Test 1: Allocating more memory than availableAttempting to allocate bytes: 32768
+Test 1: Allocating more memory than availableAttempting to allocate bytes: 1073741824
 Attempting allocation... 

@@ -7,7 +7,7 @@
 #include "vm.h"
 
 #define DEFAULT_MEMORY_KB 1024
-#define MIN_MEMORY_KB     128
+#define MIN_MEMORY_KB     (VM_MIN_MEMORY_SIZE / 1024)
 #define MAX_MEMORY_KB     1048576
 
 typedef struct {

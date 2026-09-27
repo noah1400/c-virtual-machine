@@ -36,8 +36,9 @@
 #define HEAP_SEGMENT_SIZE   0x4000
 #define VM_ADDRESS_SPACE_SIZE 0x10000u
 
-// The stack occupies the top of memory and grows down
+// The stack occupies the top of memory and grows down; the heap lies between the program and the stack
 #define VM_STACK_SIZE 0x10000u
+#define VM_MIN_MEMORY_SIZE (2 * VM_STACK_SIZE)
 
 // Interrupt vector table: 256 handler addresses of 4 bytes each
 
@@ -81,6 +82,10 @@ typedef struct {
     uint64_t start_ms;       // Host clock when the VM started
     uint32_t entry_point;    // Where execution starts and RESET returns to
     uint32_t code_end;       // End of the loaded code
+    uint32_t image_end;      // End of the loaded code and data, where the heap starts
+    struct HeapBlock *heap_blocks;
+    uint32_t heap_block_count;
+    uint32_t heap_block_capacity;
     FILE *files[VM_MAX_FILES];
     int arg_count;           // Program arguments, starting with the program path
     char **args;

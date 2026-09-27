@@ -10,6 +10,9 @@ void cpu_reset(VM *vm) {
     memset(vm->control, 0, sizeof(vm->control));
     vm->control[CR_SHI] = vm->memory_size;
     vm->control[CR_SLO] = vm->memory_size - VM_STACK_SIZE;
+    vm->control[CR_HEAPLO] = (vm->image_end + 15) & ~15u;
+    vm->control[CR_HEAPHI] = vm->control[CR_SLO];
+    memory_heap_reset(vm);
     vm->registers[R2_SP] = vm->control[CR_SHI];
     vm->registers[R1_BP] = vm->control[CR_SHI];
     vm->registers[R3_PC] = vm->entry_point;
