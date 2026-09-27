@@ -154,6 +154,7 @@ fn usage(handle: int) {
     io.write(handle, "assembly files that define its extern functions.\n");
     io.write(handle, "  -o FILE   write the binary to FILE (default: the program with .bin)\n");
     io.write(handle, "  -S        write the assembly instead, to FILE or the program with .asm\n");
+    io.write(handle, "  -b ADDR   put the program at ADDR instead of 0, as vmasm -b does\n");
     io.write(handle, "  -I DIR    look for imported modules in DIR as well\n");
     io.write(handle, "  -L DIR    take the runtime and the standard library from DIR\n");
     io.write(handle, "  -h        show this help\n");
@@ -185,13 +186,15 @@ fn main(args: [][]u8) int {
             return 0;
         } else if (str.equal(arg, "-S")) {
             assembly_only = true;
-        } else if ((str.equal(arg, "-o") || str.equal(arg, "-I") || str.equal(arg, "-L")) && i + 1 < args.len) {
+        } else if ((str.equal(arg, "-o") || str.equal(arg, "-I") || str.equal(arg, "-L") || str.equal(arg, "-b")) &&
+                   i + 1 < args.len) {
+            // The vmc script gives the base address to vmasm
             i += 1;
             if (arg[1] == 'o') {
                 output = args[i];
             } else if (arg[1] == 'I') {
                 ast.add_text(&dirs, args[i]);
-            } else {
+            } else if (arg[1] == 'L') {
                 program.library = args[i];
             }
         } else if (str.starts_with(arg, "-")) {

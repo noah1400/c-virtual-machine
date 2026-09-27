@@ -190,6 +190,7 @@ static void usage(FILE *out) {
                  "assembly files that define its extern functions.\n"
                  "  -o FILE   write the binary to FILE (default: the program with .bin)\n"
                  "  -S        write the assembly instead, to FILE or the program with .asm\n"
+                 "  -b ADDR   put the program at ADDR instead of 0, as vmasm -b does\n"
                  "  -I DIR    look for imported modules in DIR as well\n"
                  "  -L DIR    take the runtime and the standard library from DIR\n"
                  "  -h        show this help\n");
@@ -221,10 +222,12 @@ static int write_file(const char *path, const char *text, size_t size) {
 
 // Runs vmasm from the directory vmc0 lives in, or else from the PATH. Assembly files given with
 // relative paths are found from the current directory.
-static int assemble(const char *self, const char *library, const char *source, const char *output) {
+static int assemble(const char *self, const char *library, const char *base, const char *source,
+                    const char *output) {
     const char *slash = strrchr(self, '/');
     char *vmasm = slash ? join(self, (size_t)(slash - self), "vmasm", "") : copy_text("vmasm", 5);
-    char *args[] = { vmasm, "-I", (char *)library, "-I", ".", (char *)source, "-o", (char *)output, NULL };
+    char *args[] = { vmasm, "-I", (char *)library, "-I", ".", (char *)source, "-o", (char *)output, "-b",
+                     (char *)base, NULL };
 
     fflush(stdout);
     pid_t child = fork();
@@ -242,7 +245,7 @@ static int assemble(const char *self, const char *library, const char *source, c
 
 int main(int argc, char **argv) {
     Program program = { 0 };
-    const char *source = NULL, *output = NULL;
+    const char *source = NULL, *output = NULL, *base = "0";
     int assembly_only = 0;
 
     // The runtime and the standard library live in ore/lib next to vmc0
@@ -257,9 +260,12 @@ int main(int argc, char **argv) {
             return 0;
         } else if (strcmp(arg, "-S") == 0) {
             assembly_only = 1;
-        } else if ((strcmp(arg, "-o") == 0 || strcmp(arg, "-I") == 0 || strcmp(arg, "-L") == 0) && i + 1 < argc) {
+        } else if ((strcmp(arg, "-o") == 0 || strcmp(arg, "-I") == 0 || strcmp(arg, "-L") == 0 ||
+                    strcmp(arg, "-b") == 0) && i + 1 < argc) {
             if (arg[1] == 'o') {
                 output = argv[++i];
+            } else if (arg[1] == 'b') {
+                base = argv[++i];
             } else if (arg[1] == 'I') {
                 program.include_dirs[program.include_dir_count++] = argv[++i];
             } else {
@@ -296,7 +302,7 @@ int main(int argc, char **argv) {
     if (assembly_only) {
         return 0;
     }
-    if (!assemble(argv[0], program.library, path, output)) {
+    if (!assemble(argv[0], program.library, base, path, output)) {
         fprintf(stderr, "vmc0: error: vmasm could not assemble %s\n", path);
         return 1;
     }

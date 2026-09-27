@@ -883,6 +883,7 @@ $ ./vm primes.bin
 Usage: vmc [options] program.ore [file.asm...]
   -o FILE   write the binary to FILE (default: the program with .bin)
   -S        write the assembly instead, to FILE or the program with .asm
+  -b ADDR   put the program at ADDR instead of 0, as vmasm -b does
   -I DIR    look for imported modules in DIR as well
   -L DIR    take the runtime and the standard library from DIR
 ```
