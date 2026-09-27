@@ -283,13 +283,23 @@ static void cmd_step(Debugger *dbg, int argc, char **argv) {
     cpu_dump_registers(dbg->vm);
 }
 
+// The instructions of a macro call or of a line that .loc named share their line
+static int same_line(const SourceLine *a, const SourceLine *b) {
+    if (!a || !b || a->line_num != b->line_num) {
+        return 0;
+    }
+    if (a->source_file && b->source_file) {
+        return strcmp(a->source_file, b->source_file) == 0;
+    }
+    return a->source_file == b->source_file;
+}
+
 static void cmd_next(Debugger *dbg) {
     VM *vm = dbg->vm;
     const SourceLine *start = debug_line_at(vm->debug_info, vm->registers[R3_PC]);
 
     while (step_over(dbg) && !at_breakpoint(dbg)) {
-        const SourceLine *line = debug_line_at(vm->debug_info, vm->registers[R3_PC]);
-        if (!start || line != start) {
+        if (!same_line(start, debug_line_at(vm->debug_info, vm->registers[R3_PC]))) {
             break;
         }
     }

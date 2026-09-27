@@ -1,0 +1,74 @@
+Debugger ready. Type 'h' for help.
+0x0000 <main>
+  tests/programs/loc_debugger.asm:5: PUSH #3
+Next instruction: PUSH #0x3
+> # Into count, then a line at a time: the jump to the loop test stays on line 3
+> s 2
+R0  0x00000000   BP  0x00100000   SP  0x000FFFF8   PC  0x0000000C
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [------S-]
+Instructions executed: 2, last: CALL count
+0x000C <count>
+  count.c:1: int count(int n) {
+Next instruction: ENTER #4
+> n
+R0  0x00000000   BP  0x000FFFF4   SP  0x000FFFF0   PC  0x00000010
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [------S-]
+Instructions executed: 3, last: ENTER #4
+0x0010 <count+4>
+  count.c:2: int i = 0;
+Next instruction: LOAD R5, #0x0
+> n
+R0  0x00000000   BP  0x000FFFF4   SP  0x000FFFF0   PC  0x00000018
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [------S-]
+Instructions executed: 5, last: STORE R5, [BP-4]
+0x0018 <count+12>
+  count.c:3: while (i < n)
+Next instruction: JMP count.test
+> n
+R0  0x00000000   BP  0x000FFFF4   SP  0x000FFFF0   PC  0x0000001C
+SR  0x00000046   R5  0x00000000   R6  0x00000003   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [-NC---S-]
+Instructions executed: 10, last: JL count.body
+0x001C <count.body>
+  count.c:4: i++;
+Next instruction: LOAD R5, [BP-4]
+> n
+R0  0x00000000   BP  0x000FFFF4   SP  0x000FFFF0   PC  0x00000028
+SR  0x00000044   R5  0x00000001   R6  0x00000003   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [--C---S-]
+Instructions executed: 13, last: STORE R5, [BP-4]
+0x0028 <count.test>
+  count.c:3: while (i < n)
+Next instruction: LOAD R5, [BP-4]
+> n
+R0  0x00000000   BP  0x000FFFF4   SP  0x000FFFF0   PC  0x0000001C
+SR  0x00000046   R5  0x00000001   R6  0x00000003   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [-NC---S-]
+Instructions executed: 17, last: JL count.body
+0x001C <count.body>
+  count.c:4: i++;
+Next instruction: LOAD R5, [BP-4]
+> c
+Program halted
+R0  0x00000003   BP  0x00100000   SP  0x000FFFFC   PC  0x0000000C
+SR  0x00000041   R5  0x00000003   R6  0x00000003   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [Z-----S-]
+Instructions executed: 35, last: HALT
+> 
