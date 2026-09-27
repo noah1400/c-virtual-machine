@@ -61,11 +61,18 @@ typedef struct {
 
 typedef enum { SYM_CODE = 0, SYM_DATA = 1, SYM_CONST = 2 } SymbolKind;
 
+// What a value in an object file is relative to: nothing, a section, or BASE_SYMBOL plus the index of
+// an external symbol. Binaries only hold plain values.
+enum { BASE_NONE, BASE_TEXT, BASE_DATA, BASE_SYMBOL };
+
 typedef struct {
     char *name;
     int64_t value;
     int defined;
     SymbolKind kind;
+    int base;
+    int external;       // declared with .extern and defined by another object file
+    int global;         // exported with .global
     const SourceLine *line;
 } AsmSymbol;
 
@@ -139,6 +146,7 @@ typedef struct {
     int64_t structure_offset;
     const SourceLine *structure_line;
 
+    int object;         // assembling an object file, where addresses are relative to their section
     int changed;        // a layout pass moved a label, changed a constant or widened an instruction
     int64_t entry;
     const SourceLine *entry_line;   // the .entry directive, if any
@@ -171,6 +179,8 @@ typedef struct {
     int operators;      // operators applied so far, which floats must not take part in
     SymbolTable *constants;     // while the source is read: the constants known so far
     int quiet;          // leave errors to the passes
+    int relocatable;    // the caller takes a value relative to a section or an external symbol
+    int base;           // what the last expression is relative to
 } Parser;
 
 int64_t parse_expression(Parser *p);
