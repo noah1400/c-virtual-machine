@@ -82,13 +82,12 @@ static int alloc_frame(Gen *g, int size) {
 }
 
 static const char *symbol_name(const Symbol *s) {
-    static char names[4][160];
-    static int next;
-    char *name = names[next++ % 4];
     if (s->decl && s->decl->is_extern) {
         return s->name;
     }
-    snprintf(name, sizeof(names[0]), "%s.%s", s->module->name, s->name);
+    size_t size = strlen(s->module->name) + strlen(s->name) + 2;
+    char *name = allocate(size);
+    snprintf(name, size, "%s.%s", s->module->name, s->name);
     return name;
 }
 
@@ -184,15 +183,14 @@ static const char *symbol_name(const Symbol *s);
 
 // A variable that instructions can address directly, as BP-8 or its label
 static const char *place(const Expr *e) {
-    static char text[176];
+    static char text[32];
     if (e->kind != EX_NAME || (e->symbol->kind != SYM_LOCAL && e->symbol->kind != SYM_GLOBAL)) {
         return NULL;
     }
-    if (e->symbol->kind == SYM_LOCAL) {
-        snprintf(text, sizeof(text), "BP%+d", e->symbol->offset);
-    } else {
-        snprintf(text, sizeof(text), "%s", symbol_name(e->symbol));
+    if (e->symbol->kind == SYM_GLOBAL) {
+        return symbol_name(e->symbol);
     }
+    snprintf(text, sizeof(text), "BP%+d", e->symbol->offset);
     return text;
 }
 
@@ -230,9 +228,10 @@ static void scale(Gen *g, int size, const char *reg) {
 
 // Labels of data without a name of its own; digits after the dot keep them apart from Ore names
 static const char *pool_label(Gen *g) {
-    char name[160];
-    snprintf(name, sizeof(name), "%s.%d", g->m->name, ++g->strings);
-    return copy_text(name, strlen(name));
+    size_t size = strlen(g->m->name) + 16;
+    char *name = allocate(size);
+    snprintf(name, size, "%s.%d", g->m->name, ++g->strings);
+    return name;
 }
 
 static const char *string_label(Gen *g, const char *bytes, int size) {
@@ -293,17 +292,19 @@ static int is_comparison(const Expr *e) {
 
 // Leaves the left operand in R0 and puts the right one where the instruction can take it
 static const char *operands(Gen *g, Expr *e) {
-    static char immediate[192];
     if (e->right->is_const && is_scalar(e->right->type)) {
         gen_expr(g, e->left);
-        snprintf(immediate, sizeof(immediate), "#%d", (int)(int32_t)e->right->value);
+        char *immediate = allocate(16);
+        snprintf(immediate, 16, "#%d", (int)(int32_t)e->right->value);
         return immediate;
     }
     // Memory operands are read as 32 bits
     if (place(e->right) && is_scalar(e->right->type) && e->right->type->size == 4) {
         gen_expr(g, e->left);
-        snprintf(immediate, sizeof(immediate), "[%s]", place(e->right));
-        return immediate;
+        size_t size = strlen(place(e->right)) + 3;
+        char *memory = allocate(size);
+        snprintf(memory, size, "[%s]", place(e->right));
+        return memory;
     }
     gen_expr(g, e->left);
     emit(g, "    PUSH R0\n");
@@ -748,9 +749,9 @@ static void gen_expr(Gen *g, Expr *e) {
 static void gen_assign(Gen *g, Stmt *s) {
     Type *t = s->target->type;
     const char *direct = place(s->target);
-    char target[176] = "R6";
+    const char *target = "R6";
     if (direct) {
-        snprintf(target, sizeof(target), "%s", direct);
+        target = copy_text(direct, strlen(direct));
     } else {
         gen_addr(g, s->target);
         emit(g, "    PUSH R0\n");
