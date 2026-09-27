@@ -1,0 +1,7 @@
+// A module whose functions are written in native.asm next to it
+pub extern fn rotate_left(value: u32, count: int) u32;
+pub extern fn count_bits(value: u32) int;
+
+pub fn parity(value: u32) int {
+    return count_bits(value) % 2;
+}

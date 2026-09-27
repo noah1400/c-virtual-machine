@@ -122,6 +122,11 @@ static char *find_import(Program *program, const char *name, const Module *impor
     return exists(path) ? path : NULL;
 }
 
+static void add_assembly(Program *program, const char *path) {
+    extend((void **)&program->assembly, &program->assembly_capacity, program->assembly_count, sizeof(char *));
+    program->assembly[program->assembly_count++] = path;
+}
+
 static const char *module_name(const char *path) {
     const char *base = strrchr(path, '/');
     base = base ? base + 1 : path;
@@ -163,6 +168,16 @@ Module *load_module(Program *program, const char *path, const Module *importer, 
     }
     grow((void **)&program->modules, program->module_count + 1, sizeof(Module *));
     program->modules[program->module_count++] = m;
+
+    // A module can bring assembly for its extern functions in a file of the same name
+    size_t length = strlen(resolved);
+    if (length > 4 && strcmp(resolved + length - 4, ".ore") == 0) {
+        char *assembly = copy_text(resolved, length);
+        strcpy(assembly + length - 4, ".asm");
+        if (exists(assembly)) {
+            add_assembly(program, assembly);
+        }
+    }
     lex(m);
     parse(program, m);
     return m;
@@ -233,7 +248,6 @@ int main(int argc, char **argv) {
     const char *slash = strrchr(argv[0], '/');
     program.library = join(argv[0], slash ? (size_t)(slash - argv[0]) : 0, "ore/lib", "");
     program.include_dirs = allocate((size_t)argc * sizeof(char *));
-    program.assembly = allocate((size_t)argc * sizeof(char *));
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -254,7 +268,7 @@ int main(int argc, char **argv) {
             usage(stderr);
             return 1;
         } else if (strlen(arg) > 4 && strcmp(arg + strlen(arg) - 4, ".asm") == 0) {
-            program.assembly[program.assembly_count++] = arg;
+            add_assembly(&program, arg);
         } else if (source) {
             usage(stderr);
             return 1;

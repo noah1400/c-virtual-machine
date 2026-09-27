@@ -1,0 +1,6 @@
+// A module can bring assembly for its extern functions in a file of the same name
+import "modules/native";
+
+fn main() {
+    print(native.rotate_left(0x80000001, 4), " ", native.count_bits(0xF0F0), " ", native.parity(7), "\n");
+}

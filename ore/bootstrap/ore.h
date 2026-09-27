@@ -309,6 +309,7 @@ typedef struct {
     const char *library;
     const char **assembly;  // files of assembly for extern functions
     int assembly_count;
+    int assembly_capacity;
     Symbol *main;
 } Program;
 
