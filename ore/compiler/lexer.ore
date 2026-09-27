@@ -58,10 +58,11 @@ fn add(lx: *Lexer, t: *ast.Token) {
         if (capacity == 0) {
             capacity = 1024;
         }
-        var larger = (ast.allocate(capacity * sizeof(ast.Token)) as *ast.Token)[:capacity];
+        var larger = new(ast.Token, capacity);
         if (lx.count > 0) {
             ast.copy(larger.ptr as *u8, lx.tokens.ptr as *u8, lx.count * sizeof(ast.Token));
         }
+        free(lx.tokens);
         lx.tokens = larger;
     }
     lx.tokens[lx.count] = *t;

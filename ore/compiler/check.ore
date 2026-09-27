@@ -55,7 +55,7 @@ fn error(c: *Checker, line: int, message: []u8) {
 }
 
 fn new_type(kind: ast.TypeKind, base: *ast.Type) *ast.Type {
-    var t = ast.allocate(sizeof(ast.Type)) as *ast.Type;
+    var t = new(ast.Type);
     t.kind = kind;
     t.base = base;
     t.size = 4;
@@ -164,14 +164,14 @@ fn widens(from: *ast.Type, to: *ast.Type) bool {
 }
 
 fn new_expr(kind: ast.ExprKind, line: int) *ast.Expr {
-    var e = ast.allocate(sizeof(ast.Expr)) as *ast.Expr;
+    var e = new(ast.Expr);
     e.kind = kind;
     e.line = line;
     return e;
 }
 
 fn new_symbol() *ast.Symbol {
-    return ast.allocate(sizeof(ast.Symbol)) as *ast.Symbol;
+    return new(ast.Symbol);
 }
 
 fn layout(c: *Checker, t: *ast.Type, line: int) {
@@ -192,7 +192,7 @@ fn layout(c: *Checker, t: *ast.Type, line: int) {
     c.locals.count = 0;
     var d = t.decl;
     var count = d.params.len;
-    t.fields = (ast.allocate(count * sizeof(ast.Field)) as *ast.Field)[:count];
+    t.fields = new(ast.Field, count);
     for (var i = 0; i < count; i += 1) {
         var param = d.params[i];
         for (var k = 0; k < i; k += 1) {
@@ -335,7 +335,7 @@ fn resolve_type(c: *Checker, te: *ast.TypeExpr) *ast.Type {
     }
     t = new_type(ast.TypeKind.FN, result);
     var count = te.params.len;
-    t.params = (ast.allocate(count * 4) as **ast.Type)[:count];
+    t.params = new(*ast.Type, count);
     for (var i = 0; i < count; i += 1) {
         t.params[i] = resolve_type(c, te.params[i]);
     }
@@ -1461,7 +1461,7 @@ fn declare(c: *Checker, m: *ast.Module, d: *ast.Decl) {
         }
         default {
             s.kind = ast.SymbolKind.TYPE;
-            var t = ast.allocate(sizeof(ast.Type)) as *ast.Type;
+            var t = new(ast.Type);
             t.kind = ast.TypeKind.ENUM;
             if (d.kind == ast.DeclKind.STRUCT) {
                 t.kind = ast.TypeKind.STRUCT;
@@ -1516,7 +1516,7 @@ fn check_signature(c: *Checker, d: *ast.Decl) {
     var t = new_type(ast.TypeKind.FN, result);
     t.is_interrupt = d.is_interrupt;
     var count = d.params.len;
-    t.params = (ast.allocate(count * 4) as **ast.Type)[:count];
+    t.params = new(*ast.Type, count);
     for (var i = 0; i < count; i += 1) {
         for (var k = 0; k < i; k += 1) {
             if (ast.same(d.params[k].name, d.params[i].name)) {

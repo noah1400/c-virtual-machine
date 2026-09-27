@@ -16,7 +16,7 @@ fn read_source(path: []u8) []u8 {
     if (bytes.ptr == null) {
         return none;
     }
-    var source = (ast.allocate(bytes.len + 1))[:bytes.len + 1];
+    var source = new(u8, bytes.len + 1);
     ast.copy(source.ptr, bytes.ptr, bytes.len);
     free(bytes);
     return source;
@@ -108,7 +108,7 @@ fn load_module(program: *ast.Program, path: []u8, importer: *ast.Module, line: i
         }
     }
 
-    var m = ast.allocate(sizeof(ast.Module)) as *ast.Module;
+    var m = new(ast.Module);
     m.path = resolved;
     m.name = module_name(resolved);
     if (m.name.ptr == null) {

@@ -78,7 +78,7 @@ fn is_named(t: *ast.Token, text: []u8) bool {
 }
 
 fn new_type(p: *Parser, kind: ast.TypeExprKind) *ast.TypeExpr {
-    var t = ast.allocate(sizeof(ast.TypeExpr)) as *ast.TypeExpr;
+    var t = new(ast.TypeExpr);
     t.kind = kind;
     t.line = peek(p).line;
     return t;
@@ -130,7 +130,7 @@ fn parse_type(p: *Parser) *ast.TypeExpr {
 }
 
 fn new_expr(kind: ast.ExprKind, line: int) *ast.Expr {
-    var e = ast.allocate(sizeof(ast.Expr)) as *ast.Expr;
+    var e = new(ast.Expr);
     e.kind = kind;
     e.line = line;
     return e;
@@ -161,7 +161,7 @@ fn parse_elements(p: *Parser, e: *ast.Expr) *ast.Expr {
 
 fn parse_struct_literal(p: *Parser, type_name: *ast.Expr) *ast.Expr {
     var e = new_expr(ast.ExprKind.STRUCT, type_name.line);
-    var t = ast.allocate(sizeof(ast.TypeExpr)) as *ast.TypeExpr;
+    var t = new(ast.TypeExpr);
     t.kind = ast.TypeExprKind.NAME;
     t.line = type_name.line;
     if (type_name.kind == ast.ExprKind.FIELD) {
@@ -380,7 +380,7 @@ fn parse_expr(p: *Parser) *ast.Expr {
 }
 
 fn new_stmt(kind: ast.StmtKind, line: int) *ast.Stmt {
-    var s = ast.allocate(sizeof(ast.Stmt)) as *ast.Stmt;
+    var s = new(ast.Stmt);
     s.kind = kind;
     s.line = line;
     return s;
@@ -467,7 +467,7 @@ fn parse_switch(p: *Parser) *ast.Stmt {
             s.fallback = parse_block(p);
             continue;
         }
-        var c = ast.allocate(sizeof(ast.Case)) as *ast.Case;
+        var c = new(ast.Case);
         c.line = expect(p, ast.TokenKind.CASE, "or default").line;
         ast.add(&cases, c as *u8);
         var values = ast.List {};
@@ -575,7 +575,7 @@ fn parse_params(p: *Parser, d: *ast.Decl) {
     var params = ast.List {};
     expect(p, ast.TokenKind.LPAREN, "after the name of the function");
     while (!check(p, ast.TokenKind.RPAREN)) {
-        var param = ast.allocate(sizeof(ast.Param)) as *ast.Param;
+        var param = new(ast.Param);
         ast.add(&params, param as *u8);
         param.line = peek(p).line;
         param.name = name(p, "a parameter name");
@@ -597,7 +597,7 @@ fn parse_struct(p: *Parser, d: *ast.Decl) {
     d.name = name(p, "the name of the struct");
     expect(p, ast.TokenKind.LBRACE, "after the name of the struct");
     while (!accept(p, ast.TokenKind.RBRACE)) {
-        var field = ast.allocate(sizeof(ast.Param)) as *ast.Param;
+        var field = new(ast.Param);
         ast.add(&fields, field as *u8);
         field.line = peek(p).line;
         field.name = name(p, "a field name");
@@ -613,7 +613,7 @@ fn parse_enum(p: *Parser, d: *ast.Decl) {
     d.name = name(p, "the name of the enum");
     expect(p, ast.TokenKind.LBRACE, "after the name of the enum");
     while (!check(p, ast.TokenKind.RBRACE)) {
-        var member = ast.allocate(sizeof(ast.Member)) as *ast.Member;
+        var member = new(ast.Member);
         ast.add(&members, member as *u8);
         member.line = peek(p).line;
         member.name = name(p, "a name");
@@ -629,7 +629,7 @@ fn parse_enum(p: *Parser, d: *ast.Decl) {
 }
 
 fn parse_decl(p: *Parser) *ast.Decl {
-    var d = ast.allocate(sizeof(ast.Decl)) as *ast.Decl;
+    var d = new(ast.Decl);
     d.module = p.m;
     d.is_pub = accept(p, ast.TokenKind.PUB);
     d.line = peek(p).line;

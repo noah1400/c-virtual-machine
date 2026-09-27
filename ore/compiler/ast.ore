@@ -194,29 +194,6 @@ pub struct Program {
     main: *Symbol;
 }
 
-// Memory for everything the compiler keeps, handed out in pieces of large blocks and never freed, since
-// the heap of the VM takes longer for each block it holds
-var block: []u8;
-var used: int;
-
-pub fn allocate(size: int) *u8 {
-    var rounded = (size + 3) & ~3;
-    if (rounded == 0) {
-        rounded = 4;
-    }
-    if (used + rounded > block.len) {
-        var capacity = 1048576;
-        if (rounded > capacity) {
-            capacity = rounded;
-        }
-        block = new(u8, capacity);
-        used = 0;
-    }
-    var p = &block[used];
-    used += rounded;
-    return p;
-}
-
 pub fn copy(to: *u8, from: *u8, size: int) {
     if (size > 0) {
         syscall(22, to, from, size);
@@ -224,9 +201,9 @@ pub fn copy(to: *u8, from: *u8, size: int) {
 }
 
 pub fn clone(text: []u8) []u8 {
-    var p = allocate(text.len);
-    copy(p, text.ptr, text.len);
-    return p[:text.len];
+    var result = new(u8, text.len);
+    copy(result.ptr, text.ptr, text.len);
+    return result;
 }
 
 pub fn same(a: []u8, b: []u8) bool {
@@ -247,13 +224,13 @@ pub fn cat(parts: [][]u8) []u8 {
     for (var i = 0; i < parts.len; i += 1) {
         size += parts[i].len;
     }
-    var p = allocate(size);
-    var at = 0;
+    var result = new(u8, size);
+    var at = result.ptr;
     for (var i = 0; i < parts.len; i += 1) {
-        copy(&p[at], parts[i].ptr, parts[i].len);
-        at += parts[i].len;
+        copy(at, parts[i].ptr, parts[i].len);
+        at = at + parts[i].len;
     }
-    return p[:size];
+    return result;
 }
 
 pub fn number(value: int) []u8 {
@@ -290,10 +267,11 @@ pub fn add(list: *List, item: *u8) {
         if (capacity == 0) {
             capacity = 8;
         }
-        var larger = (allocate(capacity * 4) as **u8)[:capacity];
+        var larger = new(*u8, capacity);
         for (var i = 0; i < list.count; i += 1) {
             larger[i] = list.items[i];
         }
+        free(list.items);
         list.items = larger;
     }
     list.items[list.count] = item;
@@ -312,10 +290,11 @@ pub fn add_text(list: *Texts, text: []u8) {
         if (capacity == 0) {
             capacity = 8;
         }
-        var larger = (allocate(capacity * 8) as *[]u8)[:capacity];
+        var larger = new([]u8, capacity);
         for (var i = 0; i < list.count; i += 1) {
             larger[i] = list.items[i];
         }
+        free(list.items);
         list.items = larger;
     }
     list.items[list.count] = text;
@@ -426,14 +405,16 @@ pub fn put(map: *Map, key: []u8, value: *u8) {
         if (capacity == 0) {
             capacity = 16;
         }
-        map.keys = (allocate(capacity * 8) as *[]u8)[:capacity];
-        map.values = (allocate(capacity * 4) as **u8)[:capacity];
+        map.keys = new([]u8, capacity);
+        map.values = new(*u8, capacity);
         map.count = 0;
         for (var i = 0; i < old.keys.len; i += 1) {
             if (old.values[i] != null) {
                 put(map, old.keys[i], old.values[i]);
             }
         }
+        free(old.keys);
+        free(old.values);
     }
     var mask = map.keys.len - 1;
     var i = hash(key) & mask;

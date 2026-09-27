@@ -314,7 +314,7 @@ fn string_label(g: *Gen, bytes: []u8) []u8 {
     format(&g.pool, "%s:\n    .asciiz ", [][]u8 { name }, []int {});
     quoted(&g.pool, bytes);
     str.append(&g.pool, "\n");
-    pooled = ast.allocate(sizeof(Pooled)) as *Pooled;
+    pooled = new(Pooled);
     pooled.label = name;
     ast.put(&g.pooled, bytes, pooled as *u8);
     return name;
