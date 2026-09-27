@@ -7,6 +7,7 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 - **`vmld`** links object files into one program.
 - **`vmc`** compiles [Ore](docs/language.md) programs into VM32 binaries. It is written in Ore and runs on the VM.
 - **`vmc0`** compiles Ore as well, without optimizing. It is written in C and compiles `vmc` in the first place.
+- **[MiniDos](docs/minidos.md)** is a small DOS written in Ore: a shell with batch files, redirection and pipes, a file system on the VM's disk, and programs that it loads from there and runs in user mode.
 
 ## Contents
 
@@ -18,6 +19,7 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 - [Assembly language](#assembly-language)
 - [Linking](#linking)
 - [Ore](#ore)
+- [MiniDos](#minidos)
 - [Syscalls](#syscalls)
 - [Debugger](#debugger)
 - [Binary format](#binary-format)
@@ -29,7 +31,7 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 You need a C11 compiler and a POSIX system.
 
 ```sh
-make          # builds ./vm, ./vmasm, ./vmld, ./vmc0 and vmc.bin, which ./vmc runs
+make          # builds ./vm, ./vmasm, ./vmld, ./vmc0, vmc.bin, which ./vmc runs, and MiniDos with its disk
 make test     # builds them and runs the test suite
 make clean
 ```
@@ -77,7 +79,7 @@ $ ./vm hello.bin
 Hello from VM32! Sum: 55
 ```
 
-`assembler/examples` has more programs. They range from a Fibonacci printer to `MiniDos`, a small command shell with a file system on the [disk](#disk), which you assemble from `MiniDos/main.asm`. `kernel.asm` runs a user program under paging, `mandelbrot.asm` draws with floats, `snake.asm` is a game for the [display](#display) and [keyboard](#keyboard), and `cat.asm` prints the files named on its command line:
+`assembler/examples` has more programs. They range from a Fibonacci printer to the first `MiniDos`, a small command shell with a file system on the [disk](#disk), which you assemble from `MiniDos/main.asm`; the [MiniDos written in Ore](docs/minidos.md) grew out of it. `kernel.asm` runs a user program under paging, `mandelbrot.asm` draws with floats, `snake.asm` is a game for the [display](#display) and [keyboard](#keyboard), and `cat.asm` prints the files named on its command line:
 
 ```console
 $ ./vmasm assembler/examples/cat.asm -o cat.bin
@@ -195,7 +197,7 @@ A logpoint prints registers and memory on stderr each time execution reaches its
 An item can end in `:` and a format: `x` for hex (the default), `d` for signed and `u` for unsigned decimal, `c` for a character, `s` for a string and `f` for a float. For memory, `b` or `w` reads a byte or a 16-bit word instead of 32 bits. With `s`, a register is taken as the address of the string, while `[ADDRESS]` names the string itself:
 
 ```console
-$ ./vm -L 'find_file:R6:s,[R7+24]:d' minidos.bin
+$ ./vm -L 'find_file:R6:s,[R7+24]:d' shell.bin
 log 0x0674 <find_file> R6="a.txt" [R7+24]=0
 ```
 
@@ -422,12 +424,12 @@ With a script, the keyboard leaves the terminal and stdin alone, and looks for k
 | 5 | The image is read-only |
 | 6 | The host reported an error |
 
-An image that `vm` may not write is attached read-only. MiniDOS keeps up to 32 files of 4 KB on a disk of at least 259 sectors:
+An image that `vm` may not write is attached read-only. The MiniDos example in assembly keeps up to 32 files of 4 KB on a disk of at least 259 sectors:
 
 ```console
 $ dd if=/dev/zero of=disk.img bs=512 count=300
-$ ./vmasm assembler/examples/MiniDos/main.asm -o minidos.bin
-$ ./vm -b disk.img minidos.bin
+$ ./vmasm assembler/examples/MiniDos/main.asm -o shell.bin
+$ ./vm -b disk.img shell.bin
 ```
 
 Its `format` command creates an empty file system, and `dir`, `type`, `write`, `append` and `del` work with the files.
@@ -907,6 +909,25 @@ vm: #1 0x0084 <digits.main+12> digits.ore:6: CALL digits.digit
 
 Neither compiler has `f32` yet. Their error messages name the file and line of the first problem, and compiling stops there.
 
+## MiniDos
+
+[MiniDos](docs/minidos.md) is a small DOS written in Ore, in `ore/minidos`. It lives above the first megabyte, built with `vmc -b 0x100000`, and runs programs below it in user mode, so any program `vmc` builds runs under it unchanged: their syscalls arrive at MiniDos as privilege violations, and it serves them from its own disk and console. `make` builds `minidos.bin` and `minidos.img`, a 4 MB disk with the programs `SORT` and `FIND` on it:
+
+```console
+$ ./vm -m 4096 -b minidos.img minidos.bin
+
+Starting MiniDos...
+
+A:\>DIR /W
+
+ Volume in drive A is MINIDOS
+ Directory of A:\
+
+FIND.EXE        SORT.EXE
+        2 file(s)        287,036 bytes
+        0 dir(s)       3,873,280 bytes free
+```
+
 ## Syscalls
 
 `SYSCALL #n` takes its arguments in R0, R5, R6 and R7 and returns its result in R0. Every syscall also sets R5 to a status: 0 on success, otherwise one of the [error codes](#error-codes).
@@ -1087,13 +1108,14 @@ Code and data symbols hold offsets into their section. A relocation stores the a
 
 ## Tests
 
-`make test` runs `tests/run.sh`, which does five things:
+`make test` runs `tests/run.sh`, which does six things:
 
 - Assembles and runs every program in `tests/programs`. A program's output must match `NAME.out`, and `NAME.in`, if present, is fed to its stdin.
 - Checks that every file in `tests/errors` fails to assemble with the expected message.
 - Compiles and runs every Ore program in `ore/tests` the same way. Their comment lines start with `//` instead of `;`, and `// vmc-args:` gives `vmc0` more arguments.
 - Checks that every file in `ore/tests/errors` fails to compile with the expected message.
 - Builds every Ore test with `vmc` as well, and that build has to meet the same expectations. Since the two compilers write different code, runtime errors are compared by message and Ore lines, and debugger scripts only run against the `vmc` build. `vmc1.bin` has to write the same assembly as `vmc.bin`, all three compilers the same compile errors, and the test named `vmc` checks that `vmc` compiles itself into `vmc.bin`.
+- Boots MiniDos on an empty disk for every session in `tests/minidos`, which types `NAME.in` and has to show `NAME.out`, with the programs of `ore/minidos/programs` and `tests/minidos` built for it to import. The test is named `minidos_NAME`.
 
 Comment lines in a test adjust the checks:
 
@@ -1136,6 +1158,8 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `vmc` | The script that runs `vmc.bin` on the VM and assembles what it writes |
 | `ore/lib/` | The runtime that compiled Ore programs start from, and the standard library in `std/` |
 | `ore/tests/` | Ore test programs, and the modules and assembly they use |
+| `ore/minidos/` | MiniDos, and in `programs/` the programs on its disk |
 | `docs/language.md` | The Ore language |
+| `docs/minidos.md` | MiniDos |
 | `include/` | Headers |
-| `tests/` | Test programs and the test runner |
+| `tests/` | Test programs, MiniDos sessions and the test runner |
