@@ -55,75 +55,25 @@ copy_cmd_done:
     ; Save pointer to arguments
     MOVE R14, R6
     
-    ; Match command against known commands
+    ; Look the command up in the command table
+    LOAD R10, command_table
+find_cmd_loop:
+    LOAD R7, [R10]
+    CMP R7, #0
+    JZ cmd_unknown
     LOAD R6, command_buffer
-    
-    ; Check for "help" command
-    LOAD R7, cmd_help
     CALL strcmp
     CMP R0, #0
-    JZ do_help_cmd
-    
-    ; Check for "cls" command
-    LOAD R6, command_buffer
-    LOAD R7, cmd_cls
-    CALL strcmp
-    CMP R0, #0
-    JZ do_cls_cmd
-    
-    ; Check for "echo" command
-    LOAD R6, command_buffer
-    LOAD R7, cmd_echo
-    CALL strcmp
-    CMP R0, #0
-    JZ do_echo_cmd
-    
-    ; Check for "exit" command
-    LOAD R6, command_buffer
-    LOAD R7, cmd_exit
-    CALL strcmp
-    CMP R0, #0
-    JZ do_exit_cmd
-    
-    ; Check for "time" command
-    LOAD R6, command_buffer
-    LOAD R7, cmd_time
-    CALL strcmp
-    CMP R0, #0
-    JZ do_time_cmd
-    
-    ; Check for "mem" command
-    LOAD R6, command_buffer
-    LOAD R7, cmd_mem
-    CALL strcmp
-    CMP R0, #0
-    JZ do_mem_cmd
-    
-    ; Check for "ver" command
-    LOAD R6, command_buffer
-    LOAD R7, cmd_ver
-    CALL strcmp
-    CMP R0, #0
-    JZ do_ver_cmd
-    
-    ; Check for "pause" command
-    LOAD R6, command_buffer
-    LOAD R7, cmd_pause
-    CALL strcmp
-    CMP R0, #0
-    JZ do_pause_cmd
-    
-    ; Check for "color" command
-    LOAD R6, command_buffer
-    LOAD R7, cmd_color
-    CALL strcmp
-    CMP R0, #0
-    JZ do_color_cmd
-    
-    ; Command not found
+    JZ cmd_found
+    ADD R10, #8
+    JMP find_cmd_loop
+
+cmd_found:
+    JMP [R10+4]
+
+cmd_unknown:
     LOAD R0, cmd_not_found
     SYSCALL #2
-    JMP parse_cmd_done
     
 parse_cmd_done:
     POP R15_LR

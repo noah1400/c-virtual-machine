@@ -10,6 +10,19 @@ help_text:
     .asciiz "Available commands:\n  help - Show this help\n  cls - Clear screen\n  echo [text] - Display text\n  exit - Quit OS\n  time - Show system time\n  mem - Show memory info\n  ver - Show version\n  pause - Wait for key press\n  color [num] - Change text color (0-7)\n"
 cmd_not_found:
     .asciiz "Bad command or file name\n"
+
+; Command names and their handlers, ending with a 0
+command_table:
+    .dword cmd_help, do_help_cmd
+    .dword cmd_cls, do_cls_cmd
+    .dword cmd_echo, do_echo_cmd
+    .dword cmd_exit, do_exit_cmd
+    .dword cmd_time, do_time_cmd
+    .dword cmd_mem, do_mem_cmd
+    .dword cmd_ver, do_ver_cmd
+    .dword cmd_pause, do_pause_cmd
+    .dword cmd_color, do_color_cmd
+    .dword 0
 cmd_help:
     .asciiz "help"
 cmd_cls:

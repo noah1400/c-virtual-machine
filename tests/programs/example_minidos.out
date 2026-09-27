@@ -19,8 +19,8 @@ Copyright (c) 2025
 A:\> hello world
 
 A:\> Total memory: 1048576 bytes
-Free heap: 978072 bytes
-Largest free block: 978072 bytes
+Free heap: 978008 bytes
+Largest free block: 978008 bytes
 Stack size: 65536 bytes
 
 A:\> [0;32;40m
