@@ -6,6 +6,7 @@
 // Each device fills in its descriptor and allocates its state; they return a VM error code
 int console_device(VM *vm, IODevice *device);
 int timer_device(VM *vm, IODevice *device);
+int display_device(VM *vm, IODevice *device);
 
 void io_set_ticking(VM *vm, const IODevice *device, int ticking);
 

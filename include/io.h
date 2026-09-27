@@ -5,6 +5,7 @@
 
 #define IO_PORT_CONSOLE 0x00
 #define IO_PORT_TIMER   0x40
+#define IO_PORT_DISPLAY 0x50
 
 typedef struct IODevice IODevice;
 
