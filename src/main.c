@@ -249,6 +249,9 @@ int main(int argc, char *argv[]) {
     }
 
     uint32_t *counts = opts.profile && !opts.debug ? calloc(vm.code_end / 4 + 1, sizeof(uint32_t)) : NULL;
+    if (!opts.debug) {
+        vm_catch_signals();
+    }
     int result = opts.debug ? debugger_run(&vm) : run(&vm, opts.trace, counts);
     fflush(stdout);
     // Devices give the terminal back before anything is reported
@@ -266,7 +269,7 @@ int main(int argc, char *argv[]) {
                 vm.instruction_count);
     }
 
-    int status = result == VM_ERROR_NONE ? (int)(vm.exit_code & 0xFF) : 1;
+    int status = result == VM_ERROR_NONE || result == VM_ERROR_SIGNAL ? (int)(vm.exit_code & 0xFF) : 1;
     vm_cleanup(&vm);
     return status;
 }

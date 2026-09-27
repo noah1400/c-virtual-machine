@@ -11,6 +11,7 @@ void vm_cleanup(VM *vm);
 // VM execution functions
 int vm_run(VM *vm);
 int vm_step(VM *vm);
+void vm_catch_signals(void);
 
 uint32_t vm_peek_instruction(const VM *vm, uint32_t address, Instruction *instr);
 

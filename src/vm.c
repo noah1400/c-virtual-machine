@@ -1,3 +1,4 @@
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,29 @@ void vm_cleanup(VM *vm) {
     vm->debug_info = NULL;
     io_cleanup(vm);
     syscalls_cleanup(vm);
+}
+
+static volatile sig_atomic_t stop_signal;
+
+// A second signal ends the process if the VM has not stopped yet
+static void request_stop(int number) {
+    if (stop_signal) {
+        signal(number, SIG_DFL);
+        raise(number);
+    }
+    stop_signal = number;
+}
+
+// Lets SIGINT, SIGTERM and SIGHUP stop the VM before its next instruction instead of killing the
+// process, so the devices can restore the terminal; blocking host calls return early
+void vm_catch_signals(void) {
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = request_stop;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGINT, &action, NULL);
+    sigaction(SIGTERM, &action, NULL);
+    sigaction(SIGHUP, &action, NULL);
 }
 
 int vm_run(VM *vm) {
@@ -81,6 +105,11 @@ int vm_step(VM *vm) {
     if (vm->instruction_limit && vm->instruction_count >= vm->instruction_limit) {
         vm->error_pc = vm->registers[R3_PC];
         return vm_raise(vm, VM_ERROR_INSTRUCTION_LIMIT, "Instruction limit of %u reached", vm->instruction_limit);
+    }
+    if (stop_signal) {
+        vm->error_pc = vm->registers[R3_PC];
+        vm->exit_code = 128 + (uint32_t)stop_signal;
+        return vm_raise(vm, VM_ERROR_SIGNAL, "Stopped by signal %d", (int)stop_signal);
     }
 
     // Faults leave the registers as they were before the instruction, for a handler to resume from
@@ -264,6 +293,8 @@ const char *vm_get_error_string(int error_code) {
             return "Page fault";
         case VM_ERROR_INSTRUCTION_LIMIT:
             return "Instruction limit reached";
+        case VM_ERROR_SIGNAL:
+            return "Stopped by a signal";
         default:
             return "Unknown error";
     }

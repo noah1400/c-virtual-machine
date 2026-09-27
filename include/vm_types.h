@@ -103,6 +103,7 @@ typedef struct {
 #define VM_ERROR_PRIVILEGE            13 // Privileged instruction in user mode
 #define VM_ERROR_PAGE_FAULT           14 // Page table does not allow the access
 #define VM_ERROR_INSTRUCTION_LIMIT    16 // Instruction limit reached, never delivered to the program
+#define VM_ERROR_SIGNAL               17 // A signal stopped the VM, never delivered to the program
 
 // Faults with a code below this are delivered to the interrupt vector of the same number
 #define VM_EXCEPTION_VECTORS          16
