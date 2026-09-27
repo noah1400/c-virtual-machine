@@ -1,0 +1,277 @@
+// A calculator made the way a compiler is: a tokenizer, a recursive descent parser that builds a tree
+// on the heap, and an evaluator with variables
+enum Kind { number, name, plus, minus, star, slash, open, close, assign, end }
+
+struct Token {
+    kind: Kind;
+    text: []u8;
+    value: int;
+}
+
+struct Lexer {
+    source: []u8;
+    pos: int;
+}
+
+enum Op { literal, variable, add, sub, mul, div, neg }
+
+struct Node {
+    op: Op;
+    value: int;
+    name: []u8;
+    left: *Node;
+    right: *Node;
+}
+
+struct Variable {
+    name: []u8;
+    value: int;
+}
+
+struct Parser {
+    lexer: Lexer;
+    token: Token;
+}
+
+var variables: [16]Variable;
+var variable_count: int;
+
+fn is_digit(c: u8) bool {
+    return c >= '0' && c <= '9';
+}
+
+fn is_letter(c: u8) bool {
+    return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_';
+}
+
+fn equal(a: []u8, b: []u8) bool {
+    if (a.len != b.len) {
+        return false;
+    }
+    for (var i = 0; i < a.len; i += 1) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn next_token(l: *Lexer) Token {
+    while (l.pos < l.source.len && l.source[l.pos] == ' ') {
+        l.pos += 1;
+    }
+    if (l.pos == l.source.len) {
+        return Token { kind: Kind.end };
+    }
+    var start = l.pos;
+    var c = l.source[l.pos];
+    if (is_digit(c)) {
+        var value = 0;
+        while (l.pos < l.source.len && is_digit(l.source[l.pos])) {
+            value = value * 10 + (l.source[l.pos] - '0') as int;
+            l.pos += 1;
+        }
+        return Token { kind: Kind.number, text: l.source[start:l.pos], value: value };
+    }
+    if (is_letter(c)) {
+        while (l.pos < l.source.len && (is_letter(l.source[l.pos]) || is_digit(l.source[l.pos]))) {
+            l.pos += 1;
+        }
+        return Token { kind: Kind.name, text: l.source[start:l.pos] };
+    }
+    l.pos += 1;
+    var kind = Kind.end;
+    switch (c) {
+        case '+' {
+            kind = Kind.plus;
+        }
+        case '-' {
+            kind = Kind.minus;
+        }
+        case '*' {
+            kind = Kind.star;
+        }
+        case '/' {
+            kind = Kind.slash;
+        }
+        case '(' {
+            kind = Kind.open;
+        }
+        case ')' {
+            kind = Kind.close;
+        }
+        case '=' {
+            kind = Kind.assign;
+        }
+        default {
+            panic("unexpected character");
+        }
+    }
+    return Token { kind: kind, text: l.source[start:l.pos] };
+}
+
+fn advance(p: *Parser) {
+    p.token = next_token(&p.lexer);
+}
+
+fn node(op: Op, left: *Node, right: *Node) *Node {
+    var n = new(Node);
+    n.op = op;
+    n.left = left;
+    n.right = right;
+    return n;
+}
+
+fn primary(p: *Parser) *Node {
+    var t = p.token;
+    switch (t.kind) {
+        case Kind.number {
+            advance(p);
+            var n = node(Op.literal, null, null);
+            n.value = t.value;
+            return n;
+        }
+        case Kind.name {
+            advance(p);
+            var n = node(Op.variable, null, null);
+            n.name = t.text;
+            return n;
+        }
+        case Kind.minus {
+            advance(p);
+            return node(Op.neg, primary(p), null);
+        }
+        case Kind.open {
+            advance(p);
+            var inner = expression(p);
+            if (p.token.kind != Kind.close) {
+                panic("expected )");
+            }
+            advance(p);
+            return inner;
+        }
+        default {
+            panic("expected a value");
+        }
+    }
+}
+
+fn term(p: *Parser) *Node {
+    var left = primary(p);
+    while (p.token.kind == Kind.star || p.token.kind == Kind.slash) {
+        var op = Op.mul;
+        if (p.token.kind == Kind.slash) {
+            op = Op.div;
+        }
+        advance(p);
+        left = node(op, left, primary(p));
+    }
+    return left;
+}
+
+fn expression(p: *Parser) *Node {
+    var left = term(p);
+    while (p.token.kind == Kind.plus || p.token.kind == Kind.minus) {
+        var op = Op.add;
+        if (p.token.kind == Kind.minus) {
+            op = Op.sub;
+        }
+        advance(p);
+        left = node(op, left, term(p));
+    }
+    return left;
+}
+
+fn lookup(name: []u8) *Variable {
+    for (var i = 0; i < variable_count; i += 1) {
+        if (equal(variables[i].name, name)) {
+            return &variables[i];
+        }
+    }
+    return null;
+}
+
+fn evaluate(n: *Node) int {
+    switch (n.op) {
+        case Op.literal {
+            return n.value;
+        }
+        case Op.variable {
+            var v = lookup(n.name);
+            if (v == null) {
+                panic("unknown variable");
+            }
+            return v.value;
+        }
+        case Op.add {
+            return evaluate(n.left) + evaluate(n.right);
+        }
+        case Op.sub {
+            return evaluate(n.left) - evaluate(n.right);
+        }
+        case Op.mul {
+            return evaluate(n.left) * evaluate(n.right);
+        }
+        case Op.div {
+            return evaluate(n.left) / evaluate(n.right);
+        }
+        default {
+            return -evaluate(n.left);
+        }
+    }
+}
+
+fn release(n: *Node) {
+    if (n != null) {
+        release(n.left);
+        release(n.right);
+        free(n);
+    }
+}
+
+fn run(line: []u8) {
+    var p = Parser { lexer: Lexer { source: line } };
+    advance(&p);
+    var target: []u8;
+    if (p.token.kind == Kind.name) {
+        var saved = p.lexer;
+        var name = p.token;
+        advance(&p);
+        if (p.token.kind == Kind.assign) {
+            target = name.text;
+            advance(&p);
+        } else {
+            p.lexer = saved;
+            p.token = name;
+        }
+    }
+    var tree = expression(&p);
+    if (p.token.kind != Kind.end) {
+        panic("unexpected input at the end");
+    }
+    var value = evaluate(tree);
+    release(tree);
+    if (target.len == 0) {
+        print(line, " -> ", value, "\n");
+        return;
+    }
+    var v = lookup(target);
+    if (v == null) {
+        v = &variables[variable_count];
+        variable_count += 1;
+        v.name = target;
+    }
+    v.value = value;
+    print(target, " = ", value, "\n");
+}
+
+fn main() {
+    run("1 + 2 * 3");
+    run("(1 + 2) * 3");
+    run("width = 12");
+    run("height = width / 5 + 1");
+    run("area = width * height");
+    run("-area + 2 * (width - -height)");
+    run("width");
+    run("100 / 7 * 7 + 100 - 100 / 7 * 7 - 100");
+}
