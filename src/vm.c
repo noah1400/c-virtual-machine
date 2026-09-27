@@ -42,26 +42,9 @@ int vm_run(VM *vm) {
     return VM_ERROR_NONE;
 }
 
-int vm_step(VM *vm) {
-    if (vm->halted) {
-        return VM_ERROR_NONE;
-    }
-
-    // A faulted VM stays stopped
-    if (vm->last_error != VM_ERROR_NONE) {
-        return vm->last_error;
-    }
-    if (vm->instruction_limit && vm->instruction_count >= vm->instruction_limit) {
-        vm->error_pc = vm->registers[R3_PC];
-        return vm_raise(vm, VM_ERROR_INSTRUCTION_LIMIT, "Instruction limit of %u reached", vm->instruction_limit);
-    }
-
-    if (cpu_deliver_interrupt(vm) && vm->last_error != VM_ERROR_NONE) {
-        return vm->last_error;
-    }
-
+// Fetches, decodes and executes the instruction at PC
+static int execute_next(VM *vm) {
     uint32_t pc = vm->registers[R3_PC];
-    vm->error_pc = pc;
 
     if (pc % 4 != 0) {
         return vm_raise(vm, VM_ERROR_INVALID_ALIGNMENT, "Unaligned program counter 0x%04X", pc);
@@ -81,8 +64,42 @@ int vm_step(VM *vm) {
     // PC already points at the next instruction while this one executes
     vm->registers[R3_PC] = pc + size;
     cpu_execute_instruction(vm, &instr);
+    return vm->last_error;
+}
+
+int vm_step(VM *vm) {
+    uint32_t saved[16];
+
+    if (vm->halted) {
+        return VM_ERROR_NONE;
+    }
+
+    // A faulted VM stays stopped
     if (vm->last_error != VM_ERROR_NONE) {
         return vm->last_error;
+    }
+    if (vm->instruction_limit && vm->instruction_count >= vm->instruction_limit) {
+        vm->error_pc = vm->registers[R3_PC];
+        return vm_raise(vm, VM_ERROR_INSTRUCTION_LIMIT, "Instruction limit of %u reached", vm->instruction_limit);
+    }
+
+    // Faults leave the registers as they were before the instruction, for a handler to resume from
+    vm->entered_interrupt = 0;
+    vm->exception = 0;
+    memcpy(saved, vm->registers, sizeof(saved));
+    vm->error_pc = vm->registers[R3_PC];
+    if (cpu_deliver_interrupt(vm)) {
+        if (vm->last_error != VM_ERROR_NONE) {
+            memcpy(vm->registers, saved, sizeof(saved));
+            return cpu_exception(vm);
+        }
+        memcpy(saved, vm->registers, sizeof(saved));
+        vm->error_pc = vm->registers[R3_PC];
+    }
+
+    if (execute_next(vm) != VM_ERROR_NONE) {
+        memcpy(vm->registers, saved, sizeof(saved));
+        return cpu_exception(vm);
     }
 
     vm->instruction_count++;

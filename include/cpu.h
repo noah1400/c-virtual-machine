@@ -17,6 +17,7 @@ void cpu_push_all(VM *vm);
 void cpu_pop_all(VM *vm, int restore_pc);
 
 void cpu_interrupt(VM *vm, uint8_t vector);
+int cpu_exception(VM *vm);
 void cpu_request_interrupt(VM *vm, uint8_t vector);
 int cpu_deliver_interrupt(VM *vm);
 void cpu_enable_interrupts(VM *vm);

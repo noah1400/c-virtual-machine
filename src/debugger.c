@@ -211,6 +211,10 @@ static int step_instruction(Debugger *dbg) {
         printf("Error: %s\n", vm_get_error_message(vm));
         return 0;
     }
+    if (vm->exception) {
+        printf("Exception %u: %s\n", vm->exception, vm->exception_message);
+        return 0;
+    }
     if (watch_triggered(dbg)) {
         return 0;
     }

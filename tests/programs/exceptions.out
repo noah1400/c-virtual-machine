@@ -1,0 +1,8 @@
+Division by zero handled
+10
+Segmentation fault handled
+0x7ffffff0
+Segmentation fault handled
+0x7ffffff4
+Invalid system call handled
+7

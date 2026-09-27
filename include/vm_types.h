@@ -53,6 +53,9 @@ typedef struct {
     uint8_t break_requested; // Set by the DEBUG instruction for the debugger
     uint8_t irq_pending;     // A device interrupt waits for the interrupt flag
     uint8_t irq_vector;
+    uint8_t entered_interrupt;  // The current step entered an interrupt handler
+    uint8_t exception;          // Vector of a fault the current step delivered to its handler, or 0
+    char exception_message[256];
 
     struct IODevices *io_devices;
 
@@ -97,6 +100,9 @@ typedef struct {
 #define VM_ERROR_IO_ERROR             11 // I/O operation error
 #define VM_ERROR_PROTECTION_FAULT     12 // Memory protection fault
 #define VM_ERROR_NESTED_INTERRUPT     13 // Nested interrupt
-#define VM_ERROR_INSTRUCTION_LIMIT    14 // Instruction limit reached
+#define VM_ERROR_INSTRUCTION_LIMIT    16 // Instruction limit reached, never delivered to the program
+
+// Faults with a code below this are delivered to the interrupt vector of the same number
+#define VM_EXCEPTION_VECTORS          16
 
 #endif // _VM_TYPES_H_

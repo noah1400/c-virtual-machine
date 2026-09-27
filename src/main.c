@@ -149,6 +149,9 @@ static int run(VM *vm, int trace, uint32_t *counts) {
         if (result != VM_ERROR_NONE) {
             return result;
         }
+        if (trace && vm->exception) {
+            fprintf(stderr, "vm: exception %u: %s\n", vm->exception, vm->exception_message);
+        }
         if (counts && vm->error_pc < vm->code_end) {
             counts[vm->error_pc / 4]++;
         }

@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,10 +72,24 @@ static struct HeapBlock *find_block(const VM *vm, uint32_t address) {
     return block && block->allocated && address - block->start < block->size ? block : NULL;
 }
 
+// Raises a memory fault and records the address that caused it in FADDR
+static int memory_fault(VM *vm, int code, uint32_t address, const char *format, ...) {
+    char message[sizeof(vm->error_message)];
+    va_list args;
+
+    if (vm->last_error == VM_ERROR_NONE) {
+        vm->control[CR_FADDR] = address;
+    }
+    va_start(args, format);
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    return vm_raise(vm, code, "%s", message);
+}
+
 int memory_check_address(VM *vm, uint32_t address, uint32_t size) {
     if (address > vm->memory_size || size > vm->memory_size - address) {
-        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
-                        "Memory access violation: address 0x%04X, size %u", address, size);
+        return memory_fault(vm, VM_ERROR_SEGMENTATION_FAULT, address,
+                            "Memory access violation: address 0x%04X, size %u", address, size);
     }
     return VM_ERROR_NONE;
 }
@@ -213,17 +228,17 @@ int memory_check_address_permissions(VM *vm, uint32_t address, uint32_t size, ui
         struct HeapBlock *block = find_block(vm, address);
 
         if (!block) {
-            return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
-                            "Memory access to unallocated heap: address 0x%04X", address);
+            return memory_fault(vm, VM_ERROR_SEGMENTATION_FAULT, address,
+                                "Memory access to unallocated heap: address 0x%04X", address);
         }
         if (size > block->start + block->size - address) {
-            return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT,
-                            "Memory access past end of heap block: address 0x%04X, size %u", address, size);
+            return memory_fault(vm, VM_ERROR_SEGMENTATION_FAULT, address,
+                                "Memory access past end of heap block: address 0x%04X, size %u", address, size);
         }
         if ((block->protection & required_perm) != required_perm) {
-            return vm_raise(vm, VM_ERROR_PROTECTION_FAULT,
-                            "Memory protection violation: address 0x%04X, required permission 0x%02X, actual permission 0x%02X",
-                            address, required_perm, block->protection);
+            return memory_fault(vm, VM_ERROR_PROTECTION_FAULT, address,
+                                "Memory protection violation: address 0x%04X, required permission 0x%02X, actual permission 0x%02X",
+                                address, required_perm, block->protection);
         }
     }
 

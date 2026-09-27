@@ -32,9 +32,16 @@ void cpu_set_flag(VM *vm, uint8_t flag, int value) {
 }
 
 // The stack lies between the SLO and SHI control registers
+static void stack_fault(VM *vm, int code, uint32_t address, const char *message) {
+    if (vm->last_error == VM_ERROR_NONE) {
+        vm->control[CR_FADDR] = address;
+    }
+    vm_raise(vm, code, message, address);
+}
+
 static int stack_pointer_valid(VM *vm, uint32_t sp) {
     if (sp < vm->control[CR_SLO] || sp > vm->control[CR_SHI]) {
-        vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Stack pointer 0x%08X is outside the stack", sp);
+        stack_fault(vm, VM_ERROR_SEGMENTATION_FAULT, sp, "Stack pointer 0x%08X is outside the stack");
         return 0;
     }
     return 1;
@@ -46,7 +53,7 @@ void cpu_stack_push(VM *vm, uint32_t value) {
         return;
     }
     if (sp - vm->control[CR_SLO] < 4) {
-        vm_raise(vm, VM_ERROR_STACK_OVERFLOW, "Stack overflow");
+        stack_fault(vm, VM_ERROR_STACK_OVERFLOW, sp - 4, "Stack overflow at 0x%08X");
         return;
     }
 
@@ -60,7 +67,7 @@ uint32_t cpu_stack_pop(VM *vm) {
         return 0;
     }
     if (vm->control[CR_SHI] - sp < 4) {
-        vm_raise(vm, VM_ERROR_STACK_UNDERFLOW, "Stack underflow");
+        stack_fault(vm, VM_ERROR_STACK_UNDERFLOW, sp, "Stack underflow at 0x%08X");
         return 0;
     }
 
@@ -78,7 +85,7 @@ void cpu_enter_frame(VM *vm, uint32_t locals_size) {
     uint32_t sp = vm->registers[R2_SP];
     if (locals_size > sp - vm->control[CR_SLO]) {
         vm->registers[R2_SP] = sp + 4;
-        vm_raise(vm, VM_ERROR_STACK_OVERFLOW, "Stack overflow during frame creation");
+        stack_fault(vm, VM_ERROR_STACK_OVERFLOW, sp - locals_size, "Stack overflow creating a frame at 0x%08X");
         return;
     }
 
@@ -113,10 +120,22 @@ void cpu_pop_all(VM *vm, int restore_pc) {
     }
 }
 
-void cpu_interrupt(VM *vm, uint8_t vector) {
-    // The vector table holds one 32-bit handler address per vector
+// The vector table holds one 32-bit handler address per vector; 0 means there is no handler
+static uint32_t vector_handler(VM *vm, uint8_t vector) {
     uint32_t table = vm->control[CR_IVTB];
-    uint32_t handler = table ? memory_read_dword(vm, table + vector * 4u) : 0;
+    return table ? memory_read_dword(vm, table + vector * 4u) : 0;
+}
+
+// Saves the execution context and masks interrupts while the handler runs
+static void enter_handler(VM *vm, uint32_t handler) {
+    cpu_push_all(vm);
+    vm->registers[R4_SR] &= ~(uint32_t)INT_FLAG;
+    vm->registers[R3_PC] = handler;
+    vm->entered_interrupt = 1;
+}
+
+void cpu_interrupt(VM *vm, uint8_t vector) {
+    uint32_t handler = vector_handler(vm, vector);
     if (vm->last_error != VM_ERROR_NONE) {
         return;
     }
@@ -124,11 +143,38 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
         vm_raise(vm, VM_ERROR_UNHANDLED_INTERRUPT, "Unhandled interrupt: %d", vector);
         return;
     }
+    enter_handler(vm, handler);
+}
 
-    // Save the execution context and mask interrupts while the handler runs
-    cpu_push_all(vm);
-    vm->registers[R4_SR] &= ~(uint32_t)INT_FLAG;
-    vm->registers[R3_PC] = handler;
+// Hands the fault the VM stopped with to the handler of the vector its code names. The caller has
+// restored the registers to their state before the faulting instruction. Returns the error left.
+int cpu_exception(VM *vm) {
+    int code = vm->last_error;
+    char message[sizeof(vm->error_message)];
+
+    if (code <= VM_ERROR_NONE || code >= VM_EXCEPTION_VECTORS) {
+        return code;
+    }
+    snprintf(message, sizeof(message), "%s", vm->error_message);
+    vm_clear_error(vm);
+
+    uint32_t handler = vector_handler(vm, (uint8_t)code);
+    if (vm->last_error != VM_ERROR_NONE || handler == 0) {
+        vm_clear_error(vm);
+        return vm_raise(vm, code, "%s", message);
+    }
+
+    enter_handler(vm, handler);
+    if (vm->last_error != VM_ERROR_NONE) {
+        char detail[sizeof(vm->error_message)];
+        int second = vm->last_error;
+        snprintf(detail, sizeof(detail), "%s", vm->error_message);
+        vm_clear_error(vm);
+        return vm_raise(vm, second, "Double fault: %s while handling: %s", detail, message);
+    }
+    vm->exception = (uint8_t)code;
+    snprintf(vm->exception_message, sizeof(vm->exception_message), "%s", message);
+    return VM_ERROR_NONE;
 }
 
 // Latches a device interrupt; requests made while one is pending are merged
