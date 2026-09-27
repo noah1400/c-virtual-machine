@@ -92,6 +92,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-b FILE` | Attach FILE as the [disk](#disk) image |
 | `-d` | Start the interactive [debugger](#debugger) |
 | `-D` | Disassemble the program instead of running it |
+| `-H COUNT` | When the program stops with an error, first show the last COUNT instructions and the registers they changed |
 | `-m KB` | Memory size in KB, 128 to 1048576 (default 1024) |
 | `-n COUNT` | Stop with an error after COUNT instructions |
 | `-p` | Print an execution profile on stderr when the program stops |
@@ -126,6 +127,18 @@ vm: #2 0x0000 <main> fault.asm:7: CALL outer
 ```
 
 The VM keeps a shadow stack of the calls and interrupts in flight for this. Frames that the program left without returning, for example by switching stacks, are left out.
+
+`-H COUNT` puts the last COUNT instructions before the report, with the registers each one changed:
+
+```console
+$ ./vm -H 3 fault.bin
+vm: the last 3 instructions:
+0x0004 <main+4>             LOAD R9, #0x3            R9=0x00000003
+0x0008 <main+8>             ADD R8, R9               R8=0x00000005
+0x000C <main+12>            LOAD R10, #0x0
+vm: error: Division by zero
+vm: at 0x0010 <main+16> fault.asm:12: DIV R8, R10
+```
 
 A trace shows the address, the nearest label and the instruction:
 

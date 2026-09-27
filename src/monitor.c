@@ -1,25 +1,50 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "debug.h"
 #include "disassembler.h"
 #include "monitor.h"
 #include "vm.h"
 
-// Runs like vm_run, optionally printing each instruction on stderr before executing it and
-// counting how often each instruction of the loaded code executes
+// Prints the address, its label and the instruction there the way a trace shows them, padding the
+// instruction to width columns
+static void print_instruction(const VM *vm, uint32_t pc, int width) {
+    Instruction instr;
+    char where[80], text[160] = "?";
+
+    if (vm_peek_instruction(vm, pc, &instr)) {
+        disasm_format(&instr, pc, vm->debug_info, text, sizeof(text));
+    }
+    debug_describe(vm->debug_info, pc, where, sizeof(where));
+    fprintf(stderr, "0x%04X %-20s %-*s", pc, where, width, text);
+}
+
+static void record_history(const VM *vm, Monitor *monitor, const uint32_t *before) {
+    HistoryEntry *entry = &monitor->history[monitor->history_count++ % monitor->history_size];
+    entry->pc = vm->error_pc;
+    entry->exception = vm->exception;
+    entry->changed = 0;
+    memcpy(entry->registers, vm->registers, sizeof(entry->registers));
+    for (int i = 0; i < 16; i++) {
+        if (i != R3_PC && before[i] != vm->registers[i]) {
+            entry->changed |= (uint16_t)(1u << i);
+        }
+    }
+}
+
+// Runs like vm_run, optionally printing each instruction on stderr before executing it, counting
+// how often each instruction of the loaded code executes and remembering the last instructions
 int monitor_run(VM *vm, Monitor *monitor) {
+    uint32_t before[16];
+
     while (!vm->halted) {
         if (monitor->trace) {
-            uint32_t pc = vm->registers[R3_PC];
-            Instruction instr;
-            char where[80], text[160] = "?";
-
-            if (vm_peek_instruction(vm, pc, &instr)) {
-                disasm_format(&instr, pc, vm->debug_info, text, sizeof(text));
-            }
-            debug_describe(vm->debug_info, pc, where, sizeof(where));
             fflush(stdout);
-            fprintf(stderr, "0x%04X %-20s %s\n", pc, where, text);
+            print_instruction(vm, vm->registers[R3_PC], 0);
+            fprintf(stderr, "\n");
+        }
+        if (monitor->history) {
+            memcpy(before, vm->registers, sizeof(before));
         }
 
         int result = vm_step(vm);
@@ -32,8 +57,33 @@ int monitor_run(VM *vm, Monitor *monitor) {
         if (monitor->counts && vm->error_pc < vm->code_end) {
             monitor->counts[vm->error_pc / 4]++;
         }
+        if (monitor->history) {
+            record_history(vm, monitor, before);
+        }
     }
     return VM_ERROR_NONE;
+}
+
+// Prints the remembered instructions, oldest first, each with the registers it changed
+void monitor_report_history(const VM *vm, const Monitor *monitor) {
+    uint64_t shown = monitor->history_count < monitor->history_size ? monitor->history_count : monitor->history_size;
+    if (!monitor->history || shown == 0) {
+        return;
+    }
+    fprintf(stderr, "vm: the last %llu instructions:\n", (unsigned long long)shown);
+    for (uint64_t n = monitor->history_count - shown; n < monitor->history_count; n++) {
+        const HistoryEntry *entry = &monitor->history[n % monitor->history_size];
+        print_instruction(vm, entry->pc, entry->changed || entry->exception ? 24 : 0);
+        for (int i = 0; i < 16; i++) {
+            if (entry->changed & (1u << i)) {
+                fprintf(stderr, " %s=0x%08X", isa_register_name((uint8_t)i), entry->registers[i]);
+            }
+        }
+        if (entry->exception) {
+            fprintf(stderr, " exception %u", entry->exception);
+        }
+        fprintf(stderr, "\n");
+    }
 }
 
 typedef struct {

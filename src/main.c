@@ -13,11 +13,13 @@
 #define DEFAULT_MEMORY_KB 1024
 #define MIN_MEMORY_KB     (VM_MIN_MEMORY_SIZE / 1024)
 #define MAX_MEMORY_KB     1048576
+#define MAX_HISTORY       1000000
 
 typedef struct {
     const char *program;
     const char *disk;
     const char *commands;
+    uint32_t history;
     int arg_count;
     char **args;
     uint32_t memory_size;
@@ -42,6 +44,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -t        Trace every executed instruction on stderr\n");
     fprintf(out, "  -v        Report loading and execution statistics on stderr\n");
     fprintf(out, "  -x FILE   Start the debugger and run its commands from FILE\n");
+    fprintf(out, "  -H COUNT  Show the last COUNT instructions when the program stops with an error\n");
     fprintf(out, "  -h        Show this help\n");
 }
 
@@ -93,6 +96,14 @@ static int parse_options(int argc, char **argv, Options *opts) {
                 return -1;
             }
             opts->memory_size = (uint32_t)kb * 1024;
+        } else if (strcmp(arg, "-H") == 0) {
+            char *end = NULL;
+            unsigned long count = i + 1 < argc ? strtoul(argv[++i], &end, 10) : 0;
+            if (!end || *end != '\0' || count == 0 || count > MAX_HISTORY) {
+                fprintf(stderr, "vm: the history must hold between 1 and %d instructions\n", MAX_HISTORY);
+                return -1;
+            }
+            opts->history = (uint32_t)count;
         } else if (strcmp(arg, "-n") == 0) {
             char *end = NULL;
             unsigned long long count = i + 1 < argc ? strtoull(argv[++i], &end, 10) : 0;
@@ -160,9 +171,12 @@ int main(int argc, char *argv[]) {
                 vm.memory_size / 1024, vm.registers[R3_PC], vm.debug_info ? vm.debug_info->symbol_count : 0);
     }
 
-    Monitor monitor = { .trace = opts.trace };
+    Monitor monitor = { .trace = opts.trace, .history_size = opts.history };
     if (opts.profile && !opts.debug) {
         monitor.counts = calloc(vm.code_end / 4 + 1, sizeof(uint32_t));
+    }
+    if (opts.history && !opts.debug) {
+        monitor.history = calloc(opts.history, sizeof(HistoryEntry));
     }
     if (!opts.debug) {
         vm_catch_signals();
@@ -185,8 +199,10 @@ int main(int argc, char *argv[]) {
     io_cleanup(&vm);
 
     if (result != VM_ERROR_NONE && !opts.debug) {
+        monitor_report_history(&vm, &monitor);
         report_fault(&vm);
     }
+    free(monitor.history);
     if (monitor.counts) {
         monitor_report_profile(&vm, &monitor);
         free(monitor.counts);
