@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 // A growing byte array for writing files; after a failed allocation it ignores further writes
-typedef struct {
+typedef struct Buffer {
     uint8_t *data;
     size_t size;
     size_t capacity;

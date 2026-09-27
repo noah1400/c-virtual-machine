@@ -22,11 +22,8 @@ static void write_debug_info(Assembler *as, Buffer *b) {
     buffer_u32(b, (uint32_t)as->symbols.count);
     for (size_t i = 0; i < as->symbols.count; i++) {
         const AsmSymbol *sym = &as->symbols.items[i];
-        buffer_string(b, sym->name);
-        buffer_u32(b, (uint32_t)sym->value);
-        buffer_u8(b, (uint8_t)sym->kind);
-        buffer_u32(b, sym->line ? (uint32_t)sym->line->number : 0);
-        buffer_string(b, sym->line ? sym->line->file : NULL);
+        vm32_write_symbol(b, sym->name, (uint32_t)sym->value, (uint8_t)sym->kind,
+                          sym->line ? (uint32_t)sym->line->number : 0, sym->line ? sym->line->file : NULL);
     }
 
     uint32_t count = 0;
@@ -38,10 +35,8 @@ static void write_debug_info(Assembler *as, Buffer *b) {
         const LineResult *r = &as->results[i];
         if (r->section >= 0) {
             char text[1024];
-            buffer_u32(b, r->address);
-            buffer_u32(b, (uint32_t)as->lines[i].number);
-            buffer_string(b, trim(as->lines[i].text, text, sizeof(text)));
-            buffer_string(b, as->lines[i].file);
+            vm32_write_line(b, r->address, (uint32_t)as->lines[i].number, trim(as->lines[i].text, text, sizeof(text)),
+                            as->lines[i].file);
         }
     }
 }
@@ -53,16 +48,7 @@ int output_binary(Assembler *as, const char *path, int with_debug) {
     uint32_t data_size = data->end - data->base;
     Buffer b = { 0 };
 
-    buffer_put(&b, VM32_MAGIC, 4);
-    buffer_u16(&b, VM32_VERSION_MAJOR);
-    buffer_u16(&b, VM32_VERSION_MINOR);
-    buffer_u32(&b, VM32_HEADER_SIZE);
-    buffer_u32(&b, code->base);
-    buffer_u32(&b, code_size);
-    buffer_u32(&b, data->base);
-    buffer_u32(&b, data_size);
-    buffer_u32(&b, 0);
-    buffer_u32(&b, (uint32_t)as->entry);
+    vm32_write_header(&b, code->base, code_size, data->base, data_size, (uint32_t)as->entry);
     buffer_put(&b, code->bytes, code_size);
     buffer_put(&b, data->bytes, data_size);
 
@@ -70,9 +56,7 @@ int output_binary(Assembler *as, const char *path, int with_debug) {
     if (with_debug) {
         write_debug_info(as, &b);
     }
-    if (!b.failed) {
-        write_le32(b.data + 28, (uint32_t)(b.size - symbols_start));
-    }
+    vm32_finish(&b, symbols_start);
 
     int ok = buffer_save(&b, path);
     if (!ok) {

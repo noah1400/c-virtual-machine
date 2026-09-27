@@ -1,6 +1,7 @@
 #ifndef _BINFMT_H_
 #define _BINFMT_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 // VM32 binary layout: header, code bytes, data bytes, symbol table
@@ -44,6 +45,18 @@ static inline void write_le32(uint8_t *p, uint32_t value) {
     p[2] = (uint8_t)(value >> 16);
     p[3] = (uint8_t)(value >> 24);
 }
+
+struct Buffer;
+
+// Writes a header; code, data and the symbol table follow, and vm32_finish records the table's size
+void vm32_write_header(struct Buffer *b, uint32_t code_base, uint32_t code_size, uint32_t data_base,
+                       uint32_t data_size, uint32_t entry);
+void vm32_finish(struct Buffer *b, size_t symbols_start);
+
+// The symbol table holds a count of symbols, the symbols, a count of source lines and the lines
+void vm32_write_symbol(struct Buffer *b, const char *name, uint32_t address, uint8_t type, uint32_t line,
+                       const char *file);
+void vm32_write_line(struct Buffer *b, uint32_t address, uint32_t line, const char *text, const char *file);
 
 int vm32_is_image(const uint8_t *image, uint32_t size);
 

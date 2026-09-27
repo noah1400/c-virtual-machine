@@ -2,6 +2,42 @@
 #include <stdlib.h>
 #include <string.h>
 #include "binfmt.h"
+#include "buffer.h"
+
+void vm32_write_header(Buffer *b, uint32_t code_base, uint32_t code_size, uint32_t data_base, uint32_t data_size,
+                       uint32_t entry) {
+    buffer_put(b, VM32_MAGIC, 4);
+    buffer_u16(b, VM32_VERSION_MAJOR);
+    buffer_u16(b, VM32_VERSION_MINOR);
+    buffer_u32(b, VM32_HEADER_SIZE);
+    buffer_u32(b, code_base);
+    buffer_u32(b, code_size);
+    buffer_u32(b, data_base);
+    buffer_u32(b, data_size);
+    buffer_u32(b, 0);
+    buffer_u32(b, entry);
+}
+
+void vm32_finish(Buffer *b, size_t symbols_start) {
+    if (!b->failed) {
+        write_le32(b->data + 28, (uint32_t)(b->size - symbols_start));
+    }
+}
+
+void vm32_write_symbol(Buffer *b, const char *name, uint32_t address, uint8_t type, uint32_t line, const char *file) {
+    buffer_string(b, name);
+    buffer_u32(b, address);
+    buffer_u8(b, type);
+    buffer_u32(b, line);
+    buffer_string(b, file);
+}
+
+void vm32_write_line(Buffer *b, uint32_t address, uint32_t line, const char *text, const char *file) {
+    buffer_u32(b, address);
+    buffer_u32(b, line);
+    buffer_string(b, text);
+    buffer_string(b, file);
+}
 
 int vm32_is_image(const uint8_t *image, uint32_t size) {
     return size >= 4 && memcmp(image, VM32_MAGIC, 4) == 0;
