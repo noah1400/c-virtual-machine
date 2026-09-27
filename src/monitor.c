@@ -402,11 +402,14 @@ int monitor_write_coverage(const VM *vm, const Monitor *monitor, const char *pat
     }
     qsort(lines, used, sizeof(CoverageLine), compare_lines);
 
-    // Lines that several macro expansions share add up their counts
+    // A line that became several instructions, such as a macro call or a line of C, ran as often as the
+    // instruction of it that ran most
     uint32_t merged = 0;
     for (uint32_t i = 0; i < used; i++) {
         if (merged > 0 && lines[merged - 1].file == lines[i].file && lines[merged - 1].line == lines[i].line) {
-            lines[merged - 1].count += lines[i].count;
+            if (lines[i].count > lines[merged - 1].count) {
+                lines[merged - 1].count = lines[i].count;
+            }
         } else {
             lines[merged++] = lines[i];
         }

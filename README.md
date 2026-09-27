@@ -167,7 +167,7 @@ vm: profile of 29 instructions
            4   13.8%  0x0000 <main>
 ```
 
-A coverage listing shows every source line that produced code with the number of times it ran, and marks the lines that never ran with `#####`. Each file starts with a summary, and a total follows when there are several files:
+A coverage listing shows every source line that produced code with the number of times it ran, and marks the lines that never ran with `#####`. A line that became several instructions, such as a macro call or a line named by [`.loc`](#directives), ran as often as its instruction that ran most. Each file starts with a summary, and a total follows when there are several files:
 
 ```console
 $ ./vm -c - count.bin
