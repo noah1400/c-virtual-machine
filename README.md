@@ -5,7 +5,8 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 - **`vm`** runs VM32 programs and can trace, disassemble or debug them.
 - **`vmasm`** turns assembly source into VM32 binaries or object files. It supports expressions, local labels, macros, structures, conditional assembly, includes and listings.
 - **`vmld`** links object files into one program.
-- **`vmc0`** compiles [Ore](docs/language.md) programs into VM32 binaries. It is written in C, to compile the Ore compiler written in Ore.
+- **`vmc`** compiles [Ore](docs/language.md) programs into VM32 binaries. It is written in Ore and runs on the VM.
+- **`vmc0`** is the same compiler written in C, which compiles `vmc` in the first place.
 
 ## Contents
 
@@ -28,7 +29,7 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 You need a C11 compiler and a POSIX system.
 
 ```sh
-make          # builds ./vm, ./vmasm, ./vmld and ./vmc0
+make          # builds ./vm, ./vmasm, ./vmld, ./vmc0 and vmc.bin, which ./vmc runs
 make test     # builds them and runs the test suite
 make clean
 ```
@@ -868,23 +869,28 @@ Linking fails, and names the file, when a symbol is undefined, two files export 
 
 ## Ore
 
-[docs/language.md](docs/language.md) describes the language. `vmc0` compiles a program, meaning its main module and every module that imports, into a binary:
+[docs/language.md](docs/language.md) describes the language. `vmc` compiles a program, meaning its main module and every module that imports, into a binary:
 
 ```console
-$ ./vmc0 primes.ore
+$ ./vmc primes.ore
 $ ./vm primes.bin
 168 primes below 1000, the largest is 997
 ```
 
 ```
-Usage: vmc0 [options] program.ore [file.asm...]
+Usage: vmc [options] program.ore [file.asm...]
   -o FILE   write the binary to FILE (default: the program with .bin)
   -S        write the assembly instead, to FILE or the program with .asm
   -I DIR    look for imported modules in DIR as well
   -L DIR    take the runtime and the standard library from DIR
 ```
 
-- **How it compiles:** `vmc0` writes the whole program as one assembly file. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that modules bring along for their `extern fn` functions. `vmc0` then assembles it with the `vmasm` next to it.
+Two compilers take these options and write the same assembly:
+
+- **`vmc`** is written in Ore, in `ore/compiler`. `make` compiles it with `vmc0` into `vmc.bin`, and the `vmc` script runs that on the VM with 256 MB of memory and an 8 MB stack. `vmc.bin` writes the program as assembly, which the script assembles with `vmasm`. `vmc` compiles itself into the very `vmc.bin` that `vmc0` makes of it.
+- **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. It runs natively, so it compiles much faster: `vmc` takes 2.5 seconds for its own 5,000 lines, `vmc0` 0.2 seconds.
+
+- **How it compiles:** the compiler writes the whole program as one assembly file. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler.
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
 - **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines.
 - **Runtime errors**, such as an index out of bounds, a `null` pointer or a failed `assert`, stop the program with a message, reported at the Ore line that failed. For the `digits.ore` example in the language description:
@@ -896,7 +902,7 @@ vm: at 0x0040 <digits.digit+16> digits.ore:2: CALL rt.index_error
 vm: #1 0x0084 <digits.main+12> digits.ore:6: CALL digits.digit
 ```
 
-`vmc0` is the bootstrap compiler, so it leaves out `f32`. Its error messages name the file and line of the first problem, and compiling stops there.
+Neither compiler has `f32` yet. Their error messages name the file and line of the first problem, and compiling stops there.
 
 ## Syscalls
 
@@ -1078,12 +1084,13 @@ Code and data symbols hold offsets into their section. A relocation stores the a
 
 ## Tests
 
-`make test` runs `tests/run.sh`, which does four things:
+`make test` runs `tests/run.sh`, which does five things:
 
 - Assembles and runs every program in `tests/programs`. A program's output must match `NAME.out`, and `NAME.in`, if present, is fed to its stdin.
 - Checks that every file in `tests/errors` fails to assemble with the expected message.
 - Compiles and runs every Ore program in `ore/tests` the same way. Their comment lines start with `//` instead of `;`, and `// vmc-args:` gives `vmc0` more arguments.
 - Checks that every file in `ore/tests/errors` fails to compile with the expected message.
+- Compiles every Ore test with `vmc -S` as well, which must write the same assembly as `vmc0 -S`, apart from its first line, which names the compiler, and the same errors. The test named `vmc` checks that `vmc` compiles itself into `vmc.bin`.
 
 Comment lines in a test adjust the checks:
 
@@ -1120,7 +1127,9 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `assembler/` | `vmasm`: lexer, expressions, symbols, includes and macros, the two passes, output and the register check |
 | `linker/` | `vmld` |
 | `assembler/examples/` | Example programs |
-| `ore/bootstrap/` | `vmc0`: lexer, parser, type checker and code generator for Ore |
+| `ore/compiler/` | `vmc`, the Ore compiler written in Ore: 64-bit constants, syntax trees, lexer, parser, type checker, code generator and the command line |
+| `ore/bootstrap/` | `vmc0`, the same compiler written in C |
+| `vmc` | The script that runs `vmc.bin` on the VM and assembles what it writes |
 | `ore/lib/` | The runtime that compiled Ore programs start from, and the standard library in `std/` |
 | `ore/tests/` | Ore test programs, and the modules and assembly they use |
 | `docs/language.md` | The Ore language |

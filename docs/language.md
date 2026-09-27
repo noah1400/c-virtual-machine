@@ -332,7 +332,7 @@ A `u8` prints as a number; `print("a")` prints a character.
 
 ## Programs
 
-A program is the module given to `vmc0` and every module it imports. Its `main` function takes no parameters or `args: [][]u8`, which holds the program path and its arguments. `main` returns nothing, or an `int` that becomes the exit status. Nothing runs before `main`.
+A program is the module given to the compiler and every module it imports. Its `main` function takes no parameters or `args: [][]u8`, which holds the program path and its arguments. `main` returns nothing, or an `int` that becomes the exit status. Nothing runs before `main`.
 
 ## Standard library
 
@@ -422,7 +422,7 @@ These need supervisor mode, which programs start in.
 
 ## Implementation
 
-`vmc0`, the bootstrap compiler written in C, reads the main module and its imports and writes the whole program as one assembly file with `.loc` lines. The file includes the runtime and any assembly files given on the command line, and `vmc0` assembles it with `vmasm`. `-S` stops after the assembly and `-o` names the output. `vmc0` leaves out `f32`.
+`vmc`, written in Ore in `ore/compiler`, and `vmc0`, the bootstrap compiler written in C, read the main module and its imports and write the whole program as one assembly file with `.loc` lines, the same file from both. It includes the runtime and any assembly files given on the command line, and is then assembled with `vmasm`. `-S` stops after the assembly and `-o` names the output. Neither compiler has `f32` yet. `vmc` runs on the VM, where it keeps constants exact to 64 bits in a pair of 32-bit halves.
 
 **Calling convention:**
 - **Arguments** are pushed from right to left, each taking its size rounded up to 4 bytes, and the caller removes them.
