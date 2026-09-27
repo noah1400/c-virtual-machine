@@ -21,7 +21,7 @@ for arg; do
     esac
 done
 
-"$here/vm" -m 262144 "$here/vmc.bin" "$@" || exit
+"$here/vm" -m 262144 -S 8192 "$here/vmc.bin" "$@" || exit
 [ -z "$stop" ] || exit 0
 if [ -z "$output" ]; then
     case ${source##*/} in
