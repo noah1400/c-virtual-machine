@@ -242,6 +242,9 @@ void monitor_free(Monitor *monitor) {
 int monitor_run(VM *vm, Monitor *monitor) {
     uint32_t before[16];
 
+    if (!monitor->trace && !monitor->counts && !monitor->history && !monitor->logpoint_count) {
+        return vm_run(vm);
+    }
     while (!vm->halted) {
         for (int i = 0; i < monitor->logpoint_count; i++) {
             if (monitor->logpoints[i].address == vm->registers[R3_PC]) {
