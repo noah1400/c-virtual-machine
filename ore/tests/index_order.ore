@@ -1,0 +1,24 @@
+// The slice is read before the index, even when computing the index changes it
+var g: []int;
+var a = [3]int { 10, 20, 30 };
+var b = [3]int { 40, 50, 60 };
+
+fn swap_global() int {
+    g = b[:];
+    return 1;
+}
+
+fn swap_local(p: *[]int) int {
+    *p = b[:];
+    return 2;
+}
+
+fn main() {
+    g = a[:];
+    print(g[swap_global()], "\n");
+    var s = a[:];
+    var p = &s;
+    print(s[swap_local(p)], "\n");
+    var t = a[:];
+    print(t[swap_global() + 1], " ", t.len, "\n");
+}

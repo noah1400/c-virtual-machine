@@ -776,10 +776,82 @@ fn gen_builtin(g: *Gen, e: *ast.Expr) {
     }
 }
 
-fn gen_index(g: *Gen, e: *ast.Expr) {
+fn has_call(e: *ast.Expr) bool {
+    if (e == null) {
+        return false;
+    }
+    if (e.kind == ast.ExprKind.CALL) {
+        return true;
+    }
+    for (var i = 0; i < e.args.len; i += 1) {
+        if (has_call(e.args[i])) {
+            return true;
+        }
+    }
+    return has_call(e.left) || has_call(e.right) || has_call(e.third);
+}
+
+// A local whose address is never taken, which only assignments in its function can change
+fn unshared(e: *ast.Expr) bool {
+    return e.kind == ast.ExprKind.NAME && e.symbol.kind == ast.SymbolKind.LOCAL && !e.symbol.address_taken;
+}
+
+// Leaves in R0 the address of an element, minus the displacement it returns, after checking the index
+fn gen_index(g: *Gen, e: *ast.Expr) int {
     var t = e.left.type;
     var size = t.base.size;
     var ok = label(g);
+
+    // An array or slice in a variable lets the index come first, where that cannot change the variable,
+    // and then serves as a memory operand
+    var at = place(e.left);
+    if (at.ptr != null && (t.kind == ast.TypeKind.ARRAY ||
+        t.kind == ast.TypeKind.SLICE && (!has_call(e.right) || unshared(e.left)))) {
+        gen_expr(g, e.right);
+        if (t.kind == ast.TypeKind.SLICE) {
+            emitf(g, "    CMP R0, [%s+4]\n    JB .L%d\n    PUSH [%s+4]\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
+                [][]u8 { at, at }, []int { ok, ok });
+            scale(g, size, "R0");
+            emits(g, "    ADD R0, [%s]\n", [][]u8 { at });
+            return 0;
+        }
+        if (!e.right.is_const) {
+            emitd(g, "    CMP R0, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
+                []int { t.length, ok, t.length, ok });
+        }
+        scale(g, size, "R0");
+        var base: []u8;
+        var offset = 0;
+        find_place(e.left, &base, &offset);
+        if (ast.same(base, "BP")) {
+            emit(g, "    ADD R0, BP\n");
+            return offset;
+        }
+        emits(g, "    ADD R0, %s\n", [][]u8 { relative(base, offset) });
+        return 0;
+    }
+
+    // An index that needs no code can go into R6 without saving the base
+    var index = simple_operand(e.right);
+    if (index.ptr != null) {
+        gen_expr(g, e.left);
+        if (t.kind == ast.TypeKind.POINTER) {
+            check_null(g, "R0");
+        }
+        if (t.kind == ast.TypeKind.ARRAY && e.right.is_const) {
+            return wide.low(e.right.value) * size;
+        }
+        set_register(g, "R6", index);
+        if (t.kind == ast.TypeKind.SLICE) {
+            emitd(g, "    CMP R6, R5\n    JB .L%d\n    PUSH R5\n    PUSH R6\n    CALL rt.index_error\n.L%d:\n", []int { ok, ok });
+        } else if (t.kind == ast.TypeKind.ARRAY) {
+            emitd(g, "    CMP R6, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R6\n    CALL rt.index_error\n.L%d:\n",
+                []int { t.length, ok, t.length, ok });
+        }
+        scale(g, size, "R6");
+        emit(g, "    ADD R0, R6\n");
+        return 0;
+    }
 
     gen_expr(g, e.left);
     if (t.kind == ast.TypeKind.POINTER) {
@@ -802,6 +874,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) {
     }
     scale(g, size, "R0");
     emit(g, "    ADD R0, R6\n");
+    return 0;
 }
 
 // Leaves the pointer in R0 and the length in R5
@@ -903,6 +976,9 @@ fn gen_address(g: *Gen, e: *ast.Expr) int {
         }
         return e.field.offset;
     }
+    if (e.kind == ast.ExprKind.INDEX) {
+        return gen_index(g, e);
+    }
     gen_addr(g, e);
     return 0;
 }
@@ -933,7 +1009,10 @@ fn gen_addr(g: *Gen, e: *ast.Expr) {
             }
         }
         case ast.ExprKind.INDEX {
-            gen_index(g, e);
+            var displacement = gen_index(g, e);
+            if (displacement != 0) {
+                emitd(g, "    ADD R0, #%d\n", []int { displacement });
+            }
         }
         default {
             // Aggregates evaluate to their address
