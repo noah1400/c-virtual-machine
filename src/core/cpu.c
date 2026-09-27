@@ -212,6 +212,6 @@ void cpu_dump_registers(VM *vm) {
         }
     }
 
-    disasm_format(&vm->current_instr, vm->debug_info, text, sizeof(text));
+    disasm_format(&vm->current_instr, vm->error_pc, vm->debug_info, text, sizeof(text));
     printf("Instructions executed: %u, last: %s\n", vm->instruction_count, text);
 }

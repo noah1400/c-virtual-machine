@@ -733,12 +733,22 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
 
     result->is_code = 1;
 
+    // Jump targets are encoded relative to the next instruction, whose address depends on the size
+    Operand *immediate = (Operand *)immediate_operand(info, ops, count);
+    int relative = immediate && immediate->mode == IMM_MODE && isa_has_relative_target(info->opcode);
+    int64_t target = immediate ? immediate->value : 0;
+    if (relative) {
+        immediate->value = target - (as->statement_address + (result->extended ? 8 : 4));
+    }
+
     // Forward references start in the short form and widen once their value is known
-    const Operand *immediate = immediate_operand(info, ops, count);
     if (as->pass != PASS_EMIT && immediate && !immediate->unresolved && !result->extended &&
         !fits_short(info, immediate)) {
         result->extended = 1;
         as->changed = 1;
+        if (relative) {
+            immediate->value = target - (as->statement_address + 8);
+        }
     }
 
     Instruction in;

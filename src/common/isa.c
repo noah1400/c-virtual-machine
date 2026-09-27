@@ -138,6 +138,11 @@ const InstructionInfo *isa_table(size_t *count) {
     return instruction_table;
 }
 
+int isa_has_relative_target(uint8_t opcode) {
+    const InstructionInfo *info = isa_by_opcode(opcode);
+    return info && (opcode >> 5) == (JMP_OP >> 5) && (info->format == FMT_OPERAND || info->format == FMT_REG_OPERAND);
+}
+
 int isa_register_index(const char *name) {
     if ((name[0] == 'R' || name[0] == 'r') && isdigit((unsigned char)name[1])) {
         int index = 0;

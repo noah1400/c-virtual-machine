@@ -5,11 +5,6 @@
 #include "disassembler.h"
 #include "vm_types.h"
 
-// Control flow opcodes take code addresses as operands
-static int is_branch(uint8_t opcode) {
-    return (opcode >> 5) == (JMP_OP >> 5);
-}
-
 static void format_displacement(char *out, size_t size, const char *base, int32_t displacement) {
     if (displacement == 0) {
         snprintf(out, size, "[%s]", base);
@@ -19,15 +14,15 @@ static void format_displacement(char *out, size_t size, const char *base, int32_
 }
 
 static void format_operand(char *out, size_t size, const Instruction *instr, uint8_t reg,
-                           const DebugInfo *info, int target) {
+                           const DebugInfo *info, int target, uint32_t next) {
     const Symbol *sym;
 
     switch (instr->mode) {
         case IMM_MODE:
-            if (target && (sym = debug_symbol_at(info, instr->immediate))) {
+            if (target && (sym = debug_symbol_at(info, next + instr->immediate))) {
                 snprintf(out, size, "%s", sym->name);
             } else if (target) {
-                snprintf(out, size, "0x%04X", instr->immediate);
+                snprintf(out, size, "0x%04X", next + instr->immediate);
             } else if ((int32_t)instr->immediate < 0) {
                 snprintf(out, size, "#-0x%X", 0u - instr->immediate);
             } else {
@@ -61,8 +56,10 @@ static void format_operand(char *out, size_t size, const Instruction *instr, uin
     }
 }
 
-void disasm_format(const Instruction *instr, const DebugInfo *info, char *buffer, size_t size) {
+void disasm_format(const Instruction *instr, uint32_t address, const DebugInfo *info, char *buffer, size_t size) {
     const InstructionInfo *op = isa_by_opcode(instr->opcode);
+    uint32_t next = address + (instr->extended ? 8 : 4);
+    int target = isa_has_relative_target(instr->opcode);
     if (!op) {
         uint32_t words[2];
         isa_encode(instr, words);
@@ -104,17 +101,17 @@ void disasm_format(const Instruction *instr, const DebugInfo *info, char *buffer
             }
             return;
         case FMT_OPERAND:
-            format_operand(operand, sizeof(operand), instr, instr->reg1, info, is_branch(instr->opcode));
+            format_operand(operand, sizeof(operand), instr, instr->reg1, info, target, next);
             snprintf(buffer, size, "%s %s", op->mnemonic, operand);
-            annotate = !is_branch(instr->opcode);
+            annotate = !target;
             break;
         case FMT_REG_OPERAND:
-            format_operand(operand, sizeof(operand), instr, instr->reg2, info, is_branch(instr->opcode));
+            format_operand(operand, sizeof(operand), instr, instr->reg2, info, target, next);
             snprintf(buffer, size, "%s %s, %s", op->mnemonic, r1, operand);
-            annotate = !is_branch(instr->opcode);
+            annotate = !target;
             break;
         case FMT_OPERAND_REG:
-            format_operand(operand, sizeof(operand), instr, instr->reg2, info, 0);
+            format_operand(operand, sizeof(operand), instr, instr->reg2, info, 0, next);
             snprintf(buffer, size, "%s %s, %s", op->mnemonic, operand, r1);
             return;
         default:
@@ -225,13 +222,17 @@ int disassemble_file(const char *filename) {
             }
             print_label(info, address);
             isa_decode(word, size > 4 ? read_le32(bin.code + offset + 4) : 0, &instr);
-            disasm_format(&instr, info, text, sizeof(text));
+            disasm_format(&instr, address, info, text, sizeof(text));
 
             char *operands = strchr(text, ' ');
             if (operands) {
                 *operands++ = '\0';
             }
-            printf("  %04X  %08X %-8s  %-8s%s\n", address, word, extension, text, operands ? operands : "");
+            if (operands) {
+                printf("  %04X  %08X %-8s  %-8s%s\n", address, word, extension, text, operands);
+            } else {
+                printf("  %04X  %08X %-8s  %s\n", address, word, extension, text);
+            }
             offset += size;
         }
     }

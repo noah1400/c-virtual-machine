@@ -284,6 +284,11 @@ static int branch_taken(VM *vm, uint8_t opcode) {
     }
 }
 
+// Immediate targets are relative to the next instruction, which PC already points at
+static uint32_t branch_target(VM *vm, const Instruction *instr, uint8_t reg) {
+    return instr->mode == IMM_MODE ? vm->registers[R3_PC] + instr->immediate : read_operand(vm, instr, reg, 4);
+}
+
 static int execute_control(VM *vm, const Instruction *instr) {
     uint32_t target;
 
@@ -297,14 +302,14 @@ static int execute_control(VM *vm, const Instruction *instr) {
             return syscall_dispatch(vm, instr->immediate);
 
         case LOOP_OP:
-            target = read_operand(vm, instr, instr->reg2, 4);
+            target = branch_target(vm, instr, instr->reg2);
             if (vm->last_error == VM_ERROR_NONE && --vm->registers[instr->reg1] != 0) {
                 vm->registers[R3_PC] = target;
             }
             return vm->last_error;
 
         default:
-            target = read_operand(vm, instr, instr->reg1, 4);
+            target = branch_target(vm, instr, instr->reg1);
             if (vm->last_error != VM_ERROR_NONE) {
                 return vm->last_error;
             }

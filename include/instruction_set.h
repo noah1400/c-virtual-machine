@@ -160,6 +160,9 @@ const InstructionInfo *isa_by_opcode(uint8_t opcode);
 const InstructionInfo *isa_by_mnemonic(const char *mnemonic);
 const InstructionInfo *isa_table(size_t *count);
 
+// Jumps, calls and LOOP, whose immediate operand is an offset from the next instruction
+int isa_has_relative_target(uint8_t opcode);
+
 int isa_register_index(const char *name);
 const char *isa_register_name(uint8_t reg);
 const char *isa_mode_name(uint8_t mode);

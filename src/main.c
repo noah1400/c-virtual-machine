@@ -109,7 +109,7 @@ static void report_fault(const VM *vm) {
     Instruction instr;
     if (pc % 4 == 0 && vm_peek_instruction(vm, pc, &instr)) {
         char text[160];
-        disasm_format(&instr, vm->debug_info, text, sizeof(text));
+        disasm_format(&instr, pc, vm->debug_info, text, sizeof(text));
         fprintf(stderr, ": %s", text);
     }
     fprintf(stderr, "\n");
@@ -136,7 +136,7 @@ static int run(VM *vm, int trace, uint32_t *counts) {
             char where[80], text[160] = "?";
 
             if (vm_peek_instruction(vm, pc, &instr)) {
-                disasm_format(&instr, vm->debug_info, text, sizeof(text));
+                disasm_format(&instr, pc, vm->debug_info, text, sizeof(text));
             }
             describe_address(vm, pc, where, sizeof(where));
             fflush(stdout);

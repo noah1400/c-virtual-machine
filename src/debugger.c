@@ -170,7 +170,7 @@ static void show_location(Debugger *dbg) {
     Instruction instr;
     if (pc % 4 == 0 && vm_peek_instruction(vm, pc, &instr)) {
         char text[160];
-        disasm_format(&instr, vm->debug_info, text, sizeof(text));
+        disasm_format(&instr, pc, vm->debug_info, text, sizeof(text));
         printf("%s: %s\n", faulted ? "Instruction" : "Next instruction", text);
     }
 }
@@ -449,7 +449,7 @@ static void cmd_disassemble(const Debugger *dbg, int argc, char **argv) {
         if (sym) {
             printf("%s:\n", sym->name);
         }
-        disasm_format(&instr, vm->debug_info, text, sizeof(text));
+        disasm_format(&instr, address, vm->debug_info, text, sizeof(text));
         printf("%s 0x%04X  %s\n", address == vm->registers[R3_PC] ? "=>" : "  ", address, text);
     }
 }
