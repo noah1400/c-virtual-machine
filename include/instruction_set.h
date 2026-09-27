@@ -6,7 +6,8 @@
 
 // Instruction format
 // [Opcode: 8 bits][Mode: 4 bits][Reg1: 4 bits][Reg2: 4 bits][Immediate/Offset: 12 bits]
-// IMM, MEM, STK and BAS modes use the Reg2 field as the top 4 bits of a 16-bit immediate.
+// IMM, MEM, STK and BAS modes use the Reg2 field as the top 4 bits of a 16-bit immediate, which
+// is sign-extended except for MEM addresses.
 // Mode bit 3 means a second word follows that holds the whole 32-bit immediate or offset.
 #define MODE_EXTENDED 0x8
 

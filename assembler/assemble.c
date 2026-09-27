@@ -500,7 +500,7 @@ static void operand_limits(const InstructionInfo *info, uint8_t mode, int extend
     } else if (size) {
         *min = 0;
         *max = 0x0FFF;
-    } else if (mode == IMM_MODE || mode == MEM_MODE) {
+    } else if (mode == MEM_MODE) {
         *min = 0;
         *max = 0xFFFF;
     } else if (mode == IDX_MODE) {

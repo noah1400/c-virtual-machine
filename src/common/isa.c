@@ -167,7 +167,7 @@ const char *isa_mode_name(uint8_t mode) {
 }
 
 // Operand fields of IMM, MEM, STK and BAS take 16 bits by borrowing the Reg2 field, except in
-// MEMCPY and MEMSET, whose Reg2 field names the second register
+// MEMCPY and MEMSET, whose Reg2 field names the second register; only MEM is zero-extended
 static int has_wide_field(const Instruction *instr) {
     const InstructionInfo *info = isa_by_opcode(instr->opcode);
     int wide_mode = instr->mode == IMM_MODE || instr->mode == MEM_MODE || instr->mode == STK_MODE ||
@@ -193,7 +193,7 @@ void isa_decode(uint32_t word, uint32_t extension, Instruction *instr) {
     } else if (has_wide_field(instr)) {
         field |= (uint32_t)instr->reg2 << 12;
         instr->reg2 = 0;
-        instr->immediate = instr->mode == STK_MODE || instr->mode == BAS_MODE ? (uint32_t)(int16_t)field : field;
+        instr->immediate = instr->mode == MEM_MODE ? field : (uint32_t)(int16_t)field;
     } else if (instr->mode == IDX_MODE) {
         instr->immediate = (uint32_t)(((int32_t)field ^ 0x800) - 0x800);
     } else {

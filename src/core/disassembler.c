@@ -28,6 +28,8 @@ static void format_operand(char *out, size_t size, const Instruction *instr, uin
                 snprintf(out, size, "%s", sym->name);
             } else if (target) {
                 snprintf(out, size, "0x%04X", instr->immediate);
+            } else if ((int32_t)instr->immediate < 0) {
+                snprintf(out, size, "#-0x%X", 0u - instr->immediate);
             } else {
                 snprintf(out, size, "#0x%X", instr->immediate);
             }
