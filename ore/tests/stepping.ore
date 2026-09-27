@@ -1,0 +1,13 @@
+// The debugger stops at Ore lines, steps over them and shows the Ore calls that led there
+fn square(x: int) int {
+    var result = x * x;
+    return result;
+}
+
+fn main() {
+    var total = 0;
+    for (var i = 1; i <= 3; i += 1) {
+        total += square(i);
+    }
+    print(total, "\n");
+}
