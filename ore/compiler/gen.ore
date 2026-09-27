@@ -358,10 +358,97 @@ fn is_checked(g: *Gen, s: *ast.Symbol) bool {
     return false;
 }
 
-// Code reaches a label from more than one place, and a check before one of them says nothing
-fn merge_label(g: *Gen, n: int) {
+// The locals known not to be null at the start of a statement or expression, as many as fit
+struct Checked {
+    items: [16]*u8;
+    count: int;
+}
+
+fn save_checked(g: *Gen, saved: *Checked) {
+    saved.count = 0;
+    for (var i = 0; i < g.checked.count && i < saved.items.len; i += 1) {
+        saved.items[i] = g.checked.items[i];
+        saved.count += 1;
+    }
+}
+
+fn assigns(s: *ast.Stmt, local: *u8) bool {
+    if (s == null) {
+        return false;
+    }
+    switch (s.kind) {
+        case ast.StmtKind.BLOCK {
+            for (var i = 0; i < s.body.len; i += 1) {
+                if (assigns(s.body[i], local)) {
+                    return true;
+                }
+            }
+        }
+        case ast.StmtKind.VAR {
+            return s.symbol as *u8 == local;
+        }
+        case ast.StmtKind.ASSIGN {
+            return local_of(s.target) as *u8 == local;
+        }
+        case ast.StmtKind.IF {
+            return assigns(s.then, local) || assigns(s.otherwise, local);
+        }
+        case ast.StmtKind.WHILE, ast.StmtKind.FOR {
+            return assigns(s.init, local) || assigns(s.step, local) || assigns(s.then, local);
+        }
+        case ast.StmtKind.SWITCH {
+            for (var i = 0; i < s.cases.len; i += 1) {
+                if (assigns(s.cases[i].body, local)) {
+                    return true;
+                }
+            }
+            return assigns(s.fallback, local);
+        }
+    }
+    return false;
+}
+
+// Code reaches a label from more than one place. The locals that were not null where the statement or
+// expression began are still not null there, unless the statements a and b between assign them.
+fn merge_label(g: *Gen, n: int, saved: *Checked, a: *ast.Stmt, b: *ast.Stmt) {
     g.checked.count = 0;
+    for (var i = 0; i < saved.count; i += 1) {
+        if (!assigns(a, saved.items[i]) && !assigns(b, saved.items[i])) {
+            ast.add(&g.checked, saved.items[i]);
+        }
+    }
     emitd(g, ".L%d:\n", []int { n });
+}
+
+// Notes the locals that a condition shows not to be null when it is found to be holds
+fn note_not_null(g: *Gen, e: *ast.Expr, holds: bool) {
+    if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.BANG) {
+        note_not_null(g, e.left, !holds);
+    } else if (e.kind == ast.ExprKind.BINARY && (e.op == ast.TokenKind.ANDAND && holds ||
+               e.op == ast.TokenKind.OROR && !holds)) {
+        note_not_null(g, e.left, holds);
+        note_not_null(g, e.right, holds);
+    } else if (e.kind == ast.ExprKind.BINARY && (e.op == ast.TokenKind.EQ || e.op == ast.TokenKind.NE) &&
+               (e.op == ast.TokenKind.NE) == holds && e.right.kind == ast.ExprKind.NULL && unshared(e.left) &&
+               !is_checked(g, e.left.symbol)) {
+        ast.add(&g.checked, e.left.symbol as *u8);
+    }
+}
+
+// Whether code can go on after a statement, as far as its last statements show
+fn falls_through(s: *ast.Stmt) bool {
+    switch (s.kind) {
+        case ast.StmtKind.BLOCK {
+            return s.body.len == 0 || falls_through(s.body[s.body.len - 1]);
+        }
+        case ast.StmtKind.RETURN, ast.StmtKind.BREAK, ast.StmtKind.CONTINUE {
+            return false;
+        }
+        case ast.StmtKind.IF {
+            return s.otherwise == null || falls_through(s.then) || falls_through(s.otherwise);
+        }
+    }
+    return true;
 }
 
 // After an assignment to a local, it is not null only if it was set to new memory or an address
@@ -591,13 +678,15 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
     if (e.op == ast.TokenKind.ANDAND || e.op == ast.TokenKind.OROR) {
         var end = label(g);
         gen_expr(g, e.left);
+        var saved: Checked;
+        save_checked(g, &saved);
         var jump = "JNZ";
         if (e.op == ast.TokenKind.ANDAND) {
             jump = "JZ";
         }
         emitf(g, "    CMP R0, #0\n    %s .L%d\n", [][]u8 { jump }, []int { end });
         gen_expr(g, e.right);
-        merge_label(g, end);
+        merge_label(g, end, &saved, null, null);
         return;
     }
     if (left.kind == ast.TypeKind.POINTER && !is_comparison(e)) {
@@ -662,9 +751,11 @@ fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
             return;
         }
         var skip = label(g);
+        var saved: Checked;
+        save_checked(g, &saved);
         gen_condition(g, e.left, skip, !when);
         gen_condition(g, e.right, target, when);
-        merge_label(g, skip);
+        merge_label(g, skip, &saved, null, null);
         return;
     }
     if (is_comparison(e) && check.is_scalar(e.left.type)) {
@@ -673,10 +764,11 @@ fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
         if (register.ptr != null && is_operand(e.right)) {
             var operand = gen_operand(g, e.right);
             emitf(g, "    CMP %s, %s\n    J%s .L%d\n", [][]u8 { register, operand, code }, []int { target });
-            return;
+        } else {
+            var right = operands(g, e);
+            emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, code }, []int { target });
         }
-        var right = operands(g, e);
-        emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, code }, []int { target });
+        note_not_null(g, e, !when);
         return;
     }
     var register = register_of(e);
@@ -824,8 +916,8 @@ fn gen_print(g: *Gen, e: *ast.Expr) {
             emit(g, "    MOVE R6, R5\n    MOVE R5, R0\n    LOAD R0, #1\n    SYSCALL #13\n");
         } else if (t.kind == ast.TypeKind.BOOL) {
             var done = label(g);
-            emitd(g, "    LOAD R6, rt.false\n    CMP R0, #0\n    JZ .L%d\n    LOAD R6, rt.true\n", []int { done });
-            merge_label(g, done);
+            emitd(g, "    LOAD R6, rt.false\n    CMP R0, #0\n    JZ .L%d\n    LOAD R6, rt.true\n.L%d:\n",
+                []int { done, done });
             emit(g, "    MOVE R0, R6\n    SYSCALL #2\n");
         } else if (t.kind == ast.TypeKind.POINTER || t.kind == ast.TypeKind.FN) {
             emit(g, "    SYSCALL #5\n");
@@ -1539,6 +1631,8 @@ fn gen_switch(g: *Gen, s: *ast.Stmt) {
     g.labels += s.cases.len;
 
     gen_expr(g, s.cond);
+    var saved: Checked;
+    save_checked(g, &saved);
     for (var i = 0; i < s.cases.len; i += 1) {
         var values = s.cases[i].values;
         for (var v = 0; v < values.len; v += 1) {
@@ -1551,15 +1645,15 @@ fn gen_switch(g: *Gen, s: *ast.Stmt) {
         emitd(g, "    JMP .L%d\n", []int { end });
     }
     for (var i = 0; i < s.cases.len; i += 1) {
-        merge_label(g, first + i);
+        merge_label(g, first + i, &saved, null, null);
         gen_block(g, s.cases[i].body);
         emitd(g, "    JMP .L%d\n", []int { end });
     }
     if (s.fallback != null) {
-        merge_label(g, fallback);
+        merge_label(g, fallback, &saved, null, null);
         gen_block(g, s.fallback);
     }
-    merge_label(g, end);
+    merge_label(g, end, &saved, s, null);
 }
 
 fn gen_loop(g: *Gen, s: *ast.Stmt) {
@@ -1572,22 +1666,26 @@ fn gen_loop(g: *Gen, s: *ast.Stmt) {
     if (s.init != null) {
         gen_stmt(g, s.init);
     }
-    merge_label(g, top);
+    var saved: Checked;
+    save_checked(g, &saved);
+    merge_label(g, top, &saved, s.then, s.step);
     if (s.cond != null) {
         loc(g, s.line);
         gen_branch(g, s.cond, end);
     }
+    var passed: Checked;
+    save_checked(g, &passed);
     g.break_label = end;
     g.continue_label = next;
     gen_block(g, s.then);
     g.break_label = saved_break;
     g.continue_label = saved_continue;
-    merge_label(g, next);
+    merge_label(g, next, &passed, s.then, s.step);
     if (s.step != null) {
         gen_stmt(g, s.step);
     }
     emitd(g, "    JMP .L%d\n", []int { top });
-    merge_label(g, end);
+    merge_label(g, end, &saved, s.then, s.step);
 }
 
 fn gen_stmt(g: *Gen, s: *ast.Stmt) {
@@ -1610,15 +1708,23 @@ fn gen_stmt(g: *Gen, s: *ast.Stmt) {
         case ast.StmtKind.IF {
             var otherwise = label(g);
             var end = label(g);
+            var saved: Checked;
+            save_checked(g, &saved);
             gen_branch(g, s.cond, otherwise);
             gen_block(g, s.then);
             if (s.otherwise != null) {
                 emitd(g, "    JMP .L%d\n", []int { end });
             }
-            merge_label(g, otherwise);
+            if (s.otherwise != null || !falls_through(s.then)) {
+                // Only the condition leads there
+                merge_label(g, otherwise, &saved, null, null);
+                note_not_null(g, s.cond, false);
+            } else {
+                merge_label(g, otherwise, &saved, s.then, null);
+            }
             if (s.otherwise != null) {
                 gen_stmt(g, s.otherwise);
-                merge_label(g, end);
+                merge_label(g, end, &saved, s.then, s.otherwise);
             }
         }
         case ast.StmtKind.WHILE, ast.StmtKind.FOR {

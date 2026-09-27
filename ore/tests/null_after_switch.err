@@ -1,0 +1,5 @@
+vm: error: null pointer
+vm: at 0x02DC <null_after_switch.pick.L2+12> ore/tests/null_after_switch.ore:19: CALL rt.null_error
+vm: #1 0x037C <null_after_switch.main+140> ore/tests/null_after_switch.ore:26: CALL null_after_switch.pick
+vm: #2 0x0274 <main> ore/tests/null_after_switch.ore:22: CALL null_after_switch.main
+vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main
