@@ -178,6 +178,7 @@ int qualify_name(Assembler *as, const char *name, char *out, size_t size);
 
 // source.c
 int source_load(Assembler *as, const char *path);
+char *source_find(Assembler *as, const char *includer, const char *name);
 
 // assemble.c
 void asm_init(Assembler *as);

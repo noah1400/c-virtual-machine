@@ -96,7 +96,7 @@ static char *join_path(const char *dir, size_t dir_length, const char *name) {
 }
 
 // Include paths are relative to the including file, then to each -I directory
-static char *resolve_include(Assembler *as, const char *includer, const char *name) {
+char *source_find(Assembler *as, const char *includer, const char *name) {
     if (is_absolute(name)) {
         return copy_string(name, strlen(name));
     }
@@ -197,7 +197,7 @@ static int load_file(Assembler *as, Loader *loader, char *path) {
 }
 
 static int include_file(Assembler *as, Loader *loader, const char *file, int number, const char *name) {
-    char *resolved = resolve_include(as, file, name);
+    char *resolved = source_find(as, file, name);
 
     if (!resolved) {
         loader_error(as, "cannot find include file \"%s\"", name);

@@ -695,6 +695,7 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.entry expr` | Start execution here instead of at 0x0000 |
 | `.error "message"` | Stop assembly with this message. Useful inside `.if` |
 | `.include "file"` | Insert a file. It is searched for next to the including file, then in `-I` directories |
+| `.incbin "file"[, offset[, length]]` | Insert the bytes of a file, found like an include, or *length* of them from *offset* on |
 | `.macro` ... `.endm` | Define a macro |
 | `.if`, `.ifdef`, `.ifndef`, `.else`, `.endif` | Conditional assembly |
 

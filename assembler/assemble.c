@@ -443,6 +443,48 @@ static void directive_entry(Assembler *as, Parser *p) {
     }
 }
 
+// Includes the bytes of a file, or LENGTH of them from OFFSET on
+static void directive_incbin(Assembler *as, Parser *p) {
+    Token *t = peek(p);
+    int64_t offset = 0, length = -1;
+
+    if (t->kind != TOK_STRING) {
+        asm_error(as, "expected a file name in quotes");
+        return;
+    }
+    const char *name = t->text;
+    p->pos++;
+    for (int i = 0; i < 2 && accept(p, ','); i++) {
+        p->unresolved = 0;
+        int64_t value = parse_expression(p);
+        if (p->failed) {
+            return;
+        }
+        if (p->unresolved) {
+            asm_error(as, "the .incbin %s must not depend on symbols defined later", i ? "length" : "offset");
+            return;
+        }
+        *(i ? &length : &offset) = value;
+    }
+    if (!expect_end(p)) {
+        return;
+    }
+
+    char *path = source_find(as, as->line->file, name);
+    uint32_t size = 0;
+    const char *problem = "cannot find the file";
+    uint8_t *bytes = path ? read_binary_file(path, &size, &problem) : NULL;
+    if (!bytes) {
+        asm_error(as, "%s: %s", name, problem);
+    } else if (offset < 0 || offset > size || length < -1 || (length >= 0 && length > size - offset)) {
+        asm_error(as, "%s holds %u bytes, which the offset and length do not fit", name, size);
+    } else {
+        emit(as, bytes + offset, (uint32_t)(length >= 0 ? length : size - offset));
+    }
+    free(bytes);
+    free(path);
+}
+
 static void directive_struct(Assembler *as, Parser *p) {
     Token *t = peek(p);
 
@@ -573,6 +615,8 @@ static void directive(Assembler *as, Parser *p) {
         directive_equ(as, p);
     } else if (name_equals(name, ".entry")) {
         directive_entry(as, p);
+    } else if (name_equals(name, ".incbin")) {
+        directive_incbin(as, p);
     } else if (name_equals(name, ".error")) {
         Token *message = peek(p);
         if (message->kind != TOK_STRING) {
