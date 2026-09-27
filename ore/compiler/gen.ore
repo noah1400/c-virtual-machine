@@ -244,11 +244,7 @@ fn store_to(g: *Gen, t: *ast.Type, place: []u8) {
     } else if (is_aggregate(t)) {
         if (t.size > 0) {
             if (!ast.same(place, "R6")) {
-                if (place[0] == 'B') {
-                    emits(g, "    LEA R6, [%s]\n", [][]u8 { place });
-                } else {
-                    emits(g, "    LOAD R6, %s\n", [][]u8 { place });
-                }
+                emits(g, "    LEA R6, [%s]\n", [][]u8 { place });
             }
             emitd(g, "    MEMCPY R6, R0, #%d\n", []int { t.size });
         }
@@ -274,19 +270,71 @@ fn local_place(offset: int) []u8 {
     return ast.cat([][]u8 { "BP", sign, str.format_int(offset, digits) });
 }
 
-// A variable that instructions can address directly, as BP-8 or its label, or nothing
+// A place that is a register or a label, with an offset added
+fn relative(base: []u8, offset: int) []u8 {
+    if (offset == 0) {
+        return base;
+    }
+    var sign = "+";
+    if (offset < 0) {
+        sign = "";
+    }
+    return ast.cat([][]u8 { base, sign, ast.number(offset) });
+}
+
+// Finds the variable in memory that holds e at a fixed offset: a local, whose base is BP, or a global,
+// whose base is its label
+fn find_place(e: *ast.Expr, base: *[]u8, offset: *int) bool {
+    switch (e.kind) {
+        case ast.ExprKind.NAME {
+            if (e.symbol.kind == ast.SymbolKind.LOCAL && e.symbol.reg == 0) {
+                *base = "BP";
+                *offset = e.symbol.offset;
+                return true;
+            }
+            if (e.symbol.kind == ast.SymbolKind.GLOBAL) {
+                *base = symbol_name(e.symbol);
+                *offset = 0;
+                return true;
+            }
+        }
+        case ast.ExprKind.FIELD {
+            if (e.field != null && e.left.type.kind == ast.TypeKind.STRUCT && find_place(e.left, base, offset)) {
+                *offset += e.field.offset;
+                return true;
+            }
+        }
+        case ast.ExprKind.INDEX {
+            if (e.left.type.kind == ast.TypeKind.ARRAY && e.right.is_const && find_place(e.left, base, offset)) {
+                *offset += wide.low(e.right.value) * e.left.type.base.size;
+                return true;
+            }
+        }
+        case ast.ExprKind.LEN, ast.ExprKind.PTR {
+            if (find_place(e.left, base, offset)) {
+                if (e.kind == ast.ExprKind.LEN) {
+                    *offset += 4;
+                }
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Where instructions can address a variable, or a part of one at a fixed offset, directly: as BP-8, or
+// as a label with an offset. Nothing when code has to compute the address.
 fn place(e: *ast.Expr) []u8 {
     var none: []u8;
-    if (e.kind != ast.ExprKind.NAME) {
+    var base: []u8;
+    var offset = 0;
+    if (!find_place(e, &base, &offset)) {
         return none;
     }
-    if (e.symbol.kind == ast.SymbolKind.LOCAL && e.symbol.reg == 0) {
-        return local_place(e.symbol.offset);
+    if (ast.same(base, "BP")) {
+        return local_place(offset);
     }
-    if (e.symbol.kind == ast.SymbolKind.GLOBAL) {
-        return symbol_name(e.symbol);
-    }
-    return none;
+    return relative(base, offset);
 }
 
 fn zero(g: *Gen, t: *ast.Type, offset: int) {
@@ -582,6 +630,29 @@ fn gen_argument(g: *Gen, arg: *ast.Expr, offset: int) {
     }
 }
 
+// Pushes an argument that needs no code to compute; tells whether it was one
+fn push_argument(g: *Gen, arg: *ast.Expr, emitting: bool) bool {
+    if (arg.kind == ast.ExprKind.STRING || arg.kind == ast.ExprKind.NAME && arg.symbol.kind == ast.SymbolKind.CONST &&
+        arg.symbol.string != null) {
+        if (emitting) {
+            emitf(g, "    PUSH #%d\n    PUSH %s\n", [][]u8 { string_of(g, arg) }, []int { string_size(arg) });
+        }
+        return true;
+    }
+    if (arg.type.kind == ast.TypeKind.SLICE) {
+        var at = place(arg);
+        if (at.ptr != null && emitting) {
+            emits(g, "    PUSH [%s+4]\n    PUSH [%s]\n", [][]u8 { at, at });
+        }
+        return at.ptr != null;
+    }
+    var operand = simple_operand(arg);
+    if (operand.ptr != null && emitting) {
+        emits(g, "    PUSH %s\n", [][]u8 { operand });
+    }
+    return operand.ptr != null;
+}
+
 fn gen_call(g: *Gen, e: *ast.Expr) {
     var function = e.left.type;
     var result = function.base;
@@ -595,6 +666,28 @@ fn gen_call(g: *Gen, e: *ast.Expr) {
 
     for (var i = 0; i < function.params.len; i += 1) {
         size += words(function.params[i].size);
+    }
+    // Arguments that need no code go on the stack with PUSH, from the last one to the first
+    var pushed = direct;
+    for (var i = 0; i < e.args.len && pushed; i += 1) {
+        pushed = push_argument(g, e.args[i], false);
+    }
+    if (pushed) {
+        for (var i = e.args.len - 1; i >= 0; i -= 1) {
+            push_argument(g, e.args[i], true);
+        }
+        if (hidden) {
+            temp = alloc_frame(g, result.size);
+            emitd(g, "    LEA R0, [BP%+d]\n    PUSH R0\n", []int { temp });
+        }
+        emits(g, "    CALL %s\n", [][]u8 { symbol_name(e.left.symbol) });
+        if (size != 0) {
+            emitd(g, "    ADD SP, #%d\n", []int { size });
+        }
+        if (hidden) {
+            emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
+        }
+        return;
     }
     if (!direct) {
         gen_expr(g, e.left);
@@ -800,6 +893,20 @@ fn gen_new(g: *Gen, e: *ast.Expr) {
     emit(g, "    PUSH R0\n    CALL rt.alloc\n    ADD SP, #4\n    POP R5\n");
 }
 
+// Leaves in R0 the base of the address of a place and returns the offset from it, which loads and stores
+// can take as a displacement
+fn gen_address(g: *Gen, e: *ast.Expr) int {
+    if (e.kind == ast.ExprKind.FIELD && e.field != null) {
+        gen_expr(g, e.left);
+        if (e.left.type.kind == ast.TypeKind.POINTER) {
+            check_null(g, "R0");
+        }
+        return e.field.offset;
+    }
+    gen_addr(g, e);
+    return 0;
+}
+
 fn gen_addr(g: *Gen, e: *ast.Expr) {
     switch (e.kind) {
         case ast.ExprKind.NAME {
@@ -855,8 +962,12 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
             }
         }
         case ast.ExprKind.FIELD, ast.ExprKind.INDEX {
-            gen_addr(g, e);
-            load_from(g, t, "R0");
+            var at = place(e);
+            if (at.ptr != null) {
+                load_from(g, t, at);
+                return;
+            }
+            load_from(g, t, relative("R0", gen_address(g, e)));
         }
         case ast.ExprKind.CALL {
             if (e.builtin != ast.Builtin.NONE) {
@@ -881,10 +992,20 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
             }
         }
         case ast.ExprKind.LEN {
+            var at = place(e);
+            if (at.ptr != null) {
+                emits(g, "    LOAD R0, [%s]\n", [][]u8 { at });
+                return;
+            }
             gen_expr(g, e.left);
             emit(g, "    MOVE R0, R5\n");
         }
         case ast.ExprKind.PTR {
+            var at = place(e);
+            if (at.ptr != null) {
+                emits(g, "    LOAD R0, [%s]\n", [][]u8 { at });
+                return;
+            }
             gen_expr(g, e.left);
         }
         case ast.ExprKind.UNARY {
@@ -1028,7 +1149,7 @@ fn gen_assign(g: *Gen, s: *ast.Stmt) {
         if (direct.ptr != null) {
             target = direct;
         } else {
-            gen_addr(g, s.target);
+            target = relative("R6", gen_address(g, s.target));
             emit(g, "    MOVE R6, R0\n");
         }
         load_from(g, t, target);
@@ -1040,7 +1161,7 @@ fn gen_assign(g: *Gen, s: *ast.Stmt) {
     if (direct.ptr != null) {
         target = direct;
     } else {
-        gen_addr(g, s.target);
+        target = relative("R6", gen_address(g, s.target));
         emit(g, "    PUSH R0\n");
     }
     gen_expr(g, s.value);
