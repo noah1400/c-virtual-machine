@@ -7,8 +7,8 @@
 # of vmc that vmc0 made, has to write the same assembly as vmc, all three compilers the same errors, and
 # the test named vmc checks that vmc compiles itself into vmc.bin. Expectations come from NAME.out,
 # NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:", "; expect-warning:",
-# "; asm-args:", "; vm-args:" and "; program-args:" lines, written with // in Ore, where "// vmc-args:"
-# gives vmc0 more arguments.
+# "; asm-args:", "; ld-args:", "; vm-args:" and "; program-args:" lines, written with // in Ore, where
+# "// vmc-args:" gives vmc0 more arguments.
 # Programs are assembled with -W, and every warning needs an "; expect-warning:" line of its own.
 # "; disk-sectors:" attaches an empty disk image, NAME.x holds debugger commands, NAME.keys a key script
 # and NAME.err, if present, the whole expected stderr. "; link:" names modules in tests/programs to
@@ -181,6 +181,7 @@ for src in "$root"/tests/programs/*.asm; do
 
     # Assemble with a relative path so debug info does not depend on the checkout location
     asm_args=$(expectation "$src" asm-args)
+    ld_args=$(expectation "$src" ld-args)
     modules=$(expectation "$src" link)
     link_error=$(expectation "$src" expect-link-error)
     output="$tmp/$name.bin"
@@ -215,7 +216,7 @@ for src in "$root"/tests/programs/*.asm; do
     fi
 
     if [ -n "$modules$link_error" ]; then
-        if (cd "$root" && "$ld" -o "$tmp/$name.bin" $objects 2> "$tmp/$name.link"); then
+        if (cd "$root" && "$ld" $ld_args -o "$tmp/$name.bin" $objects 2> "$tmp/$name.link"); then
             if [ -n "$link_error" ]; then
                 fail "$name" "linked although it should not"
                 continue

@@ -45,6 +45,7 @@ typedef struct {
     Object *objects;
     int count;
     int errors;
+    uint32_t base;      // where the code starts
 } Linker;
 
 static void link_error(Linker *ld, const char *path, const char *format, const char *detail) {
@@ -166,9 +167,9 @@ static uint32_t align_up(uint32_t value, uint32_t alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
-// Code starts at 0 and data on the page after it, each object file's sections in command line order
+// Code starts at the base and data on the page after it, each object file's sections in command line order
 static uint32_t place_sections(Linker *ld, uint32_t *code_end, uint32_t *data_start) {
-    uint64_t address = 0;
+    uint64_t address = ld->base;
     for (int s = 0; s < 2; s++) {
         if (s == VMO_DATA) {
             *code_end = (uint32_t)address;
@@ -180,7 +181,7 @@ static uint32_t place_sections(Linker *ld, uint32_t *code_end, uint32_t *data_st
             address = align_up((uint32_t)address, o->alignments[s]);
             o->bases[s] = (uint32_t)address;
             address += o->sizes[s];
-            if (address > VM32_MAX_FILE_SIZE) {
+            if (address - ld->base > VM32_MAX_FILE_SIZE) {
                 link_error(ld, NULL, "the program exceeds %s", "16 MB");
                 return 0;
             }
@@ -273,7 +274,7 @@ static void apply_relocations(Linker *ld, uint8_t *image, uint32_t base_address)
 static int find_entry(Linker *ld, const char *name, uint32_t code_end, uint32_t *entry) {
     const Object *from = NULL;
 
-    *entry = 0;
+    *entry = ld->base;
     if (name) {
         const Object *owner;
         const ObjSymbol *sym = find_global(ld, name, &owner);
@@ -356,7 +357,7 @@ static int link_program(Linker *ld, const char *output, const char *entry_name, 
         return 0;
     }
 
-    uint8_t *image = calloc(end ? end : 1, 1);
+    uint8_t *image = calloc(end - ld->base ? end - ld->base : 1, 1);
     if (!image) {
         link_error(ld, NULL, "out of memory%s", "");
         return 0;
@@ -364,17 +365,17 @@ static int link_program(Linker *ld, const char *output, const char *entry_name, 
     for (int i = 0; i < ld->count; i++) {
         const Object *o = &ld->objects[i];
         for (int s = 0; s < 2; s++) {
-            memcpy(image + o->bases[s], o->contents[s], o->sizes[s]);
+            memcpy(image + (o->bases[s] - ld->base), o->contents[s], o->sizes[s]);
         }
     }
-    apply_relocations(ld, image, 0);
+    apply_relocations(ld, image, ld->base);
 
     int ok = 0;
     if (ld->errors == 0) {
         Buffer b = { 0 };
-        vm32_write_header(&b, 0, code_end, data_start, end - data_start, entry);
-        buffer_put(&b, image, code_end);
-        buffer_put(&b, image + data_start, end - data_start);
+        vm32_write_header(&b, ld->base, code_end - ld->base, data_start, end - data_start, entry);
+        buffer_put(&b, image, code_end - ld->base);
+        buffer_put(&b, image + (data_start - ld->base), end - data_start);
         size_t symbols_start = b.size;
         if (with_debug) {
             write_debug_info(ld, &b);
@@ -398,6 +399,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "Options:\n");
     fprintf(out, "  -o FILE   Write the program to FILE (default: the first object file with a .bin extension)\n");
     fprintf(out, "  -e NAME   Start at the exported code label NAME\n");
+    fprintf(out, "  -b ADDR   Put the code at ADDR, a multiple of 4096 below 0x80000000, and the data after it\n");
     fprintf(out, "  -M        Print where the sections and exported symbols went\n");
     fprintf(out, "  -S        Leave out debug information\n");
     fprintf(out, "  -h        Show this help\n");
@@ -429,6 +431,15 @@ int main(int argc, char *argv[]) {
         const char *arg = argv[i];
         if ((strcmp(arg, "-o") == 0 || strcmp(arg, "-e") == 0) && i + 1 < argc) {
             *(arg[1] == 'o' ? &output : &entry) = argv[++i];
+        } else if (strcmp(arg, "-b") == 0 && i + 1 < argc) {
+            char *end;
+            unsigned long address = strtoul(argv[++i], &end, 0);
+            if (*argv[i] == '\0' || *end != '\0' || address % VM_PAGE_SIZE != 0 || address >= 0x80000000ul) {
+                fprintf(stderr, "vmld: error: the base address must be a multiple of 4096 below 0x80000000\n");
+                free(ld.objects);
+                return 1;
+            }
+            ld.base = (uint32_t)address;
         } else if (strcmp(arg, "-M") == 0) {
             map = 1;
         } else if (strcmp(arg, "-S") == 0) {

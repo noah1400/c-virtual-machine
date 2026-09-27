@@ -856,12 +856,13 @@ In an object file, labels are offsets into their section until the linker places
 
 An address may be added to or subtracted from a number, and two addresses in the same section may be subtracted from each other. Every other use needs a constant, including `.space`, `.align`, `.org` and `.if`. Symbols that a file uses have to be defined in it or declared with `.extern`.
 
-`vmld` places the code of all files from address 0 in the order they are given, and their data from the page after the code, each aligned to the largest `.align` of its section. The program starts at the `.entry` of the one file that has one, at the exported code label given with `-e`, or at address 0. Symbols and source lines of all files end up in the program, so fault reports, backtraces and the debugger work across files.
+`vmld` places the code of all files from address 0, or the address given with `-b`, in the order they are given, and their data from the page after the code, each aligned to the largest `.align` of its section. The program starts at the `.entry` of the one file that has one, at the exported code label given with `-e`, or at the start of the code. Symbols and source lines of all files end up in the program, so fault reports, backtraces and the debugger work across files.
 
 | Option | Effect |
 |---|---|
 | `-o FILE` | Output file (default: the first object file with a `.bin` extension) |
 | `-e NAME` | Start at the exported code label NAME |
+| `-b ADDR` | Put the code at ADDR, a multiple of 4096 below 0x80000000 |
 | `-M` | Print where each file's sections and exported symbols went |
 | `-S` | Leave out debug information |
 | `-h` | Show help |
@@ -1104,6 +1105,7 @@ Comment lines in a test adjust the checks:
 | `; link: modules/a.asm ...` | Assemble the program and these files from `tests/programs` with `-c`, and link them |
 | `; expect-link-error: text` | Expected linker error |
 | `; asm-args: ...` | Extra arguments for the assembler |
+| `; ld-args: ...` | Extra arguments for the linker |
 | `; vm-args: ...` | Extra options for the VM |
 | `; program-args: ...` | Arguments passed to the program |
 | `; disk-sectors: N` | Attach an empty disk image of N sectors |
