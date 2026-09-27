@@ -14,7 +14,7 @@
     NOP
     NOP
     NOP
-    LOAD R9, #0
+    LOAD R9, #0x40              ; clears the trap flag but stays in supervisor mode
     PUSH R9
     POPF
     LOAD R8, [steps]

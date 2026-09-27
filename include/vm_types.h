@@ -99,7 +99,7 @@ typedef struct {
 #define VM_ERROR_UNHANDLED_INTERRUPT  10 // Unhandled interrupt
 #define VM_ERROR_IO_ERROR             11 // I/O operation error
 #define VM_ERROR_PROTECTION_FAULT     12 // Memory protection fault
-#define VM_ERROR_NESTED_INTERRUPT     13 // Nested interrupt
+#define VM_ERROR_PRIVILEGE            13 // Privileged instruction in user mode
 #define VM_ERROR_INSTRUCTION_LIMIT    16 // Instruction limit reached, never delivered to the program
 
 // Faults with a code below this are delivered to the interrupt vector of the same number

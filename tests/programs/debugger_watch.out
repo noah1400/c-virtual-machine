@@ -6,20 +6,20 @@ Next instruction: LOAD R8, #0x0
 > Watchpoint already set at 0x1000
 > Watchpoint 1: 0x1000 changed from 0x00000000 to 0x00000001
 R0  0x00000000   BP  0x00100000   SP  0x00100000   PC  0x0000000C
-SR  0x00000000   R5  0x00000000   R6  0x00000000   R7  0x00000000
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000001   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
-Flags: [--------]
+Flags: [------S-]
 Instructions executed: 3, last: STORE R8, [counter]
 0x000C <main.loop+8>
   tests/programs/debugger_watch.asm:10: CMP R8, #3
 Next instruction: CMP R8, #0x3
 > Watchpoint 1: 0x1000 changed from 0x00000001 to 0x00000002
 R0  0x00000000   BP  0x00100000   SP  0x00100000   PC  0x0000000C
-SR  0x00000004   R5  0x00000000   R6  0x00000000   R7  0x00000000
+SR  0x00000044   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000002   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
-Flags: [--C-----]
+Flags: [--C---S-]
 Instructions executed: 7, last: STORE R8, [counter]
 0x000C <main.loop+8>
   tests/programs/debugger_watch.asm:10: CMP R8, #3
@@ -28,9 +28,9 @@ Next instruction: CMP R8, #0x3
 > Deleted watchpoint 1
 > Program halted
 R0  0x00000000   BP  0x00100000   SP  0x00100000   PC  0x00000018
-SR  0x00000001   R5  0x00000000   R6  0x00000000   R7  0x00000000
+SR  0x00000041   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000003   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
-Flags: [Z-------]
+Flags: [Z-----S-]
 Instructions executed: 14, last: HALT
 > 

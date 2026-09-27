@@ -6,40 +6,40 @@ Next instruction: LOAD R8, #0x2
 >  1  0x0014 <double>  tests/programs/debugger.asm:13
 > Breakpoint 1 at 0x0014
 R0  0x00000000   BP  0x00100000   SP  0x000FFFFC   PC  0x00000014
-SR  0x00000000   R5  0x00000000   R6  0x00000000   R7  0x00000000
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000002   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
-Flags: [--------]
+Flags: [------S-]
 Instructions executed: 2, last: CALL double
 0x0014 <double>
   tests/programs/debugger.asm:13: ADD R8, R8
 Next instruction: ADD R8, R8
 > 0xFFFFC  0x00000008  <- SP   <main+8>
 > R0  0x00000000   BP  0x00100000   SP  0x00100000   PC  0x00000008
-SR  0x00000000   R5  0x00000000   R6  0x00000000   R7  0x00000000
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000004   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
-Flags: [--------]
+Flags: [------S-]
 Instructions executed: 4, last: RET
 0x0008 <main+8>
   tests/programs/debugger.asm:8: DEBUG
 Next instruction: DEBUG
 > DEBUG instruction at 0x0008
 R0  0x00000000   BP  0x00100000   SP  0x00100000   PC  0x0000000C
-SR  0x00000000   R5  0x00000000   R6  0x00000000   R7  0x00000000
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000004   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
-Flags: [--------]
+Flags: [------S-]
 Instructions executed: 5, last: DEBUG
 0x000C <main+12>
   tests/programs/debugger.asm:9: CALL double
 Next instruction: CALL double
 > Breakpoint 1 at 0x0014
 R0  0x00000000   BP  0x00100000   SP  0x000FFFFC   PC  0x00000014
-SR  0x00000000   R5  0x00000000   R6  0x00000000   R7  0x00000000
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000004   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
-Flags: [--------]
+Flags: [------S-]
 Instructions executed: 6, last: CALL double
 0x0014 <double>
   tests/programs/debugger.asm:13: ADD R8, R8
@@ -51,9 +51,9 @@ Next instruction: ADD R8, R8
 > Deleted breakpoint 1
 > Program halted
 R0  0x00000000   BP  0x00100000   SP  0x00100000   PC  0x00000014
-SR  0x00000000   R5  0x00000000   R6  0x00000000   R7  0x00000000
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000008   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
-Flags: [--------]
+Flags: [------S-]
 Instructions executed: 9, last: HALT
 > 

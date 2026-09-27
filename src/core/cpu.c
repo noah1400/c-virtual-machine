@@ -16,6 +16,7 @@ void cpu_reset(VM *vm) {
     vm->registers[R2_SP] = vm->control[CR_SHI];
     vm->registers[R1_BP] = vm->control[CR_SHI];
     vm->registers[R3_PC] = vm->entry_point;
+    vm->registers[R4_SR] = SYS_FLAG;
     vm->halted = 0;
 }
 
@@ -110,14 +111,26 @@ void cpu_push_all(VM *vm) {
     }
 }
 
-// Pops registers saved by cpu_push_all, discarding the saved SP
-void cpu_pop_all(VM *vm, int restore_pc) {
+// Pops registers saved by cpu_push_all, discarding the saved SP and PC
+void cpu_pop_all(VM *vm) {
     for (int i = 0; i < 16 && vm->last_error == VM_ERROR_NONE; i++) {
         uint32_t value = cpu_stack_pop(vm);
-        if (vm->last_error == VM_ERROR_NONE && i != R2_SP && (restore_pc || i != R3_PC)) {
+        if (vm->last_error == VM_ERROR_NONE && i != R2_SP && i != R3_PC) {
             vm->registers[i] = value;
         }
     }
+}
+
+// Restores every register an interrupt saved, SP included, which may take the CPU back to user mode
+void cpu_return_from_interrupt(VM *vm) {
+    uint32_t frame[16];
+    for (int i = 0; i < 16; i++) {
+        frame[i] = cpu_stack_pop(vm);
+        if (vm->last_error != VM_ERROR_NONE) {
+            return;
+        }
+    }
+    memcpy(vm->registers, frame, sizeof(frame));
 }
 
 // The vector table holds one 32-bit handler address per vector; 0 means there is no handler
@@ -126,10 +139,19 @@ static uint32_t vector_handler(VM *vm, uint8_t vector) {
     return table ? memory_read_dword(vm, table + vector * 4u) : 0;
 }
 
-// Saves the execution context and masks interrupts and single-stepping while the handler runs
+// Saves the execution context and runs the handler in supervisor mode with interrupts and
+// single-stepping off; an interrupt from user mode switches to the stack in KSP when it is set
 static void enter_handler(VM *vm, uint32_t handler) {
-    cpu_push_all(vm);
-    vm->registers[R4_SR] &= ~(uint32_t)(INT_FLAG | TRAP_FLAG);
+    uint32_t frame[16];
+
+    memcpy(frame, vm->registers, sizeof(frame));
+    vm->registers[R4_SR] = (frame[R4_SR] | SYS_FLAG) & ~(uint32_t)(INT_FLAG | TRAP_FLAG);
+    if (!(frame[R4_SR] & SYS_FLAG) && vm->control[CR_KSP]) {
+        vm->registers[R2_SP] = vm->control[CR_KSP];
+    }
+    for (int i = 15; i >= 0 && vm->last_error == VM_ERROR_NONE; i--) {
+        cpu_stack_push(vm, frame[i]);
+    }
     vm->registers[R3_PC] = handler;
     vm->entered_interrupt = 1;
 }

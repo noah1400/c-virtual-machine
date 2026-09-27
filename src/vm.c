@@ -98,9 +98,15 @@ int vm_step(VM *vm) {
     }
 
     int trap = cpu_get_flag(vm, TRAP_FLAG) && !vm->entered_interrupt;
+    uint32_t status = vm->registers[R4_SR];
     if (execute_next(vm) != VM_ERROR_NONE) {
         memcpy(vm->registers, saved, sizeof(saved));
         return cpu_exception(vm);
+    }
+
+    // User mode cannot change the mode, interrupt or trap flags, except by entering a handler
+    if (!(status & SYS_FLAG) && !vm->entered_interrupt) {
+        vm->registers[R4_SR] = (vm->registers[R4_SR] & ~SR_PROTECTED) | (status & SR_PROTECTED);
     }
 
     vm->instruction_count++;
@@ -250,8 +256,8 @@ const char *vm_get_error_string(int error_code) {
             return "I/O operation error";
         case VM_ERROR_PROTECTION_FAULT:
             return "Memory protection fault";
-        case VM_ERROR_NESTED_INTERRUPT:
-            return "Nested interrupt";
+        case VM_ERROR_PRIVILEGE:
+            return "Privilege violation";
         case VM_ERROR_INSTRUCTION_LIMIT:
             return "Instruction limit reached";
         default:

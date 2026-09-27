@@ -353,7 +353,7 @@ static int execute_stack(VM *vm, const Instruction *instr) {
             cpu_push_all(vm);
             break;
         case POPA_OP:
-            cpu_pop_all(vm, 0);
+            cpu_pop_all(vm);
             break;
         case ENTER_OP:
             cpu_enter_frame(vm, instr->immediate);
@@ -433,7 +433,7 @@ static int execute_system(VM *vm, const Instruction *instr) {
             cpu_enable_interrupts(vm);
             break;
         case IRET_OP:
-            cpu_pop_all(vm, 1);
+            cpu_return_from_interrupt(vm);
             break;
         case IN_OP: {
             uint32_t value = io_read(vm, read_operand(vm, instr, instr->reg2, 4));
@@ -521,6 +521,9 @@ int cpu_execute_instruction(VM *vm, const Instruction *instr) {
     if (instr->extended && !(info->modes & MODE_BIT(instr->mode) & MODES_WITH_IMMEDIATE)) {
         return vm_raise(vm, VM_ERROR_INVALID_INSTRUCTION, "%s has no immediate for an extension word",
                         info->mnemonic);
+    }
+    if (info->privileged && !cpu_get_flag(vm, SYS_FLAG)) {
+        return vm_raise(vm, VM_ERROR_PRIVILEGE, "%s is not allowed in user mode", info->mnemonic);
     }
 
     switch (instr->opcode) {

@@ -119,6 +119,7 @@
 #define DIR_FLAG    (uint8_t)0x20 // Direction flag
 #define SYS_FLAG    (uint8_t)0x40 // System mode flag
 #define TRAP_FLAG   (uint8_t)0x80 // Trap flag (debug)
+#define SR_PROTECTED (uint32_t)(SYS_FLAG | INT_FLAG | TRAP_FLAG) // only supervisor mode changes these
 
 // Control registers, read with MFCR and written with MTCR
 #define CR_IVTB     0   // Interrupt vector table base, 0 when there is no table
@@ -170,6 +171,7 @@ typedef struct {
     uint8_t opcode;
     uint8_t format;
     uint8_t modes;
+    uint8_t privileged;     // faults in user mode
 } InstructionInfo;
 
 const InstructionInfo *isa_by_opcode(uint8_t opcode);
