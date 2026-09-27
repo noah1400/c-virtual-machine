@@ -506,6 +506,13 @@ static void cmd_stack(const Debugger *dbg, int argc, char **argv) {
     }
 }
 
+static void cmd_control_registers(const Debugger *dbg) {
+    for (int i = 0; i < CR_COUNT; i++) {
+        printf("%-6s 0x%08X%s", isa_control_register_name((uint32_t)i), dbg->vm->control[i],
+               i % 4 == 3 || i == CR_COUNT - 1 ? "\n" : "   ");
+    }
+}
+
 static void cmd_help(void) {
     printf("Debugger commands (numbers are decimal or 0x-prefixed hex):\n");
     printf("  s, step [N]              Execute N instructions (default 1)\n");
@@ -521,6 +528,7 @@ static void cmd_help(void) {
     printf("  m, memory ADDR [N]       Dump N bytes of memory (default 16)\n");
     printf("  stack [N]                Show N words from the top of the stack (default 8)\n");
     printf("  r, registers             Show registers and flags\n");
+    printf("  cr                       Show control registers\n");
     printf("  h, help                  Show this help\n");
     printf("  q, quit                  Leave the debugger\n");
 }
@@ -581,6 +589,8 @@ int debugger_run(VM *vm) {
             cmd_stack(&dbg, argc, argv);
         } else if (is_command(cmd, "r", "registers")) {
             cpu_dump_registers(vm);
+        } else if (is_command(cmd, "cr", "cr")) {
+            cmd_control_registers(&dbg);
         } else if (is_command(cmd, "h", "help")) {
             cmd_help();
         } else {

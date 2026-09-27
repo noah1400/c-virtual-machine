@@ -377,10 +377,11 @@ static void execute_cpuid(VM *vm) {
             vm->registers[R7] = 0;
             break;
         case 1:
-            // Version 1.1.0; R5 features: I/O ports, memory protection, interrupts, syscalls;
-            // R6 features: debug support, timer device
-            vm->registers[R0_ACC] = 0x00010001;
-            vm->registers[R5] = 0x00000004 | 0x00000008 | 0x00000010 | 0x00000020;
+            // Version 2.0; R5 features: I/O ports, heap protection, interrupts, syscalls, exceptions,
+            // user mode, paging; R6 features: debug support, timer device
+            vm->registers[R0_ACC] = 0x00020000;
+            vm->registers[R5] = 0x00000004 | 0x00000008 | 0x00000010 | 0x00000020 | 0x00000040 | 0x00000080 |
+                                0x00000100;
             vm->registers[R6] = 0x00000001 | 0x00000002;
             vm->registers[R7] = 0;
             break;
@@ -400,9 +401,11 @@ static void execute_cpuid(VM *vm) {
             vm->registers[R7] = 0;
             break;
         case 4:
-            // Instruction count, state flags (bit 1: debug mode, bit 2: interrupts enabled), last error
+            // Instruction count, state flags (2: debug mode, 4: interrupts enabled, 8: supervisor mode,
+            // 16: paging), last error
             vm->registers[R0_ACC] = vm->instruction_count;
-            vm->registers[R5] = (vm->debug_mode ? 0x02 : 0) | (cpu_get_flag(vm, INT_FLAG) ? 0x04 : 0);
+            vm->registers[R5] = (vm->debug_mode ? 0x02 : 0) | (cpu_get_flag(vm, INT_FLAG) ? 0x04 : 0) |
+                                (cpu_get_flag(vm, SYS_FLAG) ? 0x08 : 0) | (vm->control[CR_PTB] ? 0x10 : 0);
             vm->registers[R6] = vm->last_error;
             vm->registers[R7] = 0;
             break;
