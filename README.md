@@ -904,6 +904,8 @@ Comment lines in a test adjust the checks:
 
 A file `NAME.x` next to a test holds [debugger](#debugger) commands, which the program then runs under with `-x`.
 
+`make test T="display disk"` or `sh tests/run.sh display disk` runs only the tests named. `sh tests/run.sh -u NAME` rewrites `NAME.out` from the actual output, provided the program exits with the expected status; a failing test shows the first lines of the difference with control characters made visible.
+
 Programs run inside a temporary directory, so any files they create are discarded. They also run with a limit of 10 million instructions, so a program stuck in a loop fails instead of hanging the suite. The `example_*` tests include the programs from `assembler/examples`.
 
 ## Source layout

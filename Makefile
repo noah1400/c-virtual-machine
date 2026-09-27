@@ -23,7 +23,7 @@ $(BUILD)/%.o: %.c
 	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) -c -o $@ $<
 
 test: vm vmasm
-	sh tests/run.sh
+	sh tests/run.sh $(T)
 
 clean:
 	rm -rf $(BUILD) vm vmasm
