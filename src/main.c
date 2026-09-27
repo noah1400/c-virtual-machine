@@ -23,6 +23,7 @@ typedef struct {
     uint32_t history;
     int text_display;
     const char *keys;
+    const char *coverage;
     const char *logpoints[MAX_LOGPOINTS];
     int logpoint_count;
     int arg_count;
@@ -40,6 +41,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "Usage: %s [options] program.bin [arguments...]\n", name);
     fprintf(out, "Options:\n");
     fprintf(out, "  -b FILE   Attach FILE as the disk image\n");
+    fprintf(out, "  -c FILE   Write how often each source line ran to FILE, - for stdout\n");
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
     fprintf(out, "  -k FILE   Take keyboard input from a key script that releases keys at instruction counts\n");
@@ -76,6 +78,12 @@ static int parse_options(int argc, char **argv, Options *opts) {
                 return -1;
             }
             opts->disk = argv[++i];
+        } else if (strcmp(arg, "-c") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "vm: -c needs a file for the coverage\n");
+                return -1;
+            }
+            opts->coverage = argv[++i];
         } else if (strcmp(arg, "-d") == 0) {
             opts->debug = 1;
         } else if (strcmp(arg, "-D") == 0) {
@@ -202,7 +210,7 @@ int main(int argc, char *argv[]) {
     }
 
     Monitor monitor = { .trace = opts.trace, .history_size = opts.history };
-    if (opts.profile && !opts.debug) {
+    if ((opts.profile || opts.coverage) && !opts.debug) {
         monitor.counts = calloc(vm.code_end / 4 + 1, sizeof(uint32_t));
     }
     if (opts.history && !opts.debug) {
@@ -242,8 +250,12 @@ int main(int argc, char *argv[]) {
         monitor_report_history(&vm, &monitor);
         report_fault(&vm);
     }
-    if (monitor.counts) {
+    if (monitor.counts && opts.profile) {
         monitor_report_profile(&vm, &monitor);
+    }
+    int coverage_failed = monitor.counts && opts.coverage && monitor_write_coverage(&vm, &monitor, opts.coverage) != 0;
+    if (coverage_failed) {
+        fprintf(stderr, "vm: cannot write the coverage to %s\n", opts.coverage);
     }
     monitor_free(&monitor);
     if (opts.verbose) {
@@ -252,6 +264,9 @@ int main(int argc, char *argv[]) {
     }
 
     int status = result == VM_ERROR_NONE || result == VM_ERROR_SIGNAL ? (int)(vm.exit_code & 0xFF) : 1;
+    if (coverage_failed) {
+        status = 1;
+    }
     vm_cleanup(&vm);
     return status;
 }

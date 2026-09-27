@@ -90,6 +90,7 @@ Everything after the program path is passed to the program, which reads it with 
 | Option | Effect |
 |---|---|
 | `-b FILE` | Attach FILE as the [disk](#disk) image |
+| `-c FILE` | Write how often each source line ran to FILE, or to stdout for `-` |
 | `-d` | Start the interactive [debugger](#debugger) |
 | `-D` | Disassemble the program instead of running it |
 | `-H COUNT` | When the program stops with an error, first show the last COUNT instructions and the registers they changed |
@@ -163,6 +164,22 @@ vm: profile of 29 instructions
           25   86.2%  0x0010 <main.loop>
            4   13.8%  0x0000 <main>
 ```
+
+A coverage listing shows every source line that produced code with the number of times it ran, and marks the lines that never ran with `#####`. Each file starts with a summary, and a total follows when there are several files:
+
+```console
+$ ./vm -c - count.bin
+count.asm: 6 of 7 lines ran
+        1:    6: LOAD R8, #3
+        3:    8: DEC R8
+        3:    9: JNZ count
+        1:   10: CMP R8, #0
+        1:   11: JZ done
+    #####:   12: LOAD R8, #1
+        1:   14: HALT
+```
+
+The exit status is 1 when the listing cannot be written.
 
 A logpoint prints registers and memory on stderr each time execution reaches its location, without stopping the program. It is written as `LOCATION:ITEM,ITEM...`, where the location is a label or an address and each item is one of these:
 

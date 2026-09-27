@@ -1,0 +1,8 @@
+tests/programs/coverage.asm: 6 of 7 lines ran
+        1:    6: LOAD R8, #3
+        3:    8: DEC R8
+        3:    9: JNZ count
+        1:   10: CMP R8, #0
+        1:   11: JZ done
+    #####:   12: LOAD R8, #1
+        1:   14: HALT

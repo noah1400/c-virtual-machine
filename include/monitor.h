@@ -45,6 +45,10 @@ void monitor_free(Monitor *monitor);
 void monitor_report_profile(const VM *vm, const Monitor *monitor);
 void monitor_report_history(const VM *vm, const Monitor *monitor);
 
+// Writes how often each source line of the code ran, "-" meaning stdout; returns 0, or -1 when
+// the file cannot be written
+int monitor_write_coverage(const VM *vm, const Monitor *monitor, const char *path);
+
 // Adds a logpoint written as LOCATION or LOCATION:ITEM,ITEM...; returns 0, or 1 after describing the
 // problem in error
 int monitor_add_logpoint(Monitor *monitor, const VM *vm, const char *spec, char *error, size_t size);

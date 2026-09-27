@@ -352,3 +352,92 @@ void monitor_report_profile(const VM *vm, const Monitor *monitor) {
     }
     free(entries);
 }
+
+typedef struct {
+    int file;               // index of the source file in the order files first appear
+    uint32_t line;
+    uint64_t count;
+    const SourceLine *source;
+} CoverageLine;
+
+static int compare_lines(const void *a, const void *b) {
+    const CoverageLine *x = a, *y = b;
+    if (x->file != y->file) {
+        return x->file < y->file ? -1 : 1;
+    }
+    return x->line < y->line ? -1 : x->line > y->line;
+}
+
+// Lists every source line that produced code with the number of times it ran, marking lines that
+// never ran with #####, under a summary line for each file
+int monitor_write_coverage(const VM *vm, const Monitor *monitor, const char *path) {
+    const DebugInfo *info = vm->debug_info;
+    uint32_t total = info ? info->source_line_count : 0, used = 0;
+    CoverageLine *lines = calloc(total ? total : 1, sizeof(CoverageLine));
+    const char **files = calloc(total ? total : 1, sizeof(char *));
+    int file_count = 0;
+
+    if (!lines || !files) {
+        free(lines);
+        free(files);
+        return -1;
+    }
+    for (uint32_t i = 0; i < total; i++) {
+        const SourceLine *source = &info->source_lines[i];
+        const char *name = source->source_file ? source->source_file : "?";
+        if (source->address >= vm->code_end) {
+            continue;
+        }
+        int file = 0;
+        while (file < file_count && strcmp(files[file], name) != 0) {
+            file++;
+        }
+        if (file == file_count) {
+            files[file_count++] = name;
+        }
+        lines[used++] = (CoverageLine){ file, source->line_num, monitor->counts[source->address / 4], source };
+    }
+    qsort(lines, used, sizeof(CoverageLine), compare_lines);
+
+    // Lines that several macro expansions share add up their counts
+    uint32_t merged = 0;
+    for (uint32_t i = 0; i < used; i++) {
+        if (merged > 0 && lines[merged - 1].file == lines[i].file && lines[merged - 1].line == lines[i].line) {
+            lines[merged - 1].count += lines[i].count;
+        } else {
+            lines[merged++] = lines[i];
+        }
+    }
+
+    FILE *out = strcmp(path, "-") == 0 ? stdout : fopen(path, "w");
+    if (!out) {
+        free(lines);
+        free(files);
+        return -1;
+    }
+    uint32_t all_ran = 0;
+    for (uint32_t first = 0, end; first < merged; first = end) {
+        uint32_t ran = 0;
+        for (end = first; end < merged && lines[end].file == lines[first].file; end++) {
+            ran += lines[end].count != 0;
+        }
+        all_ran += ran;
+        fprintf(out, "%s: %u of %u lines ran\n", files[lines[first].file], ran, end - first);
+        for (uint32_t i = first; i < end; i++) {
+            char count[24];
+            snprintf(count, sizeof(count), "%llu", (unsigned long long)lines[i].count);
+            fprintf(out, "%9s:%5u: %s\n", lines[i].count ? count : "#####", lines[i].line, lines[i].source->source);
+        }
+    }
+    if (file_count > 1) {
+        fprintf(out, "total: %u of %u lines ran\n", all_ran, merged);
+    }
+
+    int result = ferror(out) ? -1 : 0;
+    if (out != stdout && fclose(out) != 0) {
+        result = -1;
+    }
+    free(lines);
+    free(files);
+    return result;
+}
