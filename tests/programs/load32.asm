@@ -34,7 +34,17 @@ done:
     CALL print_int
     LOAD R8, #done - wide
     CALL print_int
+
+    ; A constant defined further down widens its instruction once its value is known
+forward:
+    LOAD R8, #LATER
+after:
+    CALL print_int
+    LOAD R8, #after - forward
+    CALL print_int
     HALT
+
+.equ LATER, 100000
 
 .include "lib.inc"
 

@@ -5,13 +5,6 @@
 #include "asm.h"
 #include "vm_types.h"
 
-// A .equ whose value depends on labels defined later in the source
-struct PendingConstant {
-    size_t line;
-    uint32_t address;
-    char scope[128];
-};
-
 typedef struct {
     uint8_t mode;
     uint8_t reg;
@@ -22,6 +15,10 @@ typedef struct {
 void asm_error(Assembler *as, const char *format, ...) {
     va_list args;
 
+    // Layout passes repeat work that the final pass checks again
+    if (as->pass == PASS_LAYOUT) {
+        return;
+    }
     if (as->line) {
         fprintf(stderr, "%s:%d: error: ", as->line->file, as->line->number);
     } else {
@@ -69,7 +66,6 @@ void asm_free(Assembler *as) {
     free(as->lines);
     free(as->files);
     free(as->results);
-    free(as->pending);
     symbols_free(&as->symbols);
 }
 
@@ -100,17 +96,28 @@ static int expect_end(Parser *p) {
     return 1;
 }
 
-// Evaluates an expression whose value is needed during pass 1 to lay out the program
+// Evaluates an expression that decides the layout, so it must be known in pass 1 and keep its value
 static int eval_now(Parser *p, int64_t *value, const char *what) {
+    Assembler *as = p->as;
+    LineResult *result = &as->results[as->line - as->lines];
+
     p->unresolved = 0;
     *value = parse_expression(p);
     if (p->failed) {
         return 0;
     }
     if (p->unresolved) {
-        asm_error(p->as, "%s must not depend on symbols defined later", what);
+        asm_error(as, "%s must not depend on symbols defined later", what);
         p->failed = 1;
         return 0;
+    }
+    if (as->pass == PASS_DEFINE) {
+        result->layout_value = *value;
+    } else if (*value != result->layout_value) {
+        asm_error(as, "%s changes when the labels it uses move", what);
+        *value = result->layout_value;
+        p->failed = as->pass == PASS_EMIT;
+        return !p->failed;
     }
     return 1;
 }
@@ -123,7 +130,7 @@ static void emit(Assembler *as, const uint8_t *bytes, uint32_t count) {
         sec->pc = sec->limit;
         return;
     }
-    if (as->pass == 2 && bytes) {
+    if (as->pass == PASS_EMIT && bytes) {
         memcpy(sec->bytes + (sec->pc - sec->base), bytes, count);
     }
     sec->pc += count;
@@ -137,7 +144,7 @@ static void emit_fill(Assembler *as, uint8_t value, uint32_t count) {
     uint32_t start = sec->pc;
 
     emit(as, NULL, count);
-    if (as->pass == 2 && sec->pc > start) {
+    if (as->pass == PASS_EMIT && sec->pc > start) {
         memset(sec->bytes + (start - sec->base), value, sec->pc - start);
     }
 }
@@ -165,7 +172,7 @@ static void define_label(Assembler *as, const char *text) {
     char name[256];
 
     if (isa_register_index(text) >= 0) {
-        if (as->pass == 1) {
+        if (as->pass == PASS_DEFINE) {
             asm_error(as, "register name %s cannot be used as a label", text);
         }
         return;
@@ -174,7 +181,7 @@ static void define_label(Assembler *as, const char *text) {
         snprintf(as->scope, sizeof(as->scope), "%s", text);
     }
     if (!qualify_name(as, text, name, sizeof(name))) {
-        if (as->pass == 1) {
+        if (as->pass == PASS_DEFINE) {
             asm_error(as, "label name too long: %s", text);
         }
         return;
@@ -183,9 +190,11 @@ static void define_label(Assembler *as, const char *text) {
     uint32_t address = current(as)->pc;
     AsmSymbol *sym = symbols_find(&as->symbols, name);
 
-    if (as->pass == 2) {
+    if (as->pass != PASS_DEFINE) {
         if (sym && sym->value != address) {
-            asm_error(as, "label '%s' moved between passes (internal error)", name);
+            asm_error(as, "label '%s' moved in the final pass (internal error)", name);
+            sym->value = address;
+            as->changed = 1;
         }
         return;
     }
@@ -222,7 +231,7 @@ static void directive_values(Assembler *as, Parser *p, int width) {
         if (p->failed) {
             return;
         }
-        if (as->pass == 2 && !fits(value, width)) {
+        if (as->pass == PASS_EMIT && !fits(value, width)) {
             asm_error(as, "value %lld does not fit in %d byte%s", (long long)value, width, width > 1 ? "s" : "");
         }
 
@@ -259,14 +268,17 @@ static void directive_space(Assembler *as, Parser *p) {
     if (!eval_now(p, &size, "the .space size")) {
         return;
     }
-    if (accept(p, ',') && !eval_now(p, &fill, "the .space fill value")) {
-        return;
+    if (accept(p, ',')) {
+        fill = parse_expression(p);
+        if (p->failed) {
+            return;
+        }
     }
     if (size < 0 || size > current(as)->limit - current(as)->pc) {
         asm_error(as, ".space size %lld does not fit the %s section", (long long)size, current(as)->name);
         return;
     }
-    if (!fits(fill, 1)) {
+    if (as->pass == PASS_EMIT && !fits(fill, 1)) {
         asm_error(as, ".space fill value must be a byte");
         return;
     }
@@ -320,11 +332,20 @@ static void directive_equ(Assembler *as, Parser *p) {
 
     p->unresolved = 0;
     int64_t value = parse_expression(p);
-    if (p->failed || !expect_end(p) || as->pass == 2) {
+    if (p->failed || !expect_end(p)) {
         return;
     }
 
     AsmSymbol *sym = symbols_find(&as->symbols, name);
+    if (as->pass != PASS_DEFINE) {
+        // Constants that use later labels or constants settle during the layout passes
+        if (sym && sym->line == as->line && !p->unresolved && (!sym->defined || sym->value != value)) {
+            sym->value = value;
+            sym->defined = 1;
+            as->changed = 1;
+        }
+        return;
+    }
     if (sym) {
         report_redefinition(as, name, sym);
         return;
@@ -338,23 +359,10 @@ static void directive_equ(Assembler *as, Parser *p) {
     sym->line = as->line;
     sym->value = value;
     sym->defined = !p->unresolved;
-
-    if (p->unresolved) {
-        struct PendingConstant *pending = realloc(as->pending, (as->pending_count + 1) * sizeof(*pending));
-        if (!pending) {
-            asm_error(as, "out of memory");
-            return;
-        }
-        as->pending = pending;
-        pending[as->pending_count].line = (size_t)(as->line - as->lines);
-        pending[as->pending_count].address = as->statement_address;
-        snprintf(pending[as->pending_count].scope, sizeof(pending->scope), "%s", as->scope);
-        as->pending_count++;
-    }
 }
 
 static void directive_entry(Assembler *as, Parser *p) {
-    if (as->pass == 1 && as->entry_line) {
+    if (as->pass == PASS_DEFINE && as->entry_line) {
         asm_error(as, "the entry point is already set at %s:%d", as->entry_line->file, as->entry_line->number);
         return;
     }
@@ -362,7 +370,7 @@ static void directive_entry(Assembler *as, Parser *p) {
 
     p->unresolved = 0;
     int64_t entry = parse_expression(p);
-    if (!p->failed && expect_end(p) && as->pass == 2) {
+    if (!p->failed && expect_end(p) && as->pass == PASS_EMIT) {
         as->entry = entry;
     }
 }
@@ -402,7 +410,7 @@ static void directive(Assembler *as, Parser *p) {
             return;
         }
         p->pos++;
-        if (expect_end(p) && as->pass == 1) {
+        if (expect_end(p) && as->pass == PASS_DEFINE) {
             asm_error(as, "%s", message->text);
         }
     } else if (name_equals(name, ".include")) {
@@ -482,7 +490,7 @@ static const char *mode_description(uint8_t mode) {
 }
 
 static int check_range(Assembler *as, const Operand *op, int64_t min, int64_t max, const char *what) {
-    if (as->pass == 2 && (op->value < min || op->value > max)) {
+    if (as->pass == PASS_EMIT && (op->value < min || op->value > max)) {
         asm_error(as, "%s %lld is out of range (%lld to %lld)", what, (long long)op->value, (long long)min,
                   (long long)max);
         return 0;
@@ -532,9 +540,8 @@ static int set_immediate(Assembler *as, const InstructionInfo *info, const Opera
     if (!check_range(as, op, min, max, what)) {
         return 0;
     }
-    if (as->pass == 2 && !extended && !fits_short(info, op)) {
-        asm_error(as, "%s %lld needs an extension word but depends on a symbol defined later; define it earlier",
-                  what, (long long)op->value);
+    if (as->pass == PASS_EMIT && !extended && !fits_short(info, op)) {
+        asm_error(as, "%s %lld no longer fits after layout (internal error)", what, (long long)op->value);
         return 0;
     }
     return 1;
@@ -726,9 +733,12 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
 
     result->is_code = 1;
 
+    // Forward references start in the short form and widen once their value is known
     const Operand *immediate = immediate_operand(info, ops, count);
-    if (as->pass == 1 && immediate && !immediate->unresolved && !fits_short(info, immediate)) {
+    if (as->pass != PASS_EMIT && immediate && !immediate->unresolved && !result->extended &&
+        !fits_short(info, immediate)) {
         result->extended = 1;
+        as->changed = 1;
     }
 
     Instruction in;
@@ -755,7 +765,10 @@ static int conditional(Assembler *as, Parser *p, LineResult *result) {
             asm_error(as, "conditionals are nested too deeply");
             return 1;
         }
-        if (parent_active && as->pass == 1) {
+        if (parent_active && as->pass != PASS_DEFINE && is_if) {
+            int64_t value;
+            eval_now(p, &value, "a .if condition");
+        } else if (parent_active && as->pass == PASS_DEFINE) {
             int64_t value = 0;
             if (is_if) {
                 if (!eval_now(p, &value, "a .if condition")) {
@@ -848,6 +861,7 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
 
 static void run_pass(Assembler *as, int pass) {
     as->pass = pass;
+    as->changed = 0;
     for (int i = 0; i < SECTION_COUNT; i++) {
         as->sections[i].pc = as->sections[i].base;
         as->sections[i].end = as->sections[i].base;
@@ -876,7 +890,7 @@ static void run_pass(Assembler *as, int pass) {
     }
     as->line = NULL;
 
-    if (as->condition_depth > 0 && pass == 1) {
+    if (as->condition_depth > 0 && pass == PASS_DEFINE) {
         asm_error(as, "missing .endif");
     }
 }
@@ -898,7 +912,7 @@ static void define_command_line_constants(Assembler *as) {
                 continue;
             }
             Parser p = { as, &tokens, 0, 0, 0 };
-            as->pass = 1;
+            as->pass = PASS_DEFINE;
             value = parse_expression(&p);
             if (!p.failed && (p.unresolved || tokens.items[p.pos].kind != TOK_END)) {
                 asm_error(as, "invalid value for -D %s", name);
@@ -921,50 +935,25 @@ static void define_command_line_constants(Assembler *as) {
     }
 }
 
-// Constants that referred to later labels are evaluated once every label is known
-static void resolve_pending(Assembler *as) {
-    int progress = 1;
+// Repeats layout passes until no label moves; each pass can only widen instructions, so this ends
+static void settle_layout(Assembler *as) {
+    enum { MAX_LAYOUT_PASSES = 1000 };
 
-    while (progress) {
-        progress = 0;
-        for (size_t i = 0; i < as->pending_count; i++) {
-            const SourceLine *line = &as->lines[as->pending[i].line];
-            TokenList tokens;
-            char error[128];
-
-            if (!lex_line(line->text, &tokens, error, sizeof(error))) {
-                continue;
-            }
-            int pos = 0;
-            while (tokens.items[pos].kind == TOK_IDENT && token_is_punct(&tokens.items[pos + 1], ':')) {
-                pos += 2;
-            }
-            AsmSymbol *sym = symbols_find(&as->symbols, tokens.items[pos + 1].text);
-            if (sym && !sym->defined) {
-                Parser p = { as, &tokens, pos + 3, 0, 0 };
-                snprintf(as->scope, sizeof(as->scope), "%s", as->pending[i].scope);
-                as->line = line;
-                as->statement_address = as->pending[i].address;
-                int64_t value = parse_expression(&p);
-                if (!p.unresolved && !p.failed) {
-                    sym = symbols_find(&as->symbols, tokens.items[pos + 1].text);
-                    sym->value = value;
-                    sym->defined = 1;
-                    progress = 1;
-                }
-            }
-            tokens_free(&tokens);
+    for (int pass = 0; pass < MAX_LAYOUT_PASSES; pass++) {
+        run_pass(as, PASS_LAYOUT);
+        if (!as->changed) {
+            break;
         }
     }
-
-    for (size_t i = 0; i < as->pending_count; i++) {
-        const SourceLine *line = &as->lines[as->pending[i].line];
-        for (size_t s = 0; s < as->symbols.count; s++) {
-            AsmSymbol *sym = &as->symbols.items[s];
-            if (sym->line == line && !sym->defined) {
-                as->line = line;
-                asm_error(as, "cannot resolve the value of '%s'", sym->name);
-            }
+    as->pass = PASS_DEFINE;
+    if (as->changed) {
+        asm_error(as, "the program layout does not settle");
+    }
+    for (size_t i = 0; i < as->symbols.count; i++) {
+        const AsmSymbol *sym = &as->symbols.items[i];
+        if (!sym->defined && sym->kind == SYM_CONST) {
+            as->line = sym->line;
+            asm_error(as, "cannot resolve the value of '%s'", sym->name);
         }
     }
     as->line = NULL;
@@ -988,14 +977,13 @@ int asm_assemble(Assembler *as, const char *path) {
         }
     }
 
-    run_pass(as, 1);
+    run_pass(as, PASS_DEFINE);
     if (as->errors == 0) {
-        as->pass = 1;
-        resolve_pending(as);
+        settle_layout(as);
     }
     if (as->errors == 0) {
         as->entry = as->sections[SECTION_TEXT].base;
-        run_pass(as, 2);
+        run_pass(as, PASS_EMIT);
     }
 
     const Section *text = &as->sections[SECTION_TEXT];

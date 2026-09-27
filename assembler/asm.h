@@ -76,6 +76,9 @@ typedef struct {
 
 enum { SECTION_TEXT, SECTION_DATA, SECTION_COUNT };
 
+// Pass 1 defines symbols, layout passes repeat until no label moves, the last pass emits bytes
+enum { PASS_DEFINE = 1, PASS_LAYOUT, PASS_EMIT };
+
 typedef struct {
     const char *name;
     uint32_t base;
@@ -85,7 +88,7 @@ typedef struct {
     uint8_t *bytes;
 } Section;
 
-// What each source line produced, recorded in pass 1 and filled in by pass 2
+// What each source line produced; the final pass fills in the addresses
 typedef struct {
     int section;        // -1 when the line emitted nothing
     uint32_t address;
@@ -93,6 +96,7 @@ typedef struct {
     int is_code;
     int extended;       // the instruction carries an extension word
     int condition;      // result of a conditional directive, decided in pass 1
+    int64_t layout_value;   // size, alignment or address argument of a directive, fixed in pass 1
 } LineResult;
 
 // State of one open .if block
@@ -128,8 +132,7 @@ typedef struct {
     Condition conditions[ASM_MAX_CONDITIONS];
     int condition_depth;
 
-    struct PendingConstant *pending;
-    size_t pending_count;
+    int changed;        // a layout pass moved a label, changed a constant or widened an instruction
     int64_t entry;
     const SourceLine *entry_line;   // the .entry directive, if any
 
@@ -155,7 +158,7 @@ typedef struct {
     Assembler *as;
     TokenList *tokens;
     int pos;
-    int unresolved;     // an undefined symbol was referenced during pass 1
+    int unresolved;     // an undefined symbol was referenced before the final pass
     int failed;
 } Parser;
 

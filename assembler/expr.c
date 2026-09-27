@@ -56,7 +56,7 @@ static int64_t parse_primary(Parser *p) {
         if (sym && sym->defined) {
             return sym->value;
         }
-        if (p->as->pass == 1) {
+        if (p->as->pass != PASS_EMIT) {
             p->unresolved = 1;
             return 0;
         }
