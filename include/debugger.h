@@ -3,7 +3,8 @@
 
 #include "vm_types.h"
 
-// Runs the interactive debugger on stdin until the user quits; returns the VM's last error
-int debugger_run(VM *vm);
+// Runs the debugger on commands from the given stream until the user quits or the commands run out;
+// commands that do not come from stdin are echoed. Returns the VM's last error.
+int debugger_run(VM *vm, FILE *commands);
 
 #endif // _DEBUGGER_H_

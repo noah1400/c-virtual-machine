@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 typedef struct {
     const char *program;
     const char *disk;
+    const char *commands;
     int arg_count;
     char **args;
     uint32_t memory_size;
@@ -37,6 +39,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -p        Print an execution profile by label on stderr\n");
     fprintf(out, "  -t        Trace every executed instruction on stderr\n");
     fprintf(out, "  -v        Report loading and execution statistics on stderr\n");
+    fprintf(out, "  -x FILE   Start the debugger and run its commands from FILE\n");
     fprintf(out, "  -h        Show this help\n");
 }
 
@@ -70,6 +73,13 @@ static int parse_options(int argc, char **argv, Options *opts) {
             opts->profile = 1;
         } else if (strcmp(arg, "-v") == 0) {
             opts->verbose = 1;
+        } else if (strcmp(arg, "-x") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "vm: -x needs a command file\n");
+                return -1;
+            }
+            opts->commands = argv[++i];
+            opts->debug = 1;
         } else if (strcmp(arg, "-h") == 0) {
             print_usage(stdout, argv[0]);
             return 0;
@@ -265,7 +275,19 @@ int main(int argc, char *argv[]) {
     if (!opts.debug) {
         vm_catch_signals();
     }
-    int result = opts.debug ? debugger_run(&vm) : run(&vm, opts.trace, counts);
+    int result;
+    if (opts.commands) {
+        FILE *commands = fopen(opts.commands, "r");
+        if (!commands) {
+            fprintf(stderr, "vm: cannot open %s: %s\n", opts.commands, strerror(errno));
+            vm_cleanup(&vm);
+            return 1;
+        }
+        result = debugger_run(&vm, commands);
+        fclose(commands);
+    } else {
+        result = opts.debug ? debugger_run(&vm, stdin) : run(&vm, opts.trace, counts);
+    }
     fflush(stdout);
     // Devices give the terminal back before anything is reported
     io_cleanup(&vm);

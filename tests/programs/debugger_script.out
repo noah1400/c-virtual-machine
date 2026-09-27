@@ -1,0 +1,30 @@
+Debugger ready. Type 'h' for help.
+0x0000 <main>
+  tests/programs/debugger_script.asm:5: LOAD R0, line
+Next instruction: LOAD R0, #0x1000  ; line
+> # Stop once the program has read its line and look at the buffer
+> b read_done
+Breakpoint 1 at 0x000C <read_done>
+> c
+Breakpoint 1 at 0x000C
+R0  0x00000005   BP  0x00100000   SP  0x00100000   PC  0x0000000C
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [------S-]
+Instructions executed: 3, last: SYSCALL #4
+0x000C <read_done>
+  tests/programs/debugger_script.asm:9: LOAD R0, line
+Next instruction: LOAD R0, #0x1000  ; line
+> m line 8
+0x1000: 68 65 6C 6C 6F 00 00 00                          | hello...
+> c
+hello
+Program halted
+R0  0x0000000A   BP  0x00100000   SP  0x00100000   PC  0x00000020
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [------S-]
+Instructions executed: 8, last: HALT
+> 

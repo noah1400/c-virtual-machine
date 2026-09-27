@@ -1,7 +1,8 @@
 #!/bin/sh
 # Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble.
 # Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:",
-# "; asm-args:", "; vm-args:" and "; program-args:" lines; "; disk-sectors:" attaches an empty disk image.
+# "; asm-args:", "; vm-args:" and "; program-args:" lines; "; disk-sectors:" attaches an empty disk image
+# and NAME.x holds debugger commands.
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 vm="$root/vm"
@@ -38,6 +39,10 @@ for src in "$root"/tests/programs/*.asm; do
     # instruction limit turns a runaway program into a failure instead of a hang
     args=$(expectation "$src" vm-args)
     program_args=$(expectation "$src" program-args)
+    if [ -f "$base.x" ]; then
+        cp "$base.x" "$tmp/$name.x"
+        args="$args -x $name.x"
+    fi
     sectors=$(expectation "$src" disk-sectors)
     if [ -n "$sectors" ]; then
         dd if=/dev/zero of="$tmp/$name.img" bs=512 count="$sectors" 2> /dev/null

@@ -97,6 +97,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-p` | Print an execution profile on stderr when the program stops |
 | `-t` | Print each instruction on stderr before it executes |
 | `-v` | Print loading and execution statistics on stderr |
+| `-x FILE` | Start the debugger and run its commands from FILE |
 | `-h` | Show help |
 
 The exit status is:
@@ -805,6 +806,13 @@ These codes appear in R5 after syscalls and in `CPUID` function 4. Codes 1 to 14
 
 Any command that runs the program stops when an exception is delivered to a handler, and names the exception. The program's input and output share the terminal with the debugger.
 
+`vm -x FILE program.bin` takes the commands from FILE instead, which leaves stdin to the program. Each command is echoed after its prompt, lines starting with `#` are skipped, and the debugger quits at the end of the file:
+
+```console
+$ printf 'b read_done\nc\nm line 8\n' > commands.txt
+$ ./vm -x commands.txt program.bin < input.txt
+```
+
 ## Binary format
 
 A VM32 file contains, in order:
@@ -858,6 +866,8 @@ Comment lines in a test adjust the checks:
 | `; vm-args: ...` | Extra options for the VM |
 | `; program-args: ...` | Arguments passed to the program |
 | `; disk-sectors: N` | Attach an empty disk image of N sectors |
+
+A file `NAME.x` next to a test holds [debugger](#debugger) commands, which the program then runs under with `-x`.
 
 Programs run inside a temporary directory, so any files they create are discarded. They also run with a limit of 10 million instructions, so a program stuck in a loop fails instead of hanging the suite. The `example_*` tests include the programs from `assembler/examples`.
 

@@ -533,8 +533,9 @@ static void cmd_help(void) {
     printf("  q, quit                  Leave the debugger\n");
 }
 
-int debugger_run(VM *vm) {
+int debugger_run(VM *vm, FILE *commands) {
     Debugger dbg = { .vm = vm };
+    int echo = commands != stdin;
     char line[256];
 
     printf("Debugger ready. Type 'h' for help.\n");
@@ -543,8 +544,14 @@ int debugger_run(VM *vm) {
     for (;;) {
         printf("> ");
         fflush(stdout);
-        if (!fgets(line, sizeof(line), stdin)) {
+        if (!fgets(line, sizeof(line), commands)) {
+            if (echo) {
+                printf("\n");
+            }
             break;
+        }
+        if (echo) {
+            printf("%s%s", line, strchr(line, '\n') ? "" : "\n");
         }
 
         char *argv[MAX_WORDS];
@@ -552,7 +559,7 @@ int debugger_run(VM *vm) {
         for (char *word = strtok(line, " \t\r\n"); word && argc < MAX_WORDS; word = strtok(NULL, " \t\r\n")) {
             argv[argc++] = word;
         }
-        if (argc == 0) {
+        if (argc == 0 || argv[0][0] == '#') {
             continue;
         }
 
