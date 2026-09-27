@@ -1,8 +1,7 @@
 ; disk.asm - A small file system for MiniDOS on the disk device
 ;
-; Sector 0 holds the signature and sectors 1 and 2 a directory of 32 entries of 32 bytes: a name of
-; up to 23 characters and a NUL, then the size in bytes. File n owns the 8 sectors from sector
-; 3 + 8 * n on, so it holds up to 4096 bytes.
+; Sector 0 holds the signature and sectors 1 and 2 a directory of 32 entries. File n owns the 8
+; sectors from sector 3 + 8 * n on, so it holds up to 4096 bytes.
 
 .equ DISK_SECTOR,     0x70
 .equ DISK_BUFFER,     0x71
@@ -14,12 +13,17 @@
 
 .equ FS_SIGNATURE,    0x5346444D        ; "MDFS"
 .equ FS_ENTRIES,      32
-.equ FS_ENTRY_SIZE,   32
-.equ FS_NAME_SIZE,    24                ; the size follows the name
 .equ FS_FILE_SECTORS, 8
 .equ FS_DATA_START,   3
 .equ FS_SECTORS,      FS_DATA_START + FS_ENTRIES * FS_FILE_SECTORS
 .equ FS_FILE_MAX,     FS_FILE_SECTORS * 512
+
+; A name of up to 23 characters and a NUL, then the size of the file in bytes
+.struct Entry
+name:   .space 24
+size:   .dword 0
+        .space 4
+.ends
 
 ; ----- Commands -----
 
@@ -55,14 +59,14 @@ dir_entry:
     JZ dir_next
     INC R9
     MOVE R0, R8
-    LOAD R7, #FS_NAME_SIZE
+    LOAD R7, #Entry.size
     CALL print_padded
-    LOAD R0, [R8+FS_NAME_SIZE]
+    LOAD R0, [R8+Entry.size]
     SYSCALL #1
     LOAD R0, bytes_suffix
     SYSCALL #2
 dir_next:
-    ADD R8, #FS_ENTRY_SIZE
+    ADD R8, #Entry
     DEC R10
     JNZ dir_entry
     MOVE R0, R9
@@ -86,7 +90,7 @@ do_type_cmd:
     JNZ parse_cmd_done
     LOAD R0, #1
     LOAD R5, file_buffer
-    LOAD R6, [R8+FS_NAME_SIZE]
+    LOAD R6, [R8+Entry.size]
     SYSCALL #13
     JMP parse_cmd_done
 
@@ -130,7 +134,7 @@ write_existing:
     CALL read_file
     CMP R0, #0
     JNZ parse_cmd_done
-    LOAD R13, [R8+FS_NAME_SIZE]
+    LOAD R13, [R8+Entry.size]
 
     ; The text and a newline go after the R13 bytes the file keeps
 write_add:
@@ -155,7 +159,7 @@ write_measured:
     ADD R7, R9
     LOAD R5, #10
     STOREB R5, [R7]
-    STORE R10, [R8+FS_NAME_SIZE]
+    STORE R10, [R8+Entry.size]
     CALL write_file
     CMP R0, #0
     JNZ parse_cmd_done
@@ -207,7 +211,7 @@ parse_name:
     MOVE R9, R6
     SUB R9, R8
     JZ parse_name_missing
-    CMP R9, #FS_NAME_SIZE
+    CMP R9, #Entry.size
     JAE parse_name_long
     LOADB R10, [R6]
     LOAD R11, #0
@@ -272,14 +276,14 @@ read_file:
 write_file:
     LOAD R0, #DISK_WRITE
 file_transfer:
-    LOAD R6, [R8+FS_NAME_SIZE]
+    LOAD R6, [R8+Entry.size]
     ADD R6, #511
     SHR R6, #9
     ; The entry offset divided by the entry size, times the sectors per file
     MOVE R5, R8
     SUB R5, #directory + 512
-    SHR R5, #5
-    SHL R5, #3
+    DIV R5, #Entry
+    MUL R5, #FS_FILE_SECTORS
     ADD R5, #FS_DATA_START
     LOAD R7, file_buffer
 
@@ -312,7 +316,7 @@ find_file_loop:
     CMP R0, #0
     JZ find_file_found
 find_file_next:
-    ADD R7, #FS_ENTRY_SIZE
+    ADD R7, #Entry
     DEC R9
     JNZ find_file_loop
     LOAD R0, #0
@@ -329,7 +333,7 @@ free_entry_loop:
     LOADB R7, [R0]
     CMP R7, #0
     JZ free_entry_done
-    ADD R0, #FS_ENTRY_SIZE
+    ADD R0, #Entry
     DEC R9
     JNZ free_entry_loop
     LOAD R0, #0
