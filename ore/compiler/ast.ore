@@ -1,0 +1,449 @@
+// What the compiler knows about a program: tokens, syntax trees, types and symbols, and the memory,
+// lists and tables they live in
+import "std/io";
+import "std/str";
+import "std/sys";
+import "wide";
+
+pub enum TokenKind {
+    EOF, IDENT, INT, STRING,
+
+    AS, BREAK, CASE, CONST, CONTINUE, DEFAULT, ELSE, ENUM, EXTERN, FALSE, FN, FOR, IF, IMPORT, INTERRUPT,
+    NULL, PUB, RETURN, STRUCT, SWITCH, TRUE, VAR, WHILE,
+
+    LPAREN, RPAREN, LBRACE, RBRACE, LBRACKET, RBRACKET, COMMA, SEMI, COLON, DOT, PLUS, MINUS, STAR,
+    SLASH, PERCENT, AMP, PIPE, CARET, TILDE, BANG, SHL, SHR, ANDAND, OROR, EQ, NE, LT, LE, GT, GE,
+    ASSIGN, ADD_ASSIGN, SUB_ASSIGN, MUL_ASSIGN, DIV_ASSIGN, MOD_ASSIGN, AND_ASSIGN, OR_ASSIGN,
+    XOR_ASSIGN, SHL_ASSIGN, SHR_ASSIGN,
+}
+
+pub struct Token {
+    kind: TokenKind;
+    line: int;
+    text: []u8;             // the token in the source
+    value: wide.Wide;       // integer and character literals
+    bytes: []u8;            // string literals, decoded
+}
+
+pub enum TypeKind {
+    VOID, BOOL, INT, POINTER, ARRAY, SLICE, FN, STRUCT, ENUM,
+    NULL,                   // null before it meets a pointer or function type
+    UNTYPED,                // an integer constant before it meets a type
+}
+
+pub struct Field {
+    name: []u8;
+    type: *Type;
+    offset: int;
+    line: int;
+}
+
+pub struct Type {
+    kind: TypeKind;
+    size: int;
+    align: int;
+    is_signed: bool;
+    base: *Type;            // pointed to, element, or the result of a function
+    length: int;            // of an array
+    params: []*Type;
+    is_interrupt: bool;
+    name: []u8;             // integer, struct and enum types
+    decl: *Decl;
+    fields: []Field;
+    state: int;             // of a struct layout: 0 not started, 1 in progress, 2 done
+}
+
+pub enum SymbolKind { LOCAL, GLOBAL, FN, CONST, TYPE, MODULE, BUILTIN }
+
+pub enum Builtin { NONE, PRINT, PANIC, ASSERT, FREE, SYSCALL }
+
+pub struct Symbol {
+    kind: SymbolKind;
+    name: []u8;
+    type: *Type;
+    decl: *Decl;
+    module: *Module;        // where it is declared, or the module a MODULE symbol stands for
+    line: int;
+    value: wide.Wide;       // constants
+    string: *Expr;          // string constants
+    builtin: Builtin;
+    offset: int;            // frame offset of a local, set by the code generator
+    label: []u8;            // string constants: the label of their bytes, once emitted
+}
+
+pub enum TypeExprKind { NAME, POINTER, ARRAY, SLICE, FN }
+
+pub struct TypeExpr {
+    kind: TypeExprKind;
+    line: int;
+    qualifier: []u8;        // the module in geometry.Point
+    name: []u8;
+    base: *TypeExpr;        // element type, or the result of a function
+    length: *Expr;          // of an array
+    params: []*TypeExpr;
+}
+
+pub enum ExprKind {
+    CONVERT,                // an implicit conversion the checker inserts
+    LEN,                    // the length of a slice
+    PTR,                    // the pointer of a slice
+    INT, BOOL, NULL, STRING, NAME, UNARY, BINARY, CALL, INDEX, SLICE, FIELD, CAST, STRUCT, ARRAY, SIZEOF,
+    NEW,
+}
+
+pub struct Expr {
+    kind: ExprKind;
+    line: int;
+    op: TokenKind;
+    value: wide.Wide;       // literals
+    bytes: []u8;            // string literals
+    name: []u8;             // names and fields
+    left: *Expr;
+    right: *Expr;
+    third: *Expr;
+    args: []*Expr;          // call arguments and literal elements
+    fields: [][]u8;         // field names of a struct literal, one per argument
+    type_expr: *TypeExpr;   // casts, literals, sizeof and new
+
+    type: *Type;            // set by the checker
+    named: *Type;           // the type written in casts, literals and new
+    is_const: bool;         // value holds an integer, boolean or enum known when compiling
+    symbol: *Symbol;        // what a name stands for
+    field: *Field;
+    builtin: Builtin;
+}
+
+pub struct Case {
+    values: []*Expr;
+    body: *Stmt;
+    line: int;
+}
+
+pub enum StmtKind { BLOCK, VAR, CONST, ASSIGN, EXPR, IF, WHILE, FOR, SWITCH, BREAK, CONTINUE, RETURN }
+
+pub struct Stmt {
+    kind: StmtKind;
+    line: int;
+    end_line: int;          // closing brace of a block
+    body: []*Stmt;
+    name: []u8;             // variables and constants
+    type_expr: *TypeExpr;
+    value: *Expr;           // initializer, assigned or returned value, expression statement
+    target: *Expr;          // assigned place
+    op: TokenKind;          // ASSIGN or a compound assignment
+    cond: *Expr;
+    then: *Stmt;            // if; the body of while and for
+    otherwise: *Stmt;
+    init: *Stmt;            // for
+    step: *Stmt;
+    cases: []*Case;
+    fallback: *Stmt;        // default block of a switch
+    symbol: *Symbol;        // declared variable or constant
+}
+
+pub struct Param {
+    name: []u8;
+    type_expr: *TypeExpr;
+    line: int;
+    symbol: *Symbol;
+}
+
+pub struct Member {
+    name: []u8;
+    value: *Expr;
+    line: int;
+    number: wide.Wide;
+}
+
+pub enum DeclKind { IMPORT, CONST, VAR, FN, STRUCT, ENUM }
+
+pub struct Decl {
+    kind: DeclKind;
+    line: int;
+    is_pub: bool;
+    is_extern: bool;
+    is_interrupt: bool;
+    name: []u8;
+    module: *Module;
+    type_expr: *TypeExpr;   // declared type of a constant or variable, result of a function
+    value: *Expr;           // initializer
+    params: []*Param;       // function parameters and struct fields
+    body: *Stmt;
+    members: []*Member;     // enum
+    path: []u8;             // import
+    imported: *Module;
+    symbol: *Symbol;
+    state: int;             // of a constant: 0 unchecked, 1 being checked, 2 checked
+}
+
+pub struct Module {
+    path: []u8;
+    name: []u8;
+    source: []u8;           // ends with a 0 byte, where the lexer stops
+    lines: [][]u8;          // each source line without its line end, for .loc
+    tokens: []Token;
+    decls: []*Decl;
+    symbols: Map;           // what the module declares, by name
+}
+
+pub struct Program {
+    modules: List;          // the main module first
+    include_dirs: [][]u8;
+    library: []u8;
+    assembly: Texts;        // files of assembly for extern functions
+    main: *Symbol;
+}
+
+// Memory for everything the compiler keeps, handed out in pieces of large blocks and never freed, since
+// the heap of the VM takes longer for each block it holds
+var block: []u8;
+var used: int;
+
+pub fn allocate(size: int) *u8 {
+    var rounded = (size + 3) & ~3;
+    if (rounded == 0) {
+        rounded = 4;
+    }
+    if (used + rounded > block.len) {
+        var capacity = 1048576;
+        if (rounded > capacity) {
+            capacity = rounded;
+        }
+        block = new(u8, capacity);
+        used = 0;
+    }
+    var p = &block[used];
+    used += rounded;
+    return p;
+}
+
+pub fn copy(to: *u8, from: *u8, size: int) {
+    if (size > 0) {
+        syscall(22, to, from, size);
+    }
+}
+
+pub fn clone(text: []u8) []u8 {
+    var p = allocate(text.len);
+    copy(p, text.ptr, text.len);
+    return p[:text.len];
+}
+
+pub fn same(a: []u8, b: []u8) bool {
+    if (a.len != b.len) {
+        return false;
+    }
+    for (var i = 0; i < a.len; i += 1) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The parts joined into one text
+pub fn cat(parts: [][]u8) []u8 {
+    var size = 0;
+    for (var i = 0; i < parts.len; i += 1) {
+        size += parts[i].len;
+    }
+    var p = allocate(size);
+    var at = 0;
+    for (var i = 0; i < parts.len; i += 1) {
+        copy(&p[at], parts[i].ptr, parts[i].len);
+        at += parts[i].len;
+    }
+    return p[:size];
+}
+
+pub fn number(value: int) []u8 {
+    var digits: [11]u8;
+    return clone(str.format_int(value, digits));
+}
+
+// Stops the compiler with an error at a line of a module, or about the program as a whole
+pub fn fail(m: *Module, line: int, message: []u8) {
+    var text = str.builder(message.len + 64);
+    if (m != null) {
+        str.append(&text, m.path);
+        str.append(&text, ":");
+        str.append_int(&text, line);
+        str.append(&text, ": error: ");
+    } else {
+        str.append(&text, "vmc: error: ");
+    }
+    str.append(&text, message);
+    str.append(&text, "\n");
+    io.write(io.STDERR, str.text(&text));
+    sys.exit(1);
+}
+
+// A list of pointers that grows as items are added
+pub struct List {
+    items: []*u8;
+    count: int;
+}
+
+pub fn add(list: *List, item: *u8) {
+    if (list.count == list.items.len) {
+        var capacity = list.items.len * 2;
+        if (capacity == 0) {
+            capacity = 8;
+        }
+        var larger = (allocate(capacity * 4) as **u8)[:capacity];
+        for (var i = 0; i < list.count; i += 1) {
+            larger[i] = list.items[i];
+        }
+        list.items = larger;
+    }
+    list.items[list.count] = item;
+    list.count += 1;
+}
+
+// A list of texts that grows as they are added
+pub struct Texts {
+    items: [][]u8;
+    count: int;
+}
+
+pub fn add_text(list: *Texts, text: []u8) {
+    if (list.count == list.items.len) {
+        var capacity = list.items.len * 2;
+        if (capacity == 0) {
+            capacity = 8;
+        }
+        var larger = (allocate(capacity * 8) as *[]u8)[:capacity];
+        for (var i = 0; i < list.count; i += 1) {
+            larger[i] = list.items[i];
+        }
+        list.items = larger;
+    }
+    list.items[list.count] = text;
+    list.count += 1;
+}
+
+pub fn texts(list: Texts) [][]u8 {
+    var none: [][]u8;
+    if (list.count == 0) {
+        return none;
+    }
+    return list.items[:list.count];
+}
+
+// The items of lists as the pointers they are
+pub fn exprs(list: List) []*Expr {
+    var none: []*Expr;
+    if (list.count == 0) {
+        return none;
+    }
+    return (list.items.ptr as **Expr)[:list.count];
+}
+
+pub fn stmts(list: List) []*Stmt {
+    var none: []*Stmt;
+    if (list.count == 0) {
+        return none;
+    }
+    return (list.items.ptr as **Stmt)[:list.count];
+}
+
+pub fn cases(list: List) []*Case {
+    var none: []*Case;
+    if (list.count == 0) {
+        return none;
+    }
+    return (list.items.ptr as **Case)[:list.count];
+}
+
+pub fn params(list: List) []*Param {
+    var none: []*Param;
+    if (list.count == 0) {
+        return none;
+    }
+    return (list.items.ptr as **Param)[:list.count];
+}
+
+pub fn members(list: List) []*Member {
+    var none: []*Member;
+    if (list.count == 0) {
+        return none;
+    }
+    return (list.items.ptr as **Member)[:list.count];
+}
+
+pub fn type_exprs(list: List) []*TypeExpr {
+    var none: []*TypeExpr;
+    if (list.count == 0) {
+        return none;
+    }
+    return (list.items.ptr as **TypeExpr)[:list.count];
+}
+
+pub fn decls(list: List) []*Decl {
+    var none: []*Decl;
+    if (list.count == 0) {
+        return none;
+    }
+    return (list.items.ptr as **Decl)[:list.count];
+}
+
+pub fn module_at(program: *Program, i: int) *Module {
+    return program.modules.items[i] as *Module;
+}
+
+// Texts to pointers, in a hash table that is at most half full. Empty slots have no value.
+pub struct Map {
+    keys: [][]u8;
+    values: []*u8;
+    count: int;
+}
+
+fn hash(key: []u8) int {
+    var h: u32 = 2166136261;
+    for (var i = 0; i < key.len; i += 1) {
+        h = (h ^ key[i]) * 16777619;
+    }
+    return h as int;
+}
+
+pub fn get(map: *Map, key: []u8) *u8 {
+    if (map.count == 0) {
+        return null;
+    }
+    var mask = map.keys.len - 1;
+    for (var i = hash(key) & mask; map.values[i] != null; i = (i + 1) & mask) {
+        if (same(map.keys[i], key)) {
+            return map.values[i];
+        }
+    }
+    return null;
+}
+
+pub fn put(map: *Map, key: []u8, value: *u8) {
+    if ((map.count + 1) * 2 > map.keys.len) {
+        var old = *map;
+        var capacity = old.keys.len * 2;
+        if (capacity == 0) {
+            capacity = 16;
+        }
+        map.keys = (allocate(capacity * 8) as *[]u8)[:capacity];
+        map.values = (allocate(capacity * 4) as **u8)[:capacity];
+        map.count = 0;
+        for (var i = 0; i < old.keys.len; i += 1) {
+            if (old.values[i] != null) {
+                put(map, old.keys[i], old.values[i]);
+            }
+        }
+    }
+    var mask = map.keys.len - 1;
+    var i = hash(key) & mask;
+    for (; map.values[i] != null; i = (i + 1) & mask) {
+        if (same(map.keys[i], key)) {
+            map.values[i] = value;
+            return;
+        }
+    }
+    map.keys[i] = key;
+    map.values[i] = value;
+    map.count += 1;
+}

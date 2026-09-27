@@ -1,0 +1,458 @@
+// Turns the source of a module into tokens
+import "std/str";
+import "ast";
+import "wide";
+
+var keywords = [23][]u8 {
+    "as", "break", "case", "const", "continue", "default", "else", "enum", "extern", "false", "fn", "for", "if",
+    "import", "interrupt", "null", "pub", "return", "struct", "switch", "true", "var", "while",
+};
+
+// Where the keywords starting with each letter begin, and the next letter's keywords start
+var keyword_starts = [27]int {
+    0, 1, 2, 5, 6, 9, 12, 12, 12, 15, 15, 15, 15, 15, 16, 16, 17, 17, 18, 20, 21, 21, 22, 23, 23, 23, 23,
+};
+
+// Indexed by the kind minus LPAREN
+var punctuation = [41][]u8 {
+    "(", ")", "{", "}", "[", "]", ",", ";", ":", ".", "+", "-", "*", "/", "%", "&", "|", "^", "~", "!", "<<",
+    ">>", "&&", "||", "==", "!=", "<", "<=", ">", ">=", "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+    "<<=", ">>=",
+};
+
+pub fn token_text(kind: ast.TokenKind) []u8 {
+    switch (kind) {
+        case ast.TokenKind.EOF {
+            return "the end of the file";
+        }
+        case ast.TokenKind.IDENT {
+            return "a name";
+        }
+        case ast.TokenKind.INT {
+            return "a number";
+        }
+        case ast.TokenKind.STRING {
+            return "a string";
+        }
+    }
+    var i = kind as int - ast.TokenKind.AS as int;
+    if (i < keywords.len) {
+        return keywords[i];
+    }
+    return ast.cat([][]u8 { "'", punctuation[kind as int - ast.TokenKind.LPAREN as int], "'" });
+}
+
+struct Lexer {
+    m: *ast.Module;
+    source: []u8;
+    p: int;
+    line: int;
+    tokens: []ast.Token;
+    count: int;
+    buffer: str.Builder;    // the bytes of a string literal
+}
+
+fn add(lx: *Lexer, t: *ast.Token) {
+    if (lx.count == lx.tokens.len) {
+        var capacity = lx.tokens.len * 2;
+        if (capacity == 0) {
+            capacity = 1024;
+        }
+        var larger = (ast.allocate(capacity * sizeof(ast.Token)) as *ast.Token)[:capacity];
+        if (lx.count > 0) {
+            ast.copy(larger.ptr as *u8, lx.tokens.ptr as *u8, lx.count * sizeof(ast.Token));
+        }
+        lx.tokens = larger;
+    }
+    lx.tokens[lx.count] = *t;
+    lx.count += 1;
+}
+
+fn fail(lx: *Lexer, message: []u8) {
+    ast.fail(lx.m, lx.line, message);
+}
+
+fn is_digit(c: u8) bool {
+    return c >= '0' && c <= '9';
+}
+
+fn is_alpha(c: u8) bool {
+    return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z';
+}
+
+fn is_alnum(c: u8) bool {
+    return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9';
+}
+
+fn digit_value(c: u8) int {
+    if (c >= '0' && c <= '9') {
+        return (c - '0') as int;
+    }
+    if (c >= 'a' && c <= 'f') {
+        return (c - 'a') as int + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return (c - 'A') as int + 10;
+    }
+    return 99;
+}
+
+fn escape(lx: *Lexer) int {
+    var src = lx.source;
+    var c = src[lx.p];
+    lx.p += 1;
+    switch (c) {
+        case 'n' {
+            return '\n';
+        }
+        case 't' {
+            return '\t';
+        }
+        case 'r' {
+            return '\r';
+        }
+        case '0' {
+            return 0;
+        }
+        case '\\', '\'', '"' {
+            return c as int;
+        }
+        case 0 {
+            fail(lx, "unterminated escape sequence");
+        }
+        case 'x' {
+            if (digit_value(src[lx.p]) < 16 && digit_value(src[lx.p + 1]) < 16) {
+                lx.p += 2;
+                return digit_value(src[lx.p - 2]) * 16 + digit_value(src[lx.p - 1]);
+            }
+            fail(lx, "\\x needs two hexadecimal digits");
+        }
+        default {
+            var text = [1]u8 { c };
+            fail(lx, ast.cat([][]u8 { "unknown escape sequence \\", text }));
+        }
+    }
+    return 0;
+}
+
+fn number(lx: *Lexer, t: *ast.Token) {
+    var src = lx.source;
+    var start = lx.p;
+    var base = 10;
+    var digits = 0;
+    var value = wide.Wide {};
+
+    if (src[start] == '0' && (src[start + 1] == 'x' || src[start + 1] == 'X')) {
+        base = 16;
+        lx.p += 2;
+    } else if (src[start] == '0' && (src[start + 1] == 'b' || src[start + 1] == 'B')) {
+        base = 2;
+        lx.p += 2;
+    }
+    for (;; lx.p += 1) {
+        var d = digit_value(src[lx.p]);
+        if (src[lx.p] == '_' && digits > 0) {
+            continue;
+        }
+        if (d >= base) {
+            break;
+        }
+        if (!wide.append_digit(&value, base, d)) {
+            fail(lx, "number too large");
+        }
+        digits += 1;
+    }
+    var c = src[lx.p];
+    if (c == '.' && is_digit(src[lx.p + 1]) || base == 10 && (c == 'e' || c == 'E')) {
+        fail(lx, "floating-point numbers are not supported yet");
+    }
+    if (digits == 0 || src[lx.p - 1] == '_' || is_alnum(c) || c == '_') {
+        var end = lx.p;
+        while (is_alnum(src[end]) || src[end] == '_') {
+            end += 1;
+        }
+        fail(lx, ast.cat([][]u8 { "invalid number ", src[start:end] }));
+    }
+    if (base == 10 && src[start] == '0' && digits > 1) {
+        fail(lx, "decimal numbers other than 0 do not start with 0");
+    }
+    if (value.hi < 0) {
+        fail(lx, "number too large");
+    }
+    t.kind = ast.TokenKind.INT;
+    t.value = value;
+}
+
+fn character(lx: *Lexer, t: *ast.Token) {
+    var src = lx.source;
+    lx.p += 1;
+    var c = src[lx.p];
+    if (c == '\'' || c == '\n' || c == 0) {
+        fail(lx, "a character literal holds one character");
+    }
+    var value = c as int;
+    lx.p += 1;
+    if (c == '\\') {
+        value = escape(lx);
+    }
+    if (src[lx.p] != '\'') {
+        fail(lx, "a character literal holds one character");
+    }
+    lx.p += 1;
+    t.kind = ast.TokenKind.INT;
+    t.value = wide.of(value);
+}
+
+fn string(lx: *Lexer, t: *ast.Token) {
+    var src = lx.source;
+    str.clear(&lx.buffer);
+    lx.p += 1;
+    while (src[lx.p] != '"') {
+        var c = src[lx.p];
+        if (c == '\n' || c == 0) {
+            fail(lx, "unterminated string");
+        }
+        lx.p += 1;
+        if (c == '\\') {
+            c = escape(lx) as u8;
+        }
+        str.append_byte(&lx.buffer, c);
+    }
+    lx.p += 1;
+    t.bytes = ast.clone(str.text(&lx.buffer));
+    t.kind = ast.TokenKind.STRING;
+}
+
+// The longest punctuation at the position, so that <<= wins over << and <
+fn punct(lx: *Lexer, t: *ast.Token) bool {
+    var src = lx.source;
+    var c = src[lx.p];
+    var next = src[lx.p + 1];
+    var kind = ast.TokenKind.EOF;
+    switch (c) {
+        case '(' {
+            kind = ast.TokenKind.LPAREN;
+        }
+        case ')' {
+            kind = ast.TokenKind.RPAREN;
+        }
+        case '{' {
+            kind = ast.TokenKind.LBRACE;
+        }
+        case '}' {
+            kind = ast.TokenKind.RBRACE;
+        }
+        case '[' {
+            kind = ast.TokenKind.LBRACKET;
+        }
+        case ']' {
+            kind = ast.TokenKind.RBRACKET;
+        }
+        case ',' {
+            kind = ast.TokenKind.COMMA;
+        }
+        case ';' {
+            kind = ast.TokenKind.SEMI;
+        }
+        case ':' {
+            kind = ast.TokenKind.COLON;
+        }
+        case '.' {
+            kind = ast.TokenKind.DOT;
+        }
+        case '~' {
+            kind = ast.TokenKind.TILDE;
+        }
+        case '+' {
+            kind = pick(next, '=', ast.TokenKind.ADD_ASSIGN, ast.TokenKind.PLUS);
+        }
+        case '-' {
+            kind = pick(next, '=', ast.TokenKind.SUB_ASSIGN, ast.TokenKind.MINUS);
+        }
+        case '*' {
+            kind = pick(next, '=', ast.TokenKind.MUL_ASSIGN, ast.TokenKind.STAR);
+        }
+        case '/' {
+            kind = pick(next, '=', ast.TokenKind.DIV_ASSIGN, ast.TokenKind.SLASH);
+        }
+        case '%' {
+            kind = pick(next, '=', ast.TokenKind.MOD_ASSIGN, ast.TokenKind.PERCENT);
+        }
+        case '^' {
+            kind = pick(next, '=', ast.TokenKind.XOR_ASSIGN, ast.TokenKind.CARET);
+        }
+        case '!' {
+            kind = pick(next, '=', ast.TokenKind.NE, ast.TokenKind.BANG);
+        }
+        case '=' {
+            kind = pick(next, '=', ast.TokenKind.EQ, ast.TokenKind.ASSIGN);
+        }
+        case '&' {
+            kind = pick(next, '=', ast.TokenKind.AND_ASSIGN, pick(next, '&', ast.TokenKind.ANDAND, ast.TokenKind.AMP));
+        }
+        case '|' {
+            kind = pick(next, '=', ast.TokenKind.OR_ASSIGN, pick(next, '|', ast.TokenKind.OROR, ast.TokenKind.PIPE));
+        }
+        case '<' {
+            kind = pick(next, '=', ast.TokenKind.LE, pick(next, '<', ast.TokenKind.SHL, ast.TokenKind.LT));
+            if (kind == ast.TokenKind.SHL && src[lx.p + 2] == '=') {
+                kind = ast.TokenKind.SHL_ASSIGN;
+            }
+        }
+        case '>' {
+            kind = pick(next, '=', ast.TokenKind.GE, pick(next, '>', ast.TokenKind.SHR, ast.TokenKind.GT));
+            if (kind == ast.TokenKind.SHR && src[lx.p + 2] == '=') {
+                kind = ast.TokenKind.SHR_ASSIGN;
+            }
+        }
+        default {
+            return false;
+        }
+    }
+    t.kind = kind;
+    lx.p += punctuation[kind as int - ast.TokenKind.LPAREN as int].len;
+    return true;
+}
+
+fn pick(c: u8, wanted: u8, yes: ast.TokenKind, no: ast.TokenKind) ast.TokenKind {
+    if (c == wanted) {
+        return yes;
+    }
+    return no;
+}
+
+fn skip_space(lx: *Lexer) {
+    var src = lx.source;
+    var p = lx.p;
+    for (;;) {
+        var c = src[p];
+        if (c == '\n') {
+            lx.line += 1;
+            p += 1;
+        } else if (c == ' ' || c == '\t' || c == '\r' || c == 11 || c == 12) {
+            p += 1;
+        } else if (c == '/' && src[p + 1] == '/') {
+            while (src[p] != 0 && src[p] != '\n') {
+                p += 1;
+            }
+        } else if (c == '/' && src[p + 1] == '*') {
+            var start = lx.line;
+            for (p += 2; !(src[p] == '*' && src[p + 1] == '/'); p += 1) {
+                if (src[p] == 0) {
+                    ast.fail(lx.m, start, "unterminated comment");
+                }
+                if (src[p] == '\n') {
+                    lx.line += 1;
+                }
+            }
+            p += 2;
+        } else {
+            lx.p = p;
+            return;
+        }
+    }
+}
+
+// The lines of the source without their ends, for .loc; a line end at the end of the file starts no line
+fn split_lines(m: *ast.Module) {
+    var src = m.source;
+    var lines = ast.Texts {};
+    var p = 0;
+    var c = src[0];
+    while (c != 0) {
+        var start = p;
+        while (c != '\r' && c != '\n' && c != 0) {
+            p += 1;
+            c = src[p];
+        }
+        ast.add_text(&lines, src[start:p]);
+        while (c != '\n' && c != 0) {
+            p += 1;
+            c = src[p];
+        }
+        if (c == '\n') {
+            p += 1;
+            c = src[p];
+        }
+    }
+    if (p != src.len - 1) {
+        ast.fail(null, 0, ast.cat([][]u8 { m.path, " contains a NUL byte" }));
+    }
+    m.lines = ast.texts(lines);
+}
+
+// Letters, digits and _
+var name_chars: [256]bool;
+
+pub fn lex(m: *ast.Module) {
+    var lx = Lexer { m: m, source: m.source, line: 1, buffer: str.builder(64) };
+    var src = m.source;
+
+    split_lines(m);
+    if (!name_chars['_']) {
+        for (var i = 0; i < 256; i += 1) {
+            name_chars[i] = is_alnum(i as u8);
+        }
+        name_chars['_'] = true;
+    }
+    for (;;) {
+        skip_space(&lx);
+        var t = ast.Token { line: lx.line };
+        var start = lx.p;
+        var c = src[start];
+        if (c == 0) {
+            t.kind = ast.TokenKind.EOF;
+            t.text = src[start:start];
+            add(&lx, &t);
+            break;
+        }
+        if (is_alpha(c) || c == '_') {
+            var p = start;
+            while (name_chars[src[p]]) {
+                p += 1;
+            }
+            lx.p = p;
+            t.kind = ast.TokenKind.IDENT;
+            if (c >= 'a' && c <= 'z') {
+                var word = src[start:p];
+                var letter = (c - 'a') as int;
+                for (var i = keyword_starts[letter]; i < keyword_starts[letter + 1]; i += 1) {
+                    if (ast.same(keywords[i], word)) {
+                        t.kind = (ast.TokenKind.AS as int + i) as ast.TokenKind;
+                    }
+                }
+            }
+        } else if (is_digit(c)) {
+            number(&lx, &t);
+        } else if (c == '\'') {
+            character(&lx, &t);
+        } else if (c == '"') {
+            string(&lx, &t);
+        } else if (!punct(&lx, &t)) {
+            if (c >= 32 && c < 127) {
+                var text = [1]u8 { c };
+                fail(&lx, ast.cat([][]u8 { "unexpected character '", text, "'" }));
+            }
+            var digits: [8]u8;
+            var hex = str.format_hex(c as u32, digits);
+            if (hex.len == 1) {
+                hex = ast.cat([][]u8 { "0", hex });
+            }
+            fail(&lx, ast.cat([][]u8 { "unexpected byte 0x", upper(hex) }));
+        }
+        t.text = src[start:lx.p];
+        add(&lx, &t);
+    }
+    m.tokens = lx.tokens[:lx.count];
+    str.release(&lx.buffer);
+}
+
+fn upper(text: []u8) []u8 {
+    var result = ast.clone(text);
+    for (var i = 0; i < result.len; i += 1) {
+        if (result[i] >= 'a' && result[i] <= 'f') {
+            result[i] = result[i] - 'a' + 'A';
+        }
+    }
+    return result;
+}

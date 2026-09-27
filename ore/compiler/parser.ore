@@ -1,0 +1,706 @@
+// Builds the syntax tree of a module from its tokens
+import "ast";
+import "lexer";
+import "wide";
+
+struct Parser {
+    m: *ast.Module;
+    tokens: []ast.Token;
+    pos: int;
+    no_literal: bool;       // a name followed by { is not a struct literal, as in a case
+}
+
+fn peek(p: *Parser) *ast.Token {
+    return &p.tokens[p.pos];
+}
+
+fn peek_next(p: *Parser) *ast.Token {
+    if (p.pos + 1 < p.tokens.len) {
+        return &p.tokens[p.pos + 1];
+    }
+    return &p.tokens[p.pos];
+}
+
+fn check(p: *Parser, kind: ast.TokenKind) bool {
+    return p.tokens[p.pos].kind == kind;
+}
+
+fn accept(p: *Parser, kind: ast.TokenKind) bool {
+    if (p.tokens[p.pos].kind == kind) {
+        p.pos += 1;
+        return true;
+    }
+    return false;
+}
+
+fn found(t: *ast.Token) []u8 {
+    if (t.kind == ast.TokenKind.IDENT) {
+        var text = t.text;
+        if (text.len > 32) {
+            text = text[:32];
+        }
+        return ast.cat([][]u8 { "'", text, "'" });
+    }
+    return lexer.token_text(t.kind);
+}
+
+fn fail(p: *Parser, line: int, message: []u8) {
+    ast.fail(p.m, line, message);
+}
+
+fn expected(p: *Parser, what: []u8) {
+    fail(p, peek(p).line, ast.cat([][]u8 { "expected ", what, ", found ", found(peek(p)) }));
+}
+
+fn expect(p: *Parser, kind: ast.TokenKind, where: []u8) *ast.Token {
+    if (!check(p, kind)) {
+        if (where.len > 0) {
+            expected(p, ast.cat([][]u8 { lexer.token_text(kind), " ", where }));
+        }
+        expected(p, lexer.token_text(kind));
+    }
+    var t = &p.tokens[p.pos];
+    p.pos += 1;
+    return t;
+}
+
+fn name(p: *Parser, what: []u8) []u8 {
+    if (!check(p, ast.TokenKind.IDENT)) {
+        expected(p, what);
+    }
+    var t = &p.tokens[p.pos];
+    p.pos += 1;
+    return t.text;
+}
+
+fn is_named(t: *ast.Token, text: []u8) bool {
+    return t.kind == ast.TokenKind.IDENT && ast.same(t.text, text);
+}
+
+fn new_type(p: *Parser, kind: ast.TypeExprKind) *ast.TypeExpr {
+    var t = ast.allocate(sizeof(ast.TypeExpr)) as *ast.TypeExpr;
+    t.kind = kind;
+    t.line = peek(p).line;
+    return t;
+}
+
+fn starts_type(p: *Parser) bool {
+    var k = peek(p).kind;
+    return k == ast.TokenKind.IDENT || k == ast.TokenKind.STAR || k == ast.TokenKind.LBRACKET ||
+        k == ast.TokenKind.FN;
+}
+
+fn parse_type(p: *Parser) *ast.TypeExpr {
+    var t = new_type(p, ast.TypeExprKind.NAME);
+    if (accept(p, ast.TokenKind.STAR)) {
+        t.kind = ast.TypeExprKind.POINTER;
+        t.base = parse_type(p);
+    } else if (accept(p, ast.TokenKind.LBRACKET)) {
+        if (accept(p, ast.TokenKind.RBRACKET)) {
+            t.kind = ast.TypeExprKind.SLICE;
+        } else {
+            t.kind = ast.TypeExprKind.ARRAY;
+            t.length = parse_expr(p);
+            expect(p, ast.TokenKind.RBRACKET, "after the length of the array");
+        }
+        t.base = parse_type(p);
+    } else if (accept(p, ast.TokenKind.FN)) {
+        t.kind = ast.TypeExprKind.FN;
+        expect(p, ast.TokenKind.LPAREN, "after fn");
+        var params = ast.List {};
+        while (!check(p, ast.TokenKind.RPAREN)) {
+            ast.add(&params, parse_type(p) as *u8);
+            if (!accept(p, ast.TokenKind.COMMA)) {
+                break;
+            }
+        }
+        t.params = ast.type_exprs(params);
+        expect(p, ast.TokenKind.RPAREN, "after the parameter types");
+        if (starts_type(p)) {
+            t.base = parse_type(p);
+        }
+    } else {
+        t.name = name(p, "a type");
+        if (accept(p, ast.TokenKind.DOT)) {
+            t.qualifier = t.name;
+            t.name = name(p, "a type");
+        }
+    }
+    return t;
+}
+
+fn new_expr(kind: ast.ExprKind, line: int) *ast.Expr {
+    var e = ast.allocate(sizeof(ast.Expr)) as *ast.Expr;
+    e.kind = kind;
+    e.line = line;
+    return e;
+}
+
+// Inside brackets a name followed by { is a struct literal again
+fn parse_nested(p: *Parser) *ast.Expr {
+    var saved = p.no_literal;
+    p.no_literal = false;
+    var e = parse_expr(p);
+    p.no_literal = saved;
+    return e;
+}
+
+fn parse_elements(p: *Parser, e: *ast.Expr) *ast.Expr {
+    var args = ast.List {};
+    expect(p, ast.TokenKind.LBRACE, "before the elements");
+    while (!check(p, ast.TokenKind.RBRACE)) {
+        ast.add(&args, parse_nested(p) as *u8);
+        if (!accept(p, ast.TokenKind.COMMA)) {
+            break;
+        }
+    }
+    e.args = ast.exprs(args);
+    expect(p, ast.TokenKind.RBRACE, "after the elements");
+    return e;
+}
+
+fn parse_struct_literal(p: *Parser, type_name: *ast.Expr) *ast.Expr {
+    var e = new_expr(ast.ExprKind.STRUCT, type_name.line);
+    var t = ast.allocate(sizeof(ast.TypeExpr)) as *ast.TypeExpr;
+    t.kind = ast.TypeExprKind.NAME;
+    t.line = type_name.line;
+    if (type_name.kind == ast.ExprKind.FIELD) {
+        t.qualifier = type_name.left.name;
+    }
+    t.name = type_name.name;
+    e.type_expr = t;
+
+    var args = ast.List {};
+    var fields = ast.Texts {};
+    expect(p, ast.TokenKind.LBRACE, "");
+    while (!check(p, ast.TokenKind.RBRACE)) {
+        var field = name(p, "a field name");
+        expect(p, ast.TokenKind.COLON, "after the field name");
+        ast.add_text(&fields, field);
+        ast.add(&args, parse_nested(p) as *u8);
+        if (!accept(p, ast.TokenKind.COMMA)) {
+            break;
+        }
+    }
+    e.args = ast.exprs(args);
+    e.fields = ast.texts(fields);
+    expect(p, ast.TokenKind.RBRACE, "after the fields");
+    return e;
+}
+
+fn parse_primary(p: *Parser) *ast.Expr {
+    var t = peek(p);
+    var e: *ast.Expr;
+
+    switch (t.kind) {
+        case ast.TokenKind.INT {
+            e = new_expr(ast.ExprKind.INT, t.line);
+            e.value = t.value;
+            p.pos += 1;
+            return e;
+        }
+        case ast.TokenKind.STRING {
+            e = new_expr(ast.ExprKind.STRING, t.line);
+            e.bytes = t.bytes;
+            p.pos += 1;
+            return e;
+        }
+        case ast.TokenKind.TRUE, ast.TokenKind.FALSE {
+            e = new_expr(ast.ExprKind.BOOL, t.line);
+            e.value = wide.of_bool(t.kind == ast.TokenKind.TRUE);
+            p.pos += 1;
+            return e;
+        }
+        case ast.TokenKind.NULL {
+            p.pos += 1;
+            return new_expr(ast.ExprKind.NULL, t.line);
+        }
+        case ast.TokenKind.LPAREN {
+            p.pos += 1;
+            e = parse_nested(p);
+            expect(p, ast.TokenKind.RPAREN, "");
+            return e;
+        }
+        case ast.TokenKind.LBRACKET {
+            e = new_expr(ast.ExprKind.ARRAY, t.line);
+            e.type_expr = parse_type(p);
+            return parse_elements(p, e);
+        }
+        case ast.TokenKind.IDENT {
+            if ((is_named(t, "sizeof") || is_named(t, "new")) && peek_next(p).kind == ast.TokenKind.LPAREN) {
+                if (is_named(t, "new")) {
+                    e = new_expr(ast.ExprKind.NEW, t.line);
+                } else {
+                    e = new_expr(ast.ExprKind.SIZEOF, t.line);
+                }
+                p.pos += 2;
+                e.type_expr = parse_type(p);
+                if (e.kind == ast.ExprKind.NEW && accept(p, ast.TokenKind.COMMA)) {
+                    e.left = parse_nested(p);
+                }
+                expect(p, ast.TokenKind.RPAREN, "");
+                return e;
+            }
+            e = new_expr(ast.ExprKind.NAME, t.line);
+            e.name = name(p, "a name");
+            return e;
+        }
+    }
+    expected(p, "an expression");
+    return null;
+}
+
+fn parse_postfix(p: *Parser) *ast.Expr {
+    var e = parse_primary(p);
+    for (;;) {
+        var line = peek(p).line;
+        if (accept(p, ast.TokenKind.LPAREN)) {
+            var call = new_expr(ast.ExprKind.CALL, line);
+            var args = ast.List {};
+            call.left = e;
+            while (!check(p, ast.TokenKind.RPAREN)) {
+                ast.add(&args, parse_nested(p) as *u8);
+                if (!accept(p, ast.TokenKind.COMMA)) {
+                    break;
+                }
+            }
+            call.args = ast.exprs(args);
+            expect(p, ast.TokenKind.RPAREN, "after the arguments");
+            e = call;
+        } else if (accept(p, ast.TokenKind.LBRACKET)) {
+            var index = new_expr(ast.ExprKind.INDEX, line);
+            index.left = e;
+            if (!check(p, ast.TokenKind.COLON)) {
+                index.right = parse_nested(p);
+            }
+            if (accept(p, ast.TokenKind.COLON)) {
+                index.kind = ast.ExprKind.SLICE;
+                if (!check(p, ast.TokenKind.RBRACKET)) {
+                    index.third = parse_nested(p);
+                }
+            }
+            expect(p, ast.TokenKind.RBRACKET, "");
+            e = index;
+        } else if (accept(p, ast.TokenKind.DOT)) {
+            var field = new_expr(ast.ExprKind.FIELD, line);
+            field.left = e;
+            field.name = name(p, "a field name");
+            e = field;
+        } else if (check(p, ast.TokenKind.LBRACE) && !p.no_literal &&
+                   (e.kind == ast.ExprKind.NAME || e.kind == ast.ExprKind.FIELD && e.left.kind == ast.ExprKind.NAME)) {
+            e = parse_struct_literal(p, e);
+        } else {
+            return e;
+        }
+    }
+}
+
+fn parse_unary(p: *Parser) *ast.Expr {
+    var t = peek(p);
+    var k = t.kind;
+    if (k == ast.TokenKind.MINUS || k == ast.TokenKind.BANG || k == ast.TokenKind.TILDE || k == ast.TokenKind.STAR ||
+        k == ast.TokenKind.AMP) {
+        var e = new_expr(ast.ExprKind.UNARY, t.line);
+        e.op = k;
+        p.pos += 1;
+        e.left = parse_unary(p);
+        return e;
+    }
+    return parse_postfix(p);
+}
+
+fn parse_cast(p: *Parser) *ast.Expr {
+    var e = parse_unary(p);
+    while (check(p, ast.TokenKind.AS)) {
+        var cast = new_expr(ast.ExprKind.CAST, peek(p).line);
+        p.pos += 1;
+        cast.left = e;
+        cast.type_expr = parse_type(p);
+        e = cast;
+    }
+    return e;
+}
+
+fn precedence(kind: ast.TokenKind) int {
+    switch (kind) {
+        case ast.TokenKind.OROR {
+            return 1;
+        }
+        case ast.TokenKind.ANDAND {
+            return 2;
+        }
+        case ast.TokenKind.EQ, ast.TokenKind.NE, ast.TokenKind.LT, ast.TokenKind.LE, ast.TokenKind.GT,
+             ast.TokenKind.GE {
+            return 3;
+        }
+        case ast.TokenKind.PIPE {
+            return 4;
+        }
+        case ast.TokenKind.CARET {
+            return 5;
+        }
+        case ast.TokenKind.AMP {
+            return 6;
+        }
+        case ast.TokenKind.SHL, ast.TokenKind.SHR {
+            return 7;
+        }
+        case ast.TokenKind.PLUS, ast.TokenKind.MINUS {
+            return 8;
+        }
+        case ast.TokenKind.STAR, ast.TokenKind.SLASH, ast.TokenKind.PERCENT {
+            return 9;
+        }
+    }
+    return 0;
+}
+
+fn parse_binary(p: *Parser, lowest: int) *ast.Expr {
+    var left = parse_cast(p);
+    for (;;) {
+        var t = peek(p);
+        var level = precedence(t.kind);
+        if (level == 0 || level < lowest) {
+            return left;
+        }
+        var e = new_expr(ast.ExprKind.BINARY, t.line);
+        e.op = t.kind;
+        p.pos += 1;
+        e.left = left;
+        e.right = parse_binary(p, level + 1);
+        left = e;
+        if (level == 3 && precedence(peek(p).kind) == 3) {
+            fail(p, peek(p).line, "comparisons cannot be chained; join them with && or ||");
+        }
+    }
+}
+
+fn parse_expr(p: *Parser) *ast.Expr {
+    return parse_binary(p, 1);
+}
+
+fn new_stmt(kind: ast.StmtKind, line: int) *ast.Stmt {
+    var s = ast.allocate(sizeof(ast.Stmt)) as *ast.Stmt;
+    s.kind = kind;
+    s.line = line;
+    return s;
+}
+
+fn assignment(kind: ast.TokenKind) bool {
+    return kind as int >= ast.TokenKind.ASSIGN as int && kind as int <= ast.TokenKind.SHR_ASSIGN as int;
+}
+
+// An assignment or a call
+fn parse_simple(p: *Parser) *ast.Stmt {
+    var line = peek(p).line;
+    var e = parse_expr(p);
+    if (assignment(peek(p).kind)) {
+        var s = new_stmt(ast.StmtKind.ASSIGN, line);
+        s.op = peek(p).kind;
+        p.pos += 1;
+        s.target = e;
+        s.value = parse_expr(p);
+        return s;
+    }
+    if (e.kind != ast.ExprKind.CALL) {
+        fail(p, line, "only calls and assignments can be statements");
+    }
+    var s = new_stmt(ast.StmtKind.EXPR, line);
+    s.value = e;
+    return s;
+}
+
+// var and const without the semicolon, which a for loop leaves out
+fn parse_variable(p: *Parser) *ast.Stmt {
+    var t = peek(p);
+    var s = new_stmt(ast.StmtKind.VAR, t.line);
+    if (t.kind == ast.TokenKind.CONST) {
+        s.kind = ast.StmtKind.CONST;
+    }
+    p.pos += 1;
+    s.name = name(p, "a name");
+    if (accept(p, ast.TokenKind.COLON)) {
+        s.type_expr = parse_type(p);
+    }
+    if (accept(p, ast.TokenKind.ASSIGN)) {
+        s.value = parse_expr(p);
+    } else if (s.kind == ast.StmtKind.CONST) {
+        expected(p, "'=' and the value of the constant");
+    } else if (s.type_expr == null) {
+        expected(p, "a type or '='");
+    }
+    return s;
+}
+
+fn parse_if(p: *Parser) *ast.Stmt {
+    var s = new_stmt(ast.StmtKind.IF, peek(p).line);
+    p.pos += 1;
+    expect(p, ast.TokenKind.LPAREN, "after if");
+    s.cond = parse_expr(p);
+    expect(p, ast.TokenKind.RPAREN, "after the condition");
+    s.then = parse_block(p);
+    if (accept(p, ast.TokenKind.ELSE)) {
+        if (check(p, ast.TokenKind.IF)) {
+            s.otherwise = parse_if(p);
+        } else {
+            s.otherwise = parse_block(p);
+        }
+    }
+    return s;
+}
+
+fn parse_switch(p: *Parser) *ast.Stmt {
+    var s = new_stmt(ast.StmtKind.SWITCH, peek(p).line);
+    var cases = ast.List {};
+
+    p.pos += 1;
+    expect(p, ast.TokenKind.LPAREN, "after switch");
+    s.cond = parse_expr(p);
+    expect(p, ast.TokenKind.RPAREN, "after the value");
+    expect(p, ast.TokenKind.LBRACE, "before the cases");
+    while (!accept(p, ast.TokenKind.RBRACE)) {
+        if (check(p, ast.TokenKind.DEFAULT)) {
+            if (s.fallback != null) {
+                fail(p, peek(p).line, "the switch already has a default");
+            }
+            p.pos += 1;
+            s.fallback = parse_block(p);
+            continue;
+        }
+        var c = ast.allocate(sizeof(ast.Case)) as *ast.Case;
+        c.line = expect(p, ast.TokenKind.CASE, "or default").line;
+        ast.add(&cases, c as *u8);
+        var values = ast.List {};
+        p.no_literal = true;
+        ast.add(&values, parse_expr(p) as *u8);
+        while (accept(p, ast.TokenKind.COMMA)) {
+            ast.add(&values, parse_expr(p) as *u8);
+        }
+        p.no_literal = false;
+        c.values = ast.exprs(values);
+        c.body = parse_block(p);
+    }
+    s.cases = ast.cases(cases);
+    return s;
+}
+
+fn parse_stmt(p: *Parser) *ast.Stmt {
+    var t = peek(p);
+    var s: *ast.Stmt;
+
+    switch (t.kind) {
+        case ast.TokenKind.LBRACE {
+            return parse_block(p);
+        }
+        case ast.TokenKind.VAR, ast.TokenKind.CONST {
+            s = parse_variable(p);
+        }
+        case ast.TokenKind.IF {
+            return parse_if(p);
+        }
+        case ast.TokenKind.WHILE {
+            s = new_stmt(ast.StmtKind.WHILE, t.line);
+            p.pos += 1;
+            expect(p, ast.TokenKind.LPAREN, "after while");
+            s.cond = parse_expr(p);
+            expect(p, ast.TokenKind.RPAREN, "after the condition");
+            s.then = parse_block(p);
+            return s;
+        }
+        case ast.TokenKind.FOR {
+            s = new_stmt(ast.StmtKind.FOR, t.line);
+            p.pos += 1;
+            expect(p, ast.TokenKind.LPAREN, "after for");
+            if (!check(p, ast.TokenKind.SEMI)) {
+                if (check(p, ast.TokenKind.VAR)) {
+                    s.init = parse_variable(p);
+                } else {
+                    s.init = parse_simple(p);
+                }
+            }
+            expect(p, ast.TokenKind.SEMI, "after the start of the loop");
+            if (!check(p, ast.TokenKind.SEMI)) {
+                s.cond = parse_expr(p);
+            }
+            expect(p, ast.TokenKind.SEMI, "after the condition");
+            if (!check(p, ast.TokenKind.RPAREN)) {
+                s.step = parse_simple(p);
+            }
+            expect(p, ast.TokenKind.RPAREN, "after the step");
+            s.then = parse_block(p);
+            return s;
+        }
+        case ast.TokenKind.SWITCH {
+            return parse_switch(p);
+        }
+        case ast.TokenKind.BREAK {
+            s = new_stmt(ast.StmtKind.BREAK, t.line);
+            p.pos += 1;
+        }
+        case ast.TokenKind.CONTINUE {
+            s = new_stmt(ast.StmtKind.CONTINUE, t.line);
+            p.pos += 1;
+        }
+        case ast.TokenKind.RETURN {
+            s = new_stmt(ast.StmtKind.RETURN, t.line);
+            p.pos += 1;
+            if (!check(p, ast.TokenKind.SEMI)) {
+                s.value = parse_expr(p);
+            }
+        }
+        default {
+            s = parse_simple(p);
+        }
+    }
+    expect(p, ast.TokenKind.SEMI, "after the statement");
+    return s;
+}
+
+fn parse_block(p: *Parser) *ast.Stmt {
+    var s = new_stmt(ast.StmtKind.BLOCK, expect(p, ast.TokenKind.LBRACE, "").line);
+    var body = ast.List {};
+    while (!check(p, ast.TokenKind.RBRACE)) {
+        if (check(p, ast.TokenKind.EOF)) {
+            fail(p, s.line, "the block is missing its '}'");
+        }
+        ast.add(&body, parse_stmt(p) as *u8);
+    }
+    s.body = ast.stmts(body);
+    s.end_line = peek(p).line;
+    p.pos += 1;
+    return s;
+}
+
+fn parse_params(p: *Parser, d: *ast.Decl) {
+    var params = ast.List {};
+    expect(p, ast.TokenKind.LPAREN, "after the name of the function");
+    while (!check(p, ast.TokenKind.RPAREN)) {
+        var param = ast.allocate(sizeof(ast.Param)) as *ast.Param;
+        ast.add(&params, param as *u8);
+        param.line = peek(p).line;
+        param.name = name(p, "a parameter name");
+        expect(p, ast.TokenKind.COLON, "after the parameter name");
+        param.type_expr = parse_type(p);
+        if (!accept(p, ast.TokenKind.COMMA)) {
+            break;
+        }
+    }
+    d.params = ast.params(params);
+    expect(p, ast.TokenKind.RPAREN, "after the parameters");
+    if (starts_type(p)) {
+        d.type_expr = parse_type(p);
+    }
+}
+
+fn parse_struct(p: *Parser, d: *ast.Decl) {
+    var fields = ast.List {};
+    d.name = name(p, "the name of the struct");
+    expect(p, ast.TokenKind.LBRACE, "after the name of the struct");
+    while (!accept(p, ast.TokenKind.RBRACE)) {
+        var field = ast.allocate(sizeof(ast.Param)) as *ast.Param;
+        ast.add(&fields, field as *u8);
+        field.line = peek(p).line;
+        field.name = name(p, "a field name");
+        expect(p, ast.TokenKind.COLON, "after the field name");
+        field.type_expr = parse_type(p);
+        expect(p, ast.TokenKind.SEMI, "after the field");
+    }
+    d.params = ast.params(fields);
+}
+
+fn parse_enum(p: *Parser, d: *ast.Decl) {
+    var members = ast.List {};
+    d.name = name(p, "the name of the enum");
+    expect(p, ast.TokenKind.LBRACE, "after the name of the enum");
+    while (!check(p, ast.TokenKind.RBRACE)) {
+        var member = ast.allocate(sizeof(ast.Member)) as *ast.Member;
+        ast.add(&members, member as *u8);
+        member.line = peek(p).line;
+        member.name = name(p, "a name");
+        if (accept(p, ast.TokenKind.ASSIGN)) {
+            member.value = parse_expr(p);
+        }
+        if (!accept(p, ast.TokenKind.COMMA)) {
+            break;
+        }
+    }
+    d.members = ast.members(members);
+    expect(p, ast.TokenKind.RBRACE, "after the values of the enum");
+}
+
+fn parse_decl(p: *Parser) *ast.Decl {
+    var d = ast.allocate(sizeof(ast.Decl)) as *ast.Decl;
+    d.module = p.m;
+    d.is_pub = accept(p, ast.TokenKind.PUB);
+    d.line = peek(p).line;
+
+    var t = peek(p);
+    switch (t.kind) {
+        case ast.TokenKind.IMPORT {
+            if (d.is_pub) {
+                fail(p, d.line, "imports cannot be pub");
+            }
+            p.pos += 1;
+            d.kind = ast.DeclKind.IMPORT;
+            d.path = expect(p, ast.TokenKind.STRING, "after import").bytes;
+            if (accept(p, ast.TokenKind.AS)) {
+                d.name = name(p, "a name for the module");
+            }
+            expect(p, ast.TokenKind.SEMI, "after the import");
+        }
+        case ast.TokenKind.CONST, ast.TokenKind.VAR {
+            var s = parse_variable(p);
+            expect(p, ast.TokenKind.SEMI, "after the declaration");
+            d.kind = ast.DeclKind.VAR;
+            if (s.kind == ast.StmtKind.CONST) {
+                d.kind = ast.DeclKind.CONST;
+            }
+            d.name = s.name;
+            d.type_expr = s.type_expr;
+            d.value = s.value;
+        }
+        case ast.TokenKind.EXTERN, ast.TokenKind.INTERRUPT, ast.TokenKind.FN {
+            if (t.kind != ast.TokenKind.FN) {
+                d.is_extern = t.kind == ast.TokenKind.EXTERN;
+                d.is_interrupt = t.kind == ast.TokenKind.INTERRUPT;
+                p.pos += 1;
+                if (!check(p, ast.TokenKind.FN)) {
+                    expected(p, "fn");
+                }
+            }
+            p.pos += 1;
+            d.kind = ast.DeclKind.FN;
+            d.name = name(p, "the name of the function");
+            parse_params(p, d);
+            if (d.is_extern) {
+                expect(p, ast.TokenKind.SEMI, "after an extern function");
+            } else {
+                d.body = parse_block(p);
+            }
+        }
+        case ast.TokenKind.STRUCT {
+            p.pos += 1;
+            d.kind = ast.DeclKind.STRUCT;
+            parse_struct(p, d);
+        }
+        case ast.TokenKind.ENUM {
+            p.pos += 1;
+            d.kind = ast.DeclKind.ENUM;
+            parse_enum(p, d);
+        }
+        default {
+            expected(p, "a declaration");
+        }
+    }
+    return d;
+}
+
+// The declarations of a module; its imports are loaded afterwards
+pub fn parse(m: *ast.Module) {
+    var p = Parser { m: m, tokens: m.tokens };
+    var decls = ast.List {};
+    while (!check(&p, ast.TokenKind.EOF)) {
+        ast.add(&decls, parse_decl(&p) as *u8);
+    }
+    m.decls = ast.decls(decls);
+}
