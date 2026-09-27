@@ -1230,24 +1230,23 @@ fn gen_slice(g: *Gen, e: *ast.Expr) {
             low = gen_operand(g, e.right);
         }
         if (e.third != null) {
-            set_register(g, "R0", gen_operand(g, e.third));
+            set_register(g, "R5", gen_operand(g, e.third));
         } else {
-            set_register(g, "R0", length);
+            set_register(g, "R5", length);
         }
         var from_start = ast.same(low, "#0");
         if (e.third != null && !from_start) {
-            emitf(g, "    CMP R0, %s\n    JA .L%d\n    CMP R0, %s\n    JAE .L%d\n", [][]u8 { length, low },
+            emitf(g, "    CMP R5, %s\n    JA .L%d\n    CMP R5, %s\n    JAE .L%d\n", [][]u8 { length, low },
                 []int { failed, ok });
         } else if (e.third != null) {
-            emitf(g, "    CMP R0, %s\n    JBE .L%d\n", [][]u8 { length }, []int { ok });
+            emitf(g, "    CMP R5, %s\n    JBE .L%d\n", [][]u8 { length }, []int { ok });
         } else if (!from_start) {
-            emitf(g, "    CMP R0, %s\n    JAE .L%d\n", [][]u8 { low }, []int { ok });
+            emitf(g, "    CMP R5, %s\n    JAE .L%d\n", [][]u8 { low }, []int { ok });
         }
         if (e.third != null || !from_start) {
-            emitf(g, ".L%d:\n    PUSH %s\n    PUSH R0\n    PUSH %s\n    CALL rt.slice_error\n.L%d:\n",
+            emitf(g, ".L%d:\n    PUSH %s\n    PUSH R5\n    PUSH %s\n    CALL rt.slice_error\n.L%d:\n",
                 [][]u8 { length, low }, []int { failed, ok });
         }
-        emit(g, "    MOVE R5, R0\n");
         if (t.kind == ast.TypeKind.ARRAY) {
             load_from(g, t, at);
         } else {
