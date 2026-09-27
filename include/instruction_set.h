@@ -4,11 +4,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Instruction format
-// [Opcode: 8 bits][Mode: 4 bits][Reg1: 4 bits][Reg2: 4 bits][Immediate/Offset: 12 bits]
-// IMM, MEM, STK and BAS modes use the Reg2 field as the top 4 bits of a 16-bit immediate, which
-// is sign-extended except for MEM addresses.
-// Mode bit 3 means a second word follows that holds the whole 32-bit immediate or offset.
+// Instruction format: [opcode:8][mode:4][reg1:4][reg2:4][immediate:12]. IMM, MEM, STK and BAS use reg2
+// as the top of a 16-bit immediate, sign-extended except for MEM; mode bit 3 adds a second word that
+// holds the whole 32-bit immediate.
 #define MODE_EXTENDED 0x8
 
 // Addressing modes
