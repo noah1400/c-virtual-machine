@@ -22,36 +22,59 @@ struct Gen {
     continue_label: int;
     loc_module: *ast.Module;
     loc_line: int;
+    loc_path: []u8;         // the quoted path of loc_module
 }
 
 struct Pooled {
     label: []u8;
 }
 
+// Where the placeholders of a pattern are, and which kind each is: s, d or +
+struct Placeholders {
+    pattern: []u8;
+    at: [8]int;
+    kind: [8]u8;
+    count: int;
+}
+
+// Patterns are string literals, which their address tells apart, so each is scanned only once
+var placeholders: [256]Placeholders;
+
 // Appends pattern to out with each %s replaced by the next of texts, each %d by the next of numbers,
 // and each %+d by the next number with its sign
 fn format(out: *str.Builder, pattern: []u8, texts: [][]u8, numbers: []int) {
+    var found = &placeholders[(pattern.ptr as u32 >> 2 & 255) as int];
+    if (found.pattern.ptr != pattern.ptr || found.pattern.len != pattern.len) {
+        found.pattern = pattern;
+        found.count = 0;
+        for (var i = 0; i < pattern.len; i += 1) {
+            if (pattern[i] == '%') {
+                found.at[found.count] = i;
+                found.kind[found.count] = pattern[i + 1];
+                found.count += 1;
+            }
+        }
+    }
     var start = 0;
     var text = 0;
     var number = 0;
-    for (var i = 0; i < pattern.len; i += 1) {
-        if (pattern[i] == '%') {
-            str.append(out, pattern[start:i]);
-            i += 1;
-            if (pattern[i] == 's') {
-                str.append(out, texts[text]);
-                text += 1;
-            } else {
-                if (pattern[i] == '+') {
-                    i += 1;
-                    if (numbers[number] >= 0) {
-                        str.append_byte(out, '+');
-                    }
+    for (var k = 0; k < found.count; k += 1) {
+        var at = found.at[k];
+        str.append(out, pattern[start:at]);
+        var kind = found.kind[k];
+        start = at + 2;
+        if (kind == 's') {
+            str.append(out, texts[text]);
+            text += 1;
+        } else {
+            if (kind == '+') {
+                start = at + 3;
+                if (numbers[number] >= 0) {
+                    str.append_byte(out, '+');
                 }
-                str.append_int(out, numbers[number]);
-                number += 1;
             }
-            start = i + 1;
+            str.append_int(out, numbers[number]);
+            number += 1;
         }
     }
     str.append(out, pattern[start:]);
@@ -140,6 +163,12 @@ fn loc(g: *Gen, line: int) {
     if (g.loc_module == g.m && g.loc_line == line) {
         return;
     }
+    if (g.loc_module != g.m) {
+        var path = str.builder(g.m.path.len + 2);
+        quoted(&path, g.m.path);
+        g.loc_path = ast.clone(str.text(&path));
+        str.release(&path);
+    }
     g.loc_module = g.m;
     g.loc_line = line;
     var text = "";
@@ -147,7 +176,7 @@ fn loc(g: *Gen, line: int) {
         text = g.m.lines[line - 1];
     }
     emit(g, "    .loc ");
-    quoted(&g.body, g.m.path);
+    emit(g, g.loc_path);
     emitd(g, ", %d, ", []int { line });
     quoted(&g.body, text);
     emit(g, "\n");
