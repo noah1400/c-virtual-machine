@@ -490,8 +490,59 @@ static int check_range(Assembler *as, const Operand *op, int64_t min, int64_t ma
     return 1;
 }
 
+// Values that fit the immediate field of the first word; an extension word takes any 32 bits
+static void operand_limits(const InstructionInfo *info, uint8_t mode, int extended, int64_t *min, int64_t *max) {
+    int size = info->format == FMT_REG_REG_SIZE;
+
+    if (extended) {
+        *min = size || mode == MEM_MODE ? 0 : INT32_MIN;
+        *max = mode == IDX_MODE || mode == STK_MODE || mode == BAS_MODE ? INT32_MAX : (int64_t)UINT32_MAX;
+    } else if (size) {
+        *min = 0;
+        *max = 0x0FFF;
+    } else if (mode == IMM_MODE || mode == MEM_MODE) {
+        *min = 0;
+        *max = 0xFFFF;
+    } else if (mode == IDX_MODE) {
+        *min = -2048;
+        *max = 2047;
+    } else {
+        *min = -32768;
+        *max = 32767;
+    }
+}
+
+static int fits_short(const InstructionInfo *info, const Operand *op) {
+    int64_t min, max;
+    operand_limits(info, op->mode, 0, &min, &max);
+    return op->value >= min && op->value <= max;
+}
+
+static int set_immediate(Assembler *as, const InstructionInfo *info, const Operand *op, Instruction *in, int extended) {
+    static const char *const names[] = {
+        [IMM_MODE] = "immediate", [MEM_MODE] = "address", [IDX_MODE] = "index offset",
+        [STK_MODE] = "offset", [BAS_MODE] = "offset",
+    };
+    const char *what = info->format == FMT_REG_REG_SIZE ? "size" : names[op->mode];
+    int64_t min, max;
+
+    in->immediate = (uint32_t)op->value;
+    in->extended = (uint8_t)extended;
+    operand_limits(info, op->mode, 1, &min, &max);
+    if (!check_range(as, op, min, max, what)) {
+        return 0;
+    }
+    if (as->pass == 2 && !extended && !fits_short(info, op)) {
+        asm_error(as, "%s %lld needs an extension word but depends on a symbol defined later; define it earlier",
+                  what, (long long)op->value);
+        return 0;
+    }
+    return 1;
+}
+
 // Stores the variable operand, whose base register goes into reg1 or reg2
-static int set_operand(Assembler *as, const InstructionInfo *info, const Operand *op, Instruction *in, int in_reg1) {
+static int set_operand(Assembler *as, const InstructionInfo *info, const Operand *op, Instruction *in, int in_reg1,
+                       int extended) {
     if (!(info->modes & MODE_BIT(op->mode))) {
         asm_error(as, "%s does not accept %s operand", info->mnemonic, mode_description(op->mode));
         return 0;
@@ -505,21 +556,30 @@ static int set_operand(Assembler *as, const InstructionInfo *info, const Operand
             in->reg2 = op->reg;
         }
     }
+    return !(MODE_BIT(op->mode) & MODES_WITH_IMMEDIATE) || set_immediate(as, info, op, in, extended);
+}
 
-    in->immediate = (uint32_t)op->value;
-    switch (op->mode) {
-        case IMM_MODE:
-            return check_range(as, op, 0, 0xFFFF, "immediate");
-        case MEM_MODE:
-            return check_range(as, op, 0, 0xFFFF, "address");
-        case IDX_MODE:
-            return check_range(as, op, -2048, 2047, "index offset");
-        case STK_MODE:
-        case BAS_MODE:
-            return check_range(as, op, -32768, 32767, "offset");
+// The operand stored in the immediate field, if any
+static const Operand *immediate_operand(const InstructionInfo *info, const Operand *ops, int count) {
+    int index;
+
+    switch (info->format) {
+        case FMT_IMM:
+        case FMT_OPT_IMM:
+        case FMT_OPERAND:
+        case FMT_OPERAND_REG:
+            index = 0;
+            break;
+        case FMT_REG_OPERAND:
+            index = 1;
+            break;
+        case FMT_REG_REG_SIZE:
+            index = 2;
+            break;
         default:
-            return 1;
+            return NULL;
     }
+    return index < count && (MODE_BIT(ops[index].mode) & MODES_WITH_IMMEDIATE) ? &ops[index] : NULL;
 }
 
 static int expect_register(Assembler *as, const InstructionInfo *info, const Operand *op, int position) {
@@ -530,7 +590,8 @@ static int expect_register(Assembler *as, const InstructionInfo *info, const Ope
     return 1;
 }
 
-static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops, int count, Instruction *in) {
+static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops, int count, int extended,
+                  Instruction *in) {
     static const int operand_counts[] = {
         [FMT_NONE] = 0, [FMT_REG] = 1, [FMT_IMM] = 1, [FMT_OPT_IMM] = 1, [FMT_OPERAND] = 1,
         [FMT_REG_OPERAND] = 2, [FMT_OPERAND_REG] = 2, [FMT_REG_REG] = 2, [FMT_REG_REG_SIZE] = 3,
@@ -564,15 +625,15 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
             if (info->opcode == INT_OP && !check_range(as, &ops[0], 0, 255, "interrupt vector")) {
                 return 0;
             }
-            return set_operand(as, info, &ops[0], in, 1);
+            return set_operand(as, info, &ops[0], in, 1, extended);
         case FMT_OPERAND:
-            return set_operand(as, info, &ops[0], in, 1);
+            return set_operand(as, info, &ops[0], in, 1, extended);
         case FMT_REG_OPERAND:
             in->reg1 = ops[0].reg;
-            return expect_register(as, info, &ops[0], 1) && set_operand(as, info, &ops[1], in, 0);
+            return expect_register(as, info, &ops[0], 1) && set_operand(as, info, &ops[1], in, 0, extended);
         case FMT_OPERAND_REG:
             in->reg1 = ops[1].reg;
-            return expect_register(as, info, &ops[1], 2) && set_operand(as, info, &ops[0], in, 0);
+            return expect_register(as, info, &ops[1], 2) && set_operand(as, info, &ops[0], in, 0, extended);
         case FMT_REG_REG:
             in->mode = REG_MODE;
             in->reg1 = ops[0].reg;
@@ -594,8 +655,7 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
                 return 0;
             }
             in->mode = IMM_MODE;
-            in->immediate = (uint32_t)ops[2].value;
-            return check_range(as, &ops[2], 0, 0x0FFF, "size");
+            return set_immediate(as, info, &ops[2], in, extended);
         default:
             return 0;
     }
@@ -666,34 +726,13 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
 
     result->is_code = 1;
 
-    // LOAD of a constant outside 0-65535 loads the low half and then sets the high half with LOADHI
-    if (info->opcode == LOAD_OP && count == 2 && ops[0].mode == REG_MODE && ops[1].mode == IMM_MODE) {
-        int64_t value = ops[1].value;
-        if (as->pass == 1 && !ops[1].unresolved && (value < 0 || value > 0xFFFF)) {
-            result->wide = 1;
-        }
-        if (result->wide) {
-            if (as->pass == 2 && (value < INT32_MIN || value > (int64_t)UINT32_MAX)) {
-                asm_error(as, "constant %lld does not fit in 32 bits", (long long)value);
-                return;
-            }
-            Instruction low = { .opcode = LOAD_OP, .mode = IMM_MODE, .reg1 = ops[0].reg,
-                                .immediate = (uint32_t)value & 0xFFFF };
-            Instruction high = { .opcode = LOADHI_OP, .mode = IMM_MODE, .reg1 = ops[0].reg,
-                                 .immediate = (uint32_t)((uint64_t)value >> 16) & 0xFFFF };
-            emit_instruction(as, &low);
-            emit_instruction(as, &high);
-            return;
-        }
-        if (as->pass == 2 && (value < 0 || value > 0xFFFF)) {
-            asm_error(as, "constant %lld needs 32 bits but is defined after this LOAD; define it earlier",
-                      (long long)value);
-            return;
-        }
+    const Operand *immediate = immediate_operand(info, ops, count);
+    if (as->pass == 1 && immediate && !immediate->unresolved && !fits_short(info, immediate)) {
+        result->extended = 1;
     }
 
     Instruction in;
-    if (encode(as, info, ops, count, &in)) {
+    if (encode(as, info, ops, count, result->extended, &in)) {
         emit_instruction(as, &in);
     }
 }

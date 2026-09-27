@@ -91,7 +91,7 @@ typedef struct {
     uint32_t address;
     uint32_t size;
     int is_code;
-    int wide;           // pseudo-instruction expanded to two words
+    int extended;       // the instruction carries an extension word
     int condition;      // result of a conditional directive, decided in pass 1
 } LineResult;
 

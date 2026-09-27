@@ -1,4 +1,4 @@
-; LOAD accepts any 32-bit constant and LOADHI replaces the upper half of a register
+; Operands that do not fit the first word are stored in an extension word
 
 .equ BIG, 0x12345678
 
@@ -9,13 +9,16 @@
     CALL print_int
     LOAD R8, #-100000
     CALL print_int
-    LOAD R8, #70000
-    CALL print_int
 
-    LOAD R9, #0x5678
-    LOADHI R9, #0xABCD
-    MOVE R8, R9
+    LOAD R8, #70000
+    ADD R8, #100000
+    CALL print_int
+    AND R8, #0x1FFFF
     CALL print_hex
+
+    LOAD R9, #table - 3000
+    LOAD R8, [R9 + 3004]
+    CALL print_int
 
 short:
     LOAD R8, #0xFFFF
@@ -29,3 +32,7 @@ done:
     HALT
 
 .include "lib.inc"
+
+.data
+table:
+    .dword 11, 22

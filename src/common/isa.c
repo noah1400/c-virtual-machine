@@ -12,7 +12,6 @@ static const InstructionInfo instruction_table[] = {
     { "LOADW",   LOADW_OP,   FMT_REG_OPERAND,  MODES_SRC },
     { "STOREW",  STOREW_OP,  FMT_REG_OPERAND,  MODES_ADDR },
     { "LEA",     LEA_OP,     FMT_REG_OPERAND,  MODES_ADDR },
-    { "LOADHI",  LOADHI_OP,  FMT_REG_OPERAND,  MODE_BIT(IMM_MODE) },
 
     { "ADD",     ADD_OP,     FMT_REG_OPERAND,  MODES_SRC },
     { "SUB",     SUB_OP,     FMT_REG_OPERAND,  MODES_SRC },
