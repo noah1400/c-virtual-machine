@@ -1,6 +1,6 @@
 Debugger ready. Type 'h' for help.
 0x0000 <main>
-  tests/programs/loc_debugger.asm:5: PUSH #3
+  tests/programs/loc_debugger.asm:6: PUSH #3
 Next instruction: PUSH #0x3
 > # Into count, then a line at a time: the jump to the loop test stays on line 3
 > s 2
@@ -63,6 +63,43 @@ Instructions executed: 17, last: JL count.body
 0x001C <count.body>
   count.c:4: i++;
 Next instruction: LOAD R5, [BP-4]
+> # Lines are locations too, and a file name may leave out its directories
+> b count.c:4
+Breakpoint 1 at 0x001C <count.body>
+> b loc_debugger.asm:8
+Breakpoint 2 at 0x0008 <main+8>
+> b count.c:9
+Unknown location: count.c:9
+> lb
+ 1  0x001C <count.body>  count.c:4
+ 2  0x0008 <main+8>  tests/programs/loc_debugger.asm:8
+> c
+Breakpoint 1 at 0x001C
+R0  0x00000000   BP  0x000FFFF4   SP  0x000FFFF0   PC  0x0000001C
+SR  0x00000046   R5  0x00000002   R6  0x00000003   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [-NC---S-]
+Instructions executed: 24, last: JL count.body
+0x001C <count.body>
+  count.c:4: i++;
+Next instruction: LOAD R5, [BP-4]
+> c
+Breakpoint 2 at 0x0008
+R0  0x00000003   BP  0x00100000   SP  0x000FFFFC   PC  0x00000008
+SR  0x00000041   R5  0x00000003   R6  0x00000003   R7  0x00000000
+R8  0x00000000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [Z-----S-]
+Instructions executed: 34, last: RET
+0x0008 <main+8>
+  tests/programs/loc_debugger.asm:8: HALT
+Next instruction: HALT
+> ls
+0x0000  CODE   main                     tests/programs/loc_debugger.asm:5
+0x000C  CODE   count                    count.c:1
+0x001C  CODE   count.body               count.c:4
+0x0028  CODE   count.test               count.c:3
 > c
 Program halted
 R0  0x00000003   BP  0x00100000   SP  0x000FFFFC   PC  0x0000000C

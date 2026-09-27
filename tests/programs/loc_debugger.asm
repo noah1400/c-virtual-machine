@@ -1,4 +1,5 @@
-; next runs the whole line that .loc named, which the debugger shows as where the code came from
+; next runs the whole line that .loc named, which the debugger shows as where the code came from and
+; takes as a location
 
 .text
 main:

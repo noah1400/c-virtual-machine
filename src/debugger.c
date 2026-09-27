@@ -58,6 +58,32 @@ static int parse_number(const char *text, uint32_t *value) {
     return 1;
 }
 
+// FILE:LINE stands for the lowest address of that line; FILE may leave out leading directories
+static int line_address(const DebugInfo *info, const char *text, uint32_t *address) {
+    const char *colon = strrchr(text, ':');
+    size_t length = colon ? (size_t)(colon - text) : 0;
+    uint32_t number;
+    int found = 0;
+
+    if (!info || length == 0 || !parse_number(colon + 1, &number)) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < info->source_line_count; i++) {
+        const SourceLine *line = &info->source_lines[i];
+        const char *file = line->source_file;
+        size_t size = file ? strlen(file) : 0;
+        if (line->line_num != number || size < length || memcmp(file + size - length, text, length) != 0 ||
+            (size > length && file[size - length - 1] != '/')) {
+            continue;
+        }
+        if (!found || line->address < *address) {
+            *address = line->address;
+            found = 1;
+        }
+    }
+    return found;
+}
+
 static int parse_location(const Debugger *dbg, const char *text, uint32_t *address) {
     if (parse_number(text, address)) {
         return 1;
@@ -65,6 +91,9 @@ static int parse_location(const Debugger *dbg, const char *text, uint32_t *addre
     const Symbol *sym = debug_symbol_named(dbg->vm->debug_info, text);
     if (sym) {
         *address = sym->address;
+        return 1;
+    }
+    if (line_address(dbg->vm->debug_info, text, address)) {
         return 1;
     }
     printf("Unknown location: %s\n", text);
@@ -550,6 +579,7 @@ static void cmd_help(void) {
     printf("  cr                       Show control registers\n");
     printf("  h, help                  Show this help\n");
     printf("  q, quit                  Leave the debugger\n");
+    printf("An ADDR can also be a symbol, or FILE:LINE for the code of a source line.\n");
 }
 
 int debugger_run(VM *vm, FILE *commands) {

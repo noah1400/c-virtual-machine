@@ -5,4 +5,12 @@ n
 n
 n
 n
+# Lines are locations too, and a file name may leave out its directories
+b count.c:4
+b loc_debugger.asm:8
+b count.c:9
+lb
+c
+c
+ls
 c

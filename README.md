@@ -964,7 +964,7 @@ These codes appear in R5 after syscalls and in `CPUID` function 4. Codes 1 to 14
 | `n`, `next` | Run to the next source line, stepping over calls |
 | `f`, `finish` | Run until the current subroutine returns |
 | `c`, `continue` | Run until a breakpoint, a `DEBUG` instruction, an exception, `HALT` or a fault |
-| `b`, `break ADDR\|SYMBOL` | Set a breakpoint, for example `b main.loop` or `b 0x10` |
+| `b`, `break ADDR\|SYMBOL` | Set a breakpoint, for example `b main.loop`, `b 0x10` or `b count.c:4` |
 | `w`, `watch ADDR\|SYMBOL` | Stop after an instruction changes the 32-bit word at ADDR |
 | `d`, `delete N` | Delete breakpoint or watchpoint N |
 | `lb`, `breakpoints` | List breakpoints and watchpoints |
@@ -977,6 +977,8 @@ These codes appear in R5 after syscalls and in `CPUID` function 4. Codes 1 to 14
 | `cr` | Show control registers |
 | `h`, `help` | Show help |
 | `q`, `quit` | Leave the debugger |
+
+Commands that take an address also take a symbol or `FILE:LINE`, which stands for the lowest address of that line's code. The file name may leave out leading directories.
 
 Any command that runs the program stops when an exception is delivered to a handler, and names the exception. The program's input and output share the terminal with the debugger.
 
