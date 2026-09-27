@@ -30,6 +30,7 @@ enum {
     SYS_TIME         = 32,
     SYS_TICKS        = 33,
     SYS_ARGUMENT     = 34,
+    SYS_ABORT        = 35,
     SYS_RANDOM       = 40,
     SYS_SEED         = 41,
 };

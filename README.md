@@ -922,6 +922,7 @@ A program can read and write any file that the user running it can access.
 | 32 | Time | | R0 = milliseconds since start |
 | 33 | Ticks | | R0 = instructions executed |
 | 34 | Argument | R0 = index, R5 = buffer, R6 = buffer size | Copies argument *index* into the buffer, truncating it to fit. R0 = the argument's full length, or 0xFFFFFFFF if there is no such argument. With a size of 0, only the length is returned |
+| 35 | Abort | R0 = NUL-terminated message, R5 = number of calls to leave out | Stops the program the way a fault does, with the message. The report starts where the call that many levels out was made, so a runtime's error routine can blame its caller |
 | 40 | Random | R0 = limit | R0 = a number below the limit, or any 32-bit value if the limit is 0 |
 | 41 | Seed | R0 = seed | |
 
@@ -953,6 +954,7 @@ These codes appear in R5 after syscalls and in `CPUID` function 4. Codes 1 to 14
 | 15 | Single-step trap (a vector only) |
 | 16 | Instruction limit reached (never delivered to the program) |
 | 17 | Stopped by a signal (never delivered to the program) |
+| 18 | Aborted by the program with syscall 35 (never delivered to the program) |
 
 ## Debugger
 

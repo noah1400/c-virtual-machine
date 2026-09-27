@@ -151,6 +151,20 @@ void cpu_pop_frames(VM *vm, int interrupt_return) {
     }
 }
 
+static int frame_live(const VM *vm, const CallFrame *frame);
+
+// Forgets the innermost count calls and returns the site of the outermost one, or pc if there were none
+uint32_t cpu_unwind_calls(VM *vm, uint32_t count, uint32_t pc) {
+    while (count > 0 && vm->call_depth > 0) {
+        const CallFrame *frame = &vm->call_frames[--vm->call_depth];
+        if (frame_live(vm, frame)) {
+            pc = frame->site;
+            count--;
+        }
+    }
+    return pc;
+}
+
 // The vector table holds one 32-bit handler address per vector; 0 means there is no handler. It
 // belongs to the kernel, so it is read with supervisor rights even when user code is interrupted.
 static uint32_t vector_handler(VM *vm, uint8_t vector) {

@@ -4,6 +4,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#include "cpu.h"
 #include "memory.h"
 #include "syscalls.h"
 #include "vm.h"
@@ -22,6 +23,26 @@ static void print_string(VM *vm, uint32_t address) {
         }
         putchar(c);
     }
+}
+
+// Stops the program with the message at address, reported as if it had happened levels calls further out
+static void abort_program(VM *vm, uint32_t address, uint32_t levels) {
+    char message[200];
+    size_t length = 0;
+    for (; length + 1 < sizeof(message); length++) {
+        uint8_t c = memory_read_byte(vm, address + (uint32_t)length);
+        if (vm->last_error != VM_ERROR_NONE) {
+            return;
+        }
+        if (c == 0) {
+            break;
+        }
+        message[length] = (char)c;
+    }
+    message[length] = '\0';
+    uint32_t site = cpu_unwind_calls(vm, levels, vm->error_pc);
+    vm_raise(vm, VM_ERROR_ABORT, "%s", message);
+    vm->error_pc = site;
 }
 
 // Reads a line without its newline into a buffer of max_len bytes including the terminator
@@ -367,6 +388,10 @@ int syscall_dispatch(VM *vm, uint32_t number) {
         case SYS_ARGUMENT:
             program_argument(vm, arg0, arg1, arg2);
             syscall_status(vm);
+            break;
+
+        case SYS_ABORT:
+            abort_program(vm, arg0, arg1);
             break;
 
         case SYS_RANDOM:

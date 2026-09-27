@@ -1,0 +1,3 @@
+vm: error: index 12 is out of bounds for length 10
+vm: at 0x0010 <check+8> tests/programs/abort.asm:13: CALL index_error
+vm: #1 0x0000 <main> tests/programs/abort.asm:7: CALL check
