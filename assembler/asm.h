@@ -53,6 +53,7 @@ typedef struct {
 typedef struct {
     char *name;
     char **params;
+    char **defaults;    // text used for a missing or empty argument, NULL where the argument is required
     int param_count;
     char **body;
     int body_count;

@@ -55,12 +55,14 @@ void asm_free(Assembler *as) {
         Macro *macro = &as->macros[i];
         for (int k = 0; k < macro->param_count; k++) {
             free(macro->params[k]);
+            free(macro->defaults[k]);
         }
         for (int k = 0; k < macro->body_count; k++) {
             free(macro->body[k]);
         }
         free(macro->name);
         free(macro->params);
+        free(macro->defaults);
         free(macro->body);
     }
     free(as->macros);

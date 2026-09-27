@@ -735,6 +735,7 @@ entries:
 ```
 
 - **Parameters:** separated by commas. In the body, `\name` is replaced by the argument everywhere except inside quotes.
+- **Defaults:** `name=text` gives a parameter a default, which replaces an argument that is left out at the end or given empty. `.macro SHOW value, base=10` can be invoked as `SHOW 255` or `SHOW 255, 16`.
 - **`\@`:** replaced by a number unique to each expansion, which keeps labels from clashing.
 - **Arguments:** split at commas that are not inside quotes, brackets or parentheses.
 - **Order:** a macro must be defined before it is used.

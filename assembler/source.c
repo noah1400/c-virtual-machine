@@ -211,7 +211,8 @@ static int include_file(Assembler *as, Loader *loader, const char *file, int num
     return ok;
 }
 
-static int define_macro(Assembler *as, Loader *loader, const TokenList *tokens, int first) {
+// Parameters are names, each optionally followed by = and the text of its default argument
+static int define_macro(Assembler *as, Loader *loader, const char *text, const TokenList *tokens, int first) {
     const Token *name = &tokens->items[first + 1];
 
     if (first > 0) {
@@ -239,19 +240,44 @@ static int define_macro(Assembler *as, Loader *loader, const TokenList *tokens, 
 
     for (int i = first + 2; tokens->items[i].kind != TOK_END; i++) {
         const Token *param = &tokens->items[i];
-        if (param->kind != TOK_IDENT || (tokens->items[i + 1].kind != TOK_END && !token_is_punct(&tokens->items[i + 1], ','))) {
+        char *fallback = NULL;
+        int next = i + 1;
+
+        if (param->kind == TOK_IDENT && token_is_punct(&tokens->items[next], '=')) {
+            int depth = 0, end = ++next;
+            while (tokens->items[end].kind != TOK_END && (depth > 0 || !token_is_punct(&tokens->items[end], ','))) {
+                depth += token_is_punct(&tokens->items[end], '(') || token_is_punct(&tokens->items[end], '[');
+                depth -= token_is_punct(&tokens->items[end], ')') || token_is_punct(&tokens->items[end], ']');
+                end++;
+            }
+            size_t start = tokens->items[next].start, stop = tokens->items[end].start;
+            while (stop > start && (text[stop - 1] == ' ' || text[stop - 1] == '\t')) {
+                stop--;
+            }
+            fallback = copy_string(text + start, end > next ? stop - start : 0);
+            if (!fallback) {
+                return 0;
+            }
+            next = end;
+        }
+        if (param->kind != TOK_IDENT || (tokens->items[next].kind != TOK_END && !token_is_punct(&tokens->items[next], ','))) {
+            free(fallback);
             loader_error(as, "expected macro parameter names separated by commas%s", "");
             return 1;
         }
         char **params = realloc(macro->params, (size_t)(macro->param_count + 1) * sizeof(char *));
-        if (!params) {
+        char **defaults = params ? realloc(macro->defaults, (size_t)(macro->param_count + 1) * sizeof(char *)) : NULL;
+        if (params) {
+            macro->params = params;
+        }
+        if (!defaults) {
+            free(fallback);
             return 0;
         }
-        macro->params = params;
+        macro->defaults = defaults;
+        macro->defaults[macro->param_count] = fallback;
         macro->params[macro->param_count++] = copy_string(param->text, strlen(param->text));
-        if (tokens->items[i + 1].kind != TOK_END) {
-            i++;
-        }
+        i = tokens->items[next].kind != TOK_END ? next : next - 1;
     }
     return macro->name != NULL;
 }
@@ -368,15 +394,33 @@ static char *substitute(const Macro *macro, char **arguments, const char *line, 
     return out;
 }
 
+// Missing trailing arguments and empty ones take the parameter's default
 static int expand_macro(Assembler *as, Loader *loader, Macro *macro, const char *file, int number, const char *args) {
-    char *arguments[MAX_MACRO_ARGUMENTS];
+    char *arguments[MAX_MACRO_ARGUMENTS], *values[MAX_MACRO_ARGUMENTS];
     int count = split_arguments(args, arguments, MAX_MACRO_ARGUMENTS);
-    int ok = 1;
+    int required = 0, ok = 1;
 
-    if (count != macro->param_count) {
+    for (int i = 0; i < macro->param_count; i++) {
+        if (!macro->defaults[i]) {
+            required = i + 1;
+        }
+    }
+    for (int i = 0; i < macro->param_count && count <= macro->param_count; i++) {
+        values[i] = i < count ? arguments[i] : NULL;
+        if ((!values[i] || !values[i][0]) && macro->defaults[i]) {
+            values[i] = macro->defaults[i];
+        }
+    }
+
+    if (count < required || count > macro->param_count) {
         char detail[160];
-        snprintf(detail, sizeof(detail), "%s expects %d argument%s", macro->name, macro->param_count,
-                 macro->param_count == 1 ? "" : "s");
+        if (required == macro->param_count) {
+            snprintf(detail, sizeof(detail), "%s expects %d argument%s", macro->name, macro->param_count,
+                     macro->param_count == 1 ? "" : "s");
+        } else {
+            snprintf(detail, sizeof(detail), "%s expects %d to %d arguments", macro->name, required,
+                     macro->param_count);
+        }
         loader_error(as, "%s", detail);
     } else if (loader->expansion_depth >= MAX_EXPANSION_DEPTH) {
         loader_error(as, "macro %s is expanded too deeply", macro->name);
@@ -384,7 +428,7 @@ static int expand_macro(Assembler *as, Loader *loader, Macro *macro, const char 
         unsigned id = as->expansions++;
         loader->expansion_depth++;
         for (int i = 0; ok && i < macro->body_count; i++) {
-            char *text = substitute(macro, arguments, macro->body[i], id);
+            char *text = substitute(macro, values, macro->body[i], id);
             ok = text && handle_line(as, loader, file, number, text, 1);
         }
         loader->expansion_depth--;
@@ -436,7 +480,7 @@ static int handle_line(Assembler *as, Loader *loader, const char *file, int numb
 
     if (name_equals(word, ".macro")) {
         ok = add_line(as, LINE_MACRO_DEFINITION, file, number, text, expanded) &&
-             define_macro(as, loader, &tokens, first);
+             define_macro(as, loader, text, &tokens, first);
     } else if (name_equals(word, ".endm")) {
         ok = add_line(as, LINE_SOURCE, file, number, text, expanded);
         loader_error(as, ".endm without .macro%s", "");
