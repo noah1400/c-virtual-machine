@@ -31,12 +31,11 @@ void asm_error(Assembler *as, const char *format, ...) {
     as->errors++;
 }
 
+// Code starts at address 0 and data at the first page boundary after the code
 void asm_init(Assembler *as) {
     memset(as, 0, sizeof(*as));
-    as->sections[SECTION_TEXT] = (Section){ ".text", CODE_SEGMENT_BASE, CODE_SEGMENT_BASE + CODE_SEGMENT_SIZE,
-                                            0, 0, NULL };
-    as->sections[SECTION_DATA] = (Section){ ".data", DATA_SEGMENT_BASE, DATA_SEGMENT_BASE + DATA_SEGMENT_SIZE,
-                                            0, 0, NULL };
+    as->sections[SECTION_TEXT].name = ".text";
+    as->sections[SECTION_DATA].name = ".data";
     symbols_init(&as->symbols);
 }
 
@@ -122,15 +121,20 @@ static int eval_now(Parser *p, int64_t *value, const char *what) {
     return 1;
 }
 
+// Bytes left before the current section reaches its size limit
+static uint32_t section_room(const Section *sec) {
+    return ASM_MAX_SECTION_SIZE - (sec->pc - sec->base);
+}
+
 static void emit(Assembler *as, const uint8_t *bytes, uint32_t count) {
     Section *sec = current(as);
 
-    if (count > sec->limit - sec->pc) {
-        asm_error(as, "%s section overflows its %u byte segment", sec->name, sec->limit - sec->base);
-        sec->pc = sec->limit;
+    if (count > section_room(sec)) {
+        asm_error(as, "%s section exceeds %u bytes", sec->name, ASM_MAX_SECTION_SIZE);
+        sec->pc = sec->base + ASM_MAX_SECTION_SIZE;
         return;
     }
-    if (as->pass == PASS_EMIT && bytes) {
+    if (as->pass == PASS_EMIT && bytes && sec->pc - sec->base + count <= sec->allocated) {
         memcpy(sec->bytes + (sec->pc - sec->base), bytes, count);
     }
     sec->pc += count;
@@ -144,7 +148,7 @@ static void emit_fill(Assembler *as, uint8_t value, uint32_t count) {
     uint32_t start = sec->pc;
 
     emit(as, NULL, count);
-    if (as->pass == PASS_EMIT && sec->pc > start) {
+    if (as->pass == PASS_EMIT && sec->pc > start && sec->pc - sec->base <= sec->allocated) {
         memset(sec->bytes + (start - sec->base), value, sec->pc - start);
     }
 }
@@ -274,7 +278,7 @@ static void directive_space(Assembler *as, Parser *p) {
             return;
         }
     }
-    if (size < 0 || size > current(as)->limit - current(as)->pc) {
+    if (size < 0 || size > section_room(current(as))) {
         asm_error(as, ".space size %lld does not fit the %s section", (long long)size, current(as)->name);
         return;
     }
@@ -301,19 +305,20 @@ static void directive_align(Assembler *as, Parser *p) {
     emit_fill(as, 0, (uint32_t)((alignment - pc % alignment) % alignment));
 }
 
+// Pads the current section up to an offset from its start
 static void directive_org(Assembler *as, Parser *p) {
     Section *sec = current(as);
-    int64_t address;
+    int64_t offset;
 
-    if (!eval_now(p, &address, "the .org address") || !expect_end(p)) {
+    if (!eval_now(p, &offset, "the .org offset") || !expect_end(p)) {
         return;
     }
-    if (address < sec->pc || address > sec->limit) {
-        asm_error(as, ".org 0x%llX is outside the %s section or before the current address 0x%04X",
-                  (long long)address, sec->name, sec->pc);
+    if (offset < sec->pc - sec->base || offset > ASM_MAX_SECTION_SIZE) {
+        asm_error(as, ".org 0x%llX is outside the %s section or before its current offset 0x%X",
+                  (long long)offset, sec->name, sec->pc - sec->base);
         return;
     }
-    emit_fill(as, 0, (uint32_t)(address - sec->pc));
+    emit_fill(as, 0, (uint32_t)(offset - (sec->pc - sec->base)));
 }
 
 static void directive_equ(Assembler *as, Parser *p) {
@@ -929,6 +934,13 @@ static void run_pass(Assembler *as, int pass) {
     if (as->condition_depth > 0 && pass == PASS_DEFINE) {
         asm_error(as, "missing .endif");
     }
+
+    // Data follows the code on the next page; moving it means another layout pass
+    uint32_t data_base = (as->sections[SECTION_TEXT].end + VM_PAGE_SIZE - 1) & ~(VM_PAGE_SIZE - 1);
+    if (as->sections[SECTION_DATA].base != data_base) {
+        as->sections[SECTION_DATA].base = data_base;
+        as->changed = 1;
+    }
 }
 
 // Defines NAME=VALUE constants given on the command line before any source is assembled
@@ -1002,20 +1014,25 @@ int asm_assemble(Assembler *as, const char *path) {
     }
 
     as->results = calloc(as->line_count ? as->line_count : 1, sizeof(LineResult));
-    for (size_t i = 0; as->results && i < as->line_count; i++) {
-        as->results[i].section = -1;
+    if (!as->results) {
+        asm_error(as, "out of memory");
+        return 0;
     }
-    for (int i = 0; i < SECTION_COUNT; i++) {
-        as->sections[i].bytes = calloc(as->sections[i].limit - as->sections[i].base, 1);
-        if (!as->sections[i].bytes || !as->results) {
-            asm_error(as, "out of memory");
-            return 0;
-        }
+    for (size_t i = 0; i < as->line_count; i++) {
+        as->results[i].section = -1;
     }
 
     run_pass(as, PASS_DEFINE);
     if (as->errors == 0) {
         settle_layout(as);
+    }
+    for (int i = 0; i < SECTION_COUNT && as->errors == 0; i++) {
+        Section *sec = &as->sections[i];
+        sec->allocated = sec->end - sec->base;
+        sec->bytes = calloc(sec->allocated ? sec->allocated : 1, 1);
+        if (!sec->bytes) {
+            asm_error(as, "out of memory");
+        }
     }
     if (as->errors == 0) {
         as->entry = as->sections[SECTION_TEXT].base;

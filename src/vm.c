@@ -104,10 +104,6 @@ uint32_t vm_peek_instruction(const VM *vm, uint32_t address, Instruction *instr)
     return size;
 }
 
-static int segment_fits(uint32_t base, uint32_t size, uint32_t seg_base, uint32_t seg_size) {
-    return base >= seg_base && (uint64_t)base + size <= (uint64_t)seg_base + seg_size;
-}
-
 static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
     Vm32Image bin;
     const char *problem = vm32_parse(image, size, &bin);
@@ -115,21 +111,23 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
         return vm_raise(vm, VM_ERROR_IO_ERROR, "%s", problem);
     }
 
-    uint32_t code_base = bin.code_base, code_size = bin.code_size;
-    uint32_t data_base = bin.data_base, data_size = bin.data_size;
+    // The program has to leave room for the stack at the top of memory
+    uint64_t code_end = (uint64_t)bin.code_base + bin.code_size;
+    uint64_t data_end = (uint64_t)bin.data_base + bin.data_size;
+    uint32_t limit = vm->memory_size - VM_STACK_SIZE;
+    if (code_end > limit || data_end > limit) {
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Program does not fit below the stack in %u KB of memory",
+                        vm->memory_size / 1024);
+    }
+    if (bin.code_size && bin.data_size && bin.data_base < code_end && bin.code_base < data_end) {
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Code and data of the program overlap");
+    }
+    if (bin.entry < bin.code_base || bin.entry - bin.code_base >= bin.code_size) {
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Entry point 0x%04X is outside the code", bin.entry);
+    }
 
-    if (!segment_fits(code_base, code_size, CODE_SEGMENT_BASE, CODE_SEGMENT_SIZE)) {
-        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Code segment does not fit the code segment range");
-    }
-    if (!segment_fits(data_base, data_size, DATA_SEGMENT_BASE, DATA_SEGMENT_SIZE)) {
-        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Data segment does not fit the data segment range");
-    }
-    if (bin.entry < code_base || bin.entry - code_base >= code_size) {
-        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Entry point 0x%04X is outside the code segment", bin.entry);
-    }
-
-    memcpy(vm->memory + code_base, bin.code, code_size);
-    memcpy(vm->memory + data_base, bin.data, data_size);
+    memcpy(vm->memory + bin.code_base, bin.code, bin.code_size);
+    memcpy(vm->memory + bin.data_base, bin.data, bin.data_size);
 
     if (bin.symbol_size > 0) {
         debug_info_free(vm->debug_info);
@@ -137,27 +135,26 @@ static int load_vm32_image(VM *vm, const uint8_t *image, uint32_t size) {
     }
 
     vm->entry_point = bin.entry;
-    vm->code_end = code_base + code_size;
-    vm->image_end = data_size && data_base + data_size > vm->code_end ? data_base + data_size : vm->code_end;
+    vm->code_end = (uint32_t)code_end;
+    vm->image_end = (uint32_t)(bin.data_size && data_end > code_end ? data_end : code_end);
     cpu_reset(vm);
     return VM_ERROR_NONE;
 }
 
-// Raw images without a header are loaded contiguously from address 0
+// Raw images without a header are loaded as code at address 0
 static int load_raw_image(VM *vm, const uint8_t *image, uint32_t size) {
-    if (size > CODE_SEGMENT_SIZE + DATA_SEGMENT_SIZE) {
-        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Raw program image exceeds code and data segments");
+    if (size > vm->memory_size - VM_STACK_SIZE) {
+        return vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Raw program image does not fit below the stack");
     }
 
-    memcpy(vm->memory + CODE_SEGMENT_BASE, image, size);
-    vm->entry_point = CODE_SEGMENT_BASE;
-    vm->code_end = CODE_SEGMENT_BASE + size;
-    vm->image_end = vm->code_end;
+    memcpy(vm->memory, image, size);
+    vm->entry_point = 0;
+    vm->code_end = size;
+    vm->image_end = size;
     cpu_reset(vm);
     return VM_ERROR_NONE;
 }
 
-// Load a program image from memory
 int vm_load_program(VM *vm, const uint8_t *program, uint32_t size) {
     if (!vm || !program) {
         return VM_ERROR_INVALID_ADDRESS;

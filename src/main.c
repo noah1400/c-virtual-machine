@@ -129,7 +129,7 @@ static void describe_address(const VM *vm, uint32_t address, char *out, size_t s
 }
 
 // Runs like vm_run, optionally printing each instruction on stderr before executing it and
-// counting how often each instruction in the first 64 KB executes
+// counting how often each instruction of the loaded code executes
 static int run(VM *vm, int trace, uint32_t *counts) {
     while (!vm->halted) {
         if (trace) {
@@ -149,7 +149,7 @@ static int run(VM *vm, int trace, uint32_t *counts) {
         if (result != VM_ERROR_NONE) {
             return result;
         }
-        if (counts && vm->error_pc < VM_ADDRESS_SPACE_SIZE) {
+        if (counts && vm->error_pc < vm->code_end) {
             counts[vm->error_pc / 4]++;
         }
     }
@@ -172,14 +172,15 @@ static int compare_entries(const void *a, const void *b) {
 // Sums the counts under the closest preceding label, or per address without debug information
 static void report_profile(const VM *vm, const uint32_t *counts) {
     enum { SHOWN = 15 };
-    ProfileEntry *entries = calloc(VM_ADDRESS_SPACE_SIZE / 4, sizeof(ProfileEntry));
+    uint32_t slots = (vm->code_end + 3) / 4;
+    ProfileEntry *entries = calloc(slots ? slots : 1, sizeof(ProfileEntry));
     size_t used = 0;
     uint64_t total = 0;
 
     if (!entries) {
         return;
     }
-    for (uint32_t i = 0; i < VM_ADDRESS_SPACE_SIZE / 4; i++) {
+    for (uint32_t i = 0; i < slots; i++) {
         if (counts[i] == 0) {
             continue;
         }
@@ -243,7 +244,7 @@ int main(int argc, char *argv[]) {
                 vm.memory_size / 1024, vm.registers[R3_PC], vm.debug_info ? vm.debug_info->symbol_count : 0);
     }
 
-    uint32_t *counts = opts.profile && !opts.debug ? calloc(VM_ADDRESS_SPACE_SIZE / 4, sizeof(uint32_t)) : NULL;
+    uint32_t *counts = opts.profile && !opts.debug ? calloc(vm.code_end / 4 + 1, sizeof(uint32_t)) : NULL;
     int result = opts.debug ? debugger_run(&vm) : run(&vm, opts.trace, counts);
     fflush(stdout);
 

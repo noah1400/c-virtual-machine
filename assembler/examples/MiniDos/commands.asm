@@ -58,29 +58,35 @@ do_time_cmd:
     JMP parse_cmd_done
     
 do_mem_cmd:
-    ; Get memory information
+    ; Total memory in R0, free heap in R6 and the largest free block in R7
     SYSCALL #23
+    PUSH R7
+    PUSH R6
     PUSH R0
-    
-    ; Print total memory
+
     LOAD R0, mem_total_msg
+    CALL print_bytes
+    LOAD R0, mem_free_msg
+    CALL print_bytes
+    LOAD R0, mem_largest_msg
+    CALL print_bytes
+
+    ; CPUID function 2 reports the stack size in R6
+    LOAD R0, #2
+    CPUID
+    PUSH R6
+    LOAD R0, mem_stack_msg
+    CALL print_bytes
+    JMP parse_cmd_done
+
+; Prints the label in R0 followed by the byte count on the stack, which it removes
+print_bytes:
     SYSCALL #2
-    POP R0
+    LOAD R0, [SP+4]
     SYSCALL #1
     LOAD R0, bytes_suffix
     SYSCALL #2
-    
-    ; Print memory layout
-    LOAD R0, mem_code_msg
-    SYSCALL #2
-    LOAD R0, mem_data_msg
-    SYSCALL #2
-    LOAD R0, mem_stack_msg
-    SYSCALL #2
-    LOAD R0, mem_heap_msg
-    SYSCALL #2
-    
-    JMP parse_cmd_done
+    RET #4
     
 do_ver_cmd:
     ; Show version

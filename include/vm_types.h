@@ -25,22 +25,11 @@
 #define R14     14 // General-purpose register
 #define R15_LR  15 // Link register - return address storage
 
-// Memory segment base addresses
-#define CODE_SEGMENT_BASE   0x0000
-#define CODE_SEGMENT_SIZE   0x4000
-#define DATA_SEGMENT_BASE   0x4000
-#define DATA_SEGMENT_SIZE   0x4000
-#define STACK_SEGMENT_BASE  0x8000
-#define STACK_SEGMENT_SIZE  0x4000
-#define HEAP_SEGMENT_BASE   0xC000
-#define HEAP_SEGMENT_SIZE   0x4000
-#define VM_ADDRESS_SPACE_SIZE 0x10000u
-
-// The stack occupies the top of memory and grows down; the heap lies between the program and the stack
+// Code starts at 0 with data on the next page; the heap lies between the program and the stack,
+// which occupies the top of memory and grows down
+#define VM_PAGE_SIZE 0x1000u
 #define VM_STACK_SIZE 0x10000u
 #define VM_MIN_MEMORY_SIZE (2 * VM_STACK_SIZE)
-
-// Interrupt vector table: 256 handler addresses of 4 bytes each
 
 #define VM_RNG_DEFAULT_SEED     0x12345678
 

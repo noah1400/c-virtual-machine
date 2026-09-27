@@ -184,8 +184,7 @@ int disassemble_file(const char *filename) {
     }
 
     // Raw images are plain code loaded at the start of the code segment
-    Vm32Image bin = { .code_base = CODE_SEGMENT_BASE, .code_size = size, .entry = CODE_SEGMENT_BASE,
-                      .code = buffer };
+    Vm32Image bin = { .code_size = size, .code = buffer };
     int raw = !vm32_is_image(buffer, size);
     problem = raw ? NULL : vm32_parse(buffer, size, &bin);
     if (problem) {
@@ -202,8 +201,8 @@ int disassemble_file(const char *filename) {
         printf("VM32 binary v%u.%u\n", bin.version_major, bin.version_minor);
     }
     printf("  Entry point:  0x%04X\n", bin.entry);
-    printf("  Code segment: 0x%04X, %u bytes\n", bin.code_base, bin.code_size);
-    printf("  Data segment: 0x%04X, %u bytes\n", bin.data_base, bin.data_size);
+    printf("  Code:         0x%04X, %u bytes\n", bin.code_base, bin.code_size);
+    printf("  Data:         0x%04X, %u bytes\n", bin.data_base, bin.data_size);
     printf("  Symbol table: %u bytes", bin.symbol_size);
     if (info) {
         printf(" (%u symbols, %u source lines)", info->symbol_count, info->source_line_count);

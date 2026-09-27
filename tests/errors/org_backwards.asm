@@ -1,4 +1,4 @@
-; expect-error: before the current address 0x0010
+; expect-error: before its current offset 0x10
 .text
     .org 0x10
     .org 0x8

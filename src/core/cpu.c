@@ -155,11 +155,9 @@ void cpu_disable_interrupts(VM *vm) {
     vm->registers[R4_SR] &= ~(uint32_t)INT_FLAG;
 }
 
-// Copies a NUL-terminated run of at least three printable characters in the data or heap segment
+// Copies a NUL-terminated run of at least three printable characters found after the code
 static int describe_string(const VM *vm, uint32_t address, char *out, size_t size) {
-    int in_data = address >= DATA_SEGMENT_BASE && address < DATA_SEGMENT_BASE + DATA_SEGMENT_SIZE;
-    int in_heap = address >= HEAP_SEGMENT_BASE && address < HEAP_SEGMENT_BASE + HEAP_SEGMENT_SIZE;
-    if (!in_data && !in_heap) {
+    if (address < vm->code_end || address >= vm->memory_size) {
         return 0;
     }
 

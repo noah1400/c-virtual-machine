@@ -1,4 +1,4 @@
-; data.asm - Data segment definitions for MiniDOS
+; data.asm - Data definitions for MiniDOS
 ; Contains all string constants and buffers
 
 .data
@@ -38,14 +38,12 @@ pause_text:
     .asciiz "Press any key to continue..."
 mem_total_msg:
     .asciiz "Total memory: "
-mem_code_msg:
-    .asciiz "Code segment: 0x0000-0x3FFF (16KB)\n"
-mem_data_msg:
-    .asciiz "Data segment: 0x4000-0x7FFF (16KB)\n"
+mem_free_msg:
+    .asciiz "Free heap: "
+mem_largest_msg:
+    .asciiz "Largest free block: "
 mem_stack_msg:
-    .asciiz "Stack segment: 0x8000-0xBFFF (16KB)\n"
-mem_heap_msg:
-    .asciiz "Heap segment: 0xC000-0xFFFF (16KB)\n"
+    .asciiz "Stack size: "
 bytes_suffix:
     .asciiz " bytes\n"
 kb_suffix:

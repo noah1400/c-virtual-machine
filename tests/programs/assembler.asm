@@ -44,7 +44,7 @@ second:
     CALL print_int
     LOADB R8, [filled+1]
     CALL print_hex
-    LOAD R8, #after_org
+    LOAD R8, #after_org - included_text
     CALL print_hex
     LOAD R8, [table+4]
     CALL print_int
@@ -68,6 +68,6 @@ strings:
 aligned:
 filled:
     .space 3, 0x7E
-    .org 0x4100
+    .org 0x100
 after_org:
     .word 0

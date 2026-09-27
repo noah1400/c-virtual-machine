@@ -11,7 +11,7 @@ const char *vm32_parse(const uint8_t *image, uint32_t size, Vm32Image *out) {
     if (!vm32_is_image(image, size)) {
         return "Not a VM32 binary";
     }
-    if (size < VM32_MIN_HEADER_SIZE) {
+    if (size < VM32_HEADER_SIZE) {
         return "Truncated VM32 header";
     }
 
@@ -27,10 +27,10 @@ const char *vm32_parse(const uint8_t *image, uint32_t size, Vm32Image *out) {
     if (out->version_major != VM32_VERSION_MAJOR) {
         return "Unsupported VM32 format version";
     }
-    if (out->header_size < VM32_MIN_HEADER_SIZE || out->header_size > size) {
+    if (out->header_size < VM32_HEADER_SIZE || out->header_size > size) {
         return "Invalid header size in program file";
     }
-    out->entry = out->header_size >= VM32_HEADER_SIZE ? read_le32(image + 32) : out->code_base;
+    out->entry = read_le32(image + 32);
     if ((uint64_t)out->header_size + out->code_size + out->data_size + out->symbol_size > size) {
         return "Segment sizes exceed program file size";
     }

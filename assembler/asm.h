@@ -10,6 +10,7 @@
 #define ASM_MAX_DEFINES       32
 #define ASM_MAX_CONDITIONS    32
 #define ASM_MAX_ERRORS        50
+#define ASM_MAX_SECTION_SIZE  (16u * 1024 * 1024)
 
 typedef enum { TOK_END, TOK_IDENT, TOK_NUMBER, TOK_STRING, TOK_PUNCT } TokenKind;
 
@@ -82,10 +83,10 @@ enum { PASS_DEFINE = 1, PASS_LAYOUT, PASS_EMIT };
 typedef struct {
     const char *name;
     uint32_t base;
-    uint32_t limit;     // one past the last usable address
     uint32_t pc;
     uint32_t end;       // one past the highest address written
-    uint8_t *bytes;
+    uint8_t *bytes;     // contents, allocated for the final pass
+    uint32_t allocated;
 } Section;
 
 // What each source line produced; the final pass fills in the addresses

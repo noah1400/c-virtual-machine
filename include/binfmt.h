@@ -3,12 +3,10 @@
 
 #include <stdint.h>
 
-// VM32 binary layout: header, code bytes, data bytes, symbol table. Version 1.0 headers are
-// 32 bytes; version 1.1 appends the entry point address.
+// VM32 binary layout: header, code bytes, data bytes, symbol table
 #define VM32_MAGIC           "VM32"
-#define VM32_VERSION_MAJOR   1
-#define VM32_VERSION_MINOR   1
-#define VM32_MIN_HEADER_SIZE 32
+#define VM32_VERSION_MAJOR   2
+#define VM32_VERSION_MINOR   0
 #define VM32_HEADER_SIZE     36
 #define VM32_MAX_FILE_SIZE   (16u * 1024 * 1024)
 

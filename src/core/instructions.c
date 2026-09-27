@@ -385,12 +385,10 @@ static void execute_cpuid(VM *vm) {
             vm->registers[R7] = 0;
             break;
         case 2:
-            // Memory size, segment bases / 256 and segment sizes in KB, one byte each
+            // Memory size, page size and default stack size
             vm->registers[R0_ACC] = vm->memory_size;
-            vm->registers[R5] = ((CODE_SEGMENT_BASE >> 8) << 24) | ((DATA_SEGMENT_BASE >> 8) << 16) |
-                                ((STACK_SEGMENT_BASE >> 8) << 8) | (HEAP_SEGMENT_BASE >> 8);
-            vm->registers[R6] = ((CODE_SEGMENT_SIZE / 1024) << 24) | ((DATA_SEGMENT_SIZE / 1024) << 16) |
-                                ((STACK_SEGMENT_SIZE / 1024) << 8) | (HEAP_SEGMENT_SIZE / 1024);
+            vm->registers[R5] = VM_PAGE_SIZE;
+            vm->registers[R6] = VM_STACK_SIZE;
             vm->registers[R7] = 0;
             break;
         case 3:

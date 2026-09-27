@@ -1,4 +1,4 @@
-; expect-error: .text section overflows its 16384 byte segment
+; expect-error: .text section exceeds 16777216 bytes
 .text
-    .space 0x4000
+    .space 0x1000000
     HALT
