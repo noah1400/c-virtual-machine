@@ -1,0 +1,31 @@
+// The privileged parts of the machine: ports, interrupts and control registers. The functions are
+// written in assembly, in cpu.asm next to this file, which comes along with any program that imports it.
+
+// Numbers of the control registers
+pub const IVTB = 0;
+pub const KSP = 1;
+pub const PTB = 2;
+pub const FADDR = 3;
+pub const ECODE = 4;
+pub const SLO = 5;
+pub const SHI = 6;
+pub const HEAPLO = 7;
+pub const HEAPHI = 8;
+
+pub extern fn read_port(port: int) u32;
+pub extern fn write_port(port: int, value: u32);
+
+// Delivering device interrupts starts and stops with these; software interrupts always arrive
+pub extern fn enable_interrupts();
+pub extern fn disable_interrupts();
+
+// Makes handler, the address of an interrupt fn, the one for vector. The first call sets up a vector
+// table if the program has none.
+pub extern fn set_handler(vector: int, handler: u32);
+
+// Registers are numbered as the constants above; others read as 0 and ignore writes
+pub extern fn read_control(register: int) u32;
+pub extern fn write_control(register: int, value: u32);
+
+// Stops the machine
+pub extern fn halt();

@@ -1,0 +1,5 @@
+OK
+display columns: 80
+timer ticks: 3, the loop kept going: true
+a vector table exists: true, the stack ends at 1048576, unknown registers read 0
+FADDR written and read back: 1234

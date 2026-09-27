@@ -1,0 +1,39 @@
+// std/cpu: ports, a timer interrupt handled by an interrupt fn, and control registers
+import "std/cpu";
+
+const TIMER_INTERVAL = 0x40;
+const TIMER_VECTOR = 0x41;
+const CONSOLE = 0x00;
+const DISPLAY_COLUMNS = 0x52;
+
+var ticks: int;
+
+interrupt fn on_timer() {
+    ticks += 1;
+}
+
+fn main() {
+    cpu.write_port(CONSOLE, 'O');
+    cpu.write_port(CONSOLE, 'K');
+    cpu.write_port(CONSOLE, '\n');
+    print("display columns: ", cpu.read_port(DISPLAY_COLUMNS), "\n");
+
+    cpu.set_handler(0x20, on_timer as u32);
+    cpu.write_port(TIMER_VECTOR, 0x20);
+    cpu.write_port(TIMER_INTERVAL, 500);
+    cpu.enable_interrupts();
+    var spins = 0;
+    while (ticks < 3) {
+        spins += 1;
+    }
+    cpu.disable_interrupts();
+    cpu.write_port(TIMER_INTERVAL, 0);
+    print("timer ticks: ", ticks, ", the loop kept going: ", spins > 100, "\n");
+
+    print("a vector table exists: ", cpu.read_control(cpu.IVTB) != 0, ", the stack ends at ", cpu.read_control(cpu.SHI),
+          ", unknown registers read ", cpu.read_control(99), "\n");
+    cpu.write_control(cpu.FADDR, 1234);
+    print("FADDR written and read back: ", cpu.read_control(cpu.FADDR), "\n");
+    cpu.halt();
+    print("not reached\n");
+}
