@@ -963,11 +963,70 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
     return 0;
 }
 
+fn is_bound(e: *ast.Expr) bool {
+    return e == null || simple_operand(e).ptr != null;
+}
+
 // Leaves the pointer in R0 and the length in R5
 fn gen_slice(g: *Gen, e: *ast.Expr) {
     var t = e.left.type;
     var failed = label(g);
     var ok = label(g);
+
+    // An array or slice at a fixed place with bounds that need no code takes them as operands
+    var at: []u8;
+    if (t.kind != ast.TypeKind.POINTER && is_bound(e.right) && is_bound(e.third)) {
+        at = fixed_place(g, e.left);
+    }
+    if (at.ptr != null) {
+        var length = ast.cat([][]u8 { "[", at, "+4]" });
+        if (t.kind == ast.TypeKind.ARRAY) {
+            length = ast.cat([][]u8 { "#", ast.number(t.length) });
+        }
+        var low = "#0";
+        if (e.right != null) {
+            low = simple_operand(e.right);
+        }
+        if (e.third != null) {
+            set_register(g, "R0", simple_operand(e.third));
+        } else {
+            set_register(g, "R0", length);
+        }
+        var from_start = ast.same(low, "#0");
+        if (e.third != null && !from_start) {
+            emitf(g, "    CMP R0, %s\n    JA .L%d\n    CMP R0, %s\n    JAE .L%d\n", [][]u8 { length, low },
+                []int { failed, ok });
+        } else if (e.third != null) {
+            emitf(g, "    CMP R0, %s\n    JBE .L%d\n", [][]u8 { length }, []int { ok });
+        } else if (!from_start) {
+            emitf(g, "    CMP R0, %s\n    JAE .L%d\n", [][]u8 { low }, []int { ok });
+        }
+        if (e.third != null || !from_start) {
+            emitf(g, ".L%d:\n    PUSH %s\n    PUSH R0\n    PUSH %s\n    CALL rt.slice_error\n.L%d:\n",
+                [][]u8 { length, low }, []int { failed, ok });
+        }
+        emit(g, "    MOVE R5, R0\n");
+        if (t.kind == ast.TypeKind.ARRAY) {
+            load_from(g, t, at);
+        } else {
+            emits(g, "    LOAD R0, [%s]\n", [][]u8 { at });
+        }
+        if (from_start) {
+            return;
+        }
+        emits(g, "    SUB R5, %s\n", [][]u8 { low });
+        var size = t.base.size;
+        if (e.right.is_const) {
+            emitd(g, "    ADD R0, #%d\n", []int { wide.low(e.right.value) * size });
+        } else if (size == 1) {
+            emits(g, "    ADD R0, %s\n", [][]u8 { low });
+        } else {
+            set_register(g, "R7", low);
+            scale(g, size, "R7");
+            emit(g, "    ADD R0, R7\n");
+        }
+        return;
+    }
 
     if (t.kind == ast.TypeKind.ARRAY) {
         gen_addr(g, e.left);
@@ -1050,6 +1109,47 @@ fn gen_new(g: *Gen, e: *ast.Expr) {
     emit(g, "    PUSH R0\n");
     scale(g, size, "R0");
     emit(g, "    PUSH R0\n    CALL rt.alloc\n    ADD SP, #4\n    POP R5\n");
+}
+
+// A place at a fixed offset from a pointer in a register
+fn in_register(e: *ast.Expr) bool {
+    switch (e.kind) {
+        case ast.ExprKind.FIELD {
+            if (e.field == null) {
+                return false;
+            }
+            if (e.left.type.kind == ast.TypeKind.POINTER) {
+                return register_of(e.left).ptr != null;
+            }
+            return in_register(e.left);
+        }
+        case ast.ExprKind.UNARY {
+            return e.op == ast.TokenKind.STAR && register_of(e.left).ptr != null;
+        }
+        case ast.ExprKind.LEN, ast.ExprKind.PTR {
+            return in_register(e.left);
+        }
+    }
+    return false;
+}
+
+// Where instructions can address e without code: a variable, or a place through a pointer in a register
+// once the pointer is checked, which this emits. Nothing when code has to compute the address.
+fn fixed_place(g: *Gen, e: *ast.Expr) []u8 {
+    if (!in_register(e)) {
+        return place(e);
+    }
+    var x = e;
+    var extra = 0;
+    if (e.kind == ast.ExprKind.LEN || e.kind == ast.ExprKind.PTR) {
+        x = e.left;
+        if (e.kind == ast.ExprKind.LEN) {
+            extra = 4;
+        }
+    }
+    var base: []u8;
+    var offset = gen_address(g, x, &base);
+    return relative(base, offset + extra);
 }
 
 // Leaves the pointer x in a register, R0 unless a local holds it, and checks it
