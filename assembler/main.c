@@ -12,6 +12,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -D NAME[=VALUE]  Define a constant, 1 unless a value is given\n");
     fprintf(out, "  -s        Print the symbol table\n");
     fprintf(out, "  -S        Leave out debug information\n");
+    fprintf(out, "  -W        Warn when a call or syscall overwrites a register value that is read afterwards\n");
     fprintf(out, "  -h        Show this help\n");
 }
 
@@ -30,7 +31,7 @@ static char *default_output(const char *input) {
 
 int main(int argc, char *argv[]) {
     const char *input = NULL, *output = NULL, *listing = NULL;
-    int show_symbols = 0, with_debug = 1;
+    int show_symbols = 0, with_debug = 1, check = 0;
     Assembler as;
 
     asm_init(&as);
@@ -69,6 +70,8 @@ int main(int argc, char *argv[]) {
             show_symbols = 1;
         } else if (strcmp(arg, "-S") == 0) {
             with_debug = 0;
+        } else if (strcmp(arg, "-W") == 0) {
+            check = 1;
         } else if (strcmp(arg, "-h") == 0) {
             print_usage(stdout, argv[0]);
             return 0;
@@ -96,6 +99,9 @@ int main(int argc, char *argv[]) {
 
     if (ok && show_symbols) {
         output_symbols(&as);
+    }
+    if (ok && check) {
+        check_registers(&as);
     }
 
     free(output_path);

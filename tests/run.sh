@@ -2,11 +2,11 @@
 # Usage: tests/run.sh [-u] [NAME...]
 # Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble, or only the
 # tests named. Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:",
-# "; expect-error:", "; asm-args:", "; vm-args:" and "; program-args:" lines; "; disk-sectors:" attaches
-# an empty disk image, NAME.x holds debugger commands, NAME.keys a key script and NAME.err, if present,
-# the whole expected stderr.
-# -u rewrites NAME.out and an existing NAME.err from the actual output of every program that exits as
-# expected.
+# "; expect-error:", "; expect-warning:", "; asm-args:", "; vm-args:" and "; program-args:" lines.
+# Programs are assembled with -W, and every warning needs an "; expect-warning:" line of its own.
+# "; disk-sectors:" attaches an empty disk image, NAME.x holds debugger commands, NAME.keys a key script
+# and NAME.err, if present, the whole expected stderr. -u rewrites NAME.out and an existing NAME.err
+# from the actual output of every program that exits as expected.
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 vm="$root/vm"
@@ -47,8 +47,20 @@ for src in "$root"/tests/programs/*.asm; do
 
     # Assemble with a relative path so debug info does not depend on the checkout location
     asm_args=$(expectation "$src" asm-args)
-    if ! (cd "$root" && "$asm" $asm_args "tests/programs/$name.asm" -o "$tmp/$name.bin" 2> "$tmp/$name.log"); then
+    if ! (cd "$root" && "$asm" -W $asm_args "tests/programs/$name.asm" -o "$tmp/$name.bin" 2> "$tmp/$name.log"); then
         fail "$name" "does not assemble: $(head -n 1 "$tmp/$name.log")"
+        continue
+    fi
+    warnings=$(grep -c ": warning: " "$tmp/$name.log")
+    expected_warnings=$(sed -n "s/^; expect-warning: //p" "$src")
+    missing=$(printf '%s\n' "$expected_warnings" | while IFS= read -r warning; do
+        [ -z "$warning" ] || grep -qF -- "$warning" "$tmp/$name.log" || echo "$warning"
+    done)
+    if [ -n "$missing" ]; then
+        fail "$name" "no warning '$(printf '%s\n' "$missing" | head -n 1)'"
+        continue
+    elif [ "$warnings" -ne "$(printf '%s' "$expected_warnings" | grep -c .)" ]; then
+        fail "$name" "unexpected warning: $(grep ": warning: " "$tmp/$name.log" | head -n 1)"
         continue
     fi
 

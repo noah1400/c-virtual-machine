@@ -759,9 +759,19 @@ Includes and macro definitions are processed even inside a false block. The incl
 | `-D NAME[=VALUE]` | Define a constant, 1 unless a value is given |
 | `-s` | Print the symbol table |
 | `-S` | Leave out debug information |
+| `-W` | Warn when a call or syscall overwrites a register value that is read afterwards |
 | `-h` | Show help |
 
 `-I` and `-D` also accept their value attached, as in `-DNAME`.
+
+`-W` follows values through the registers. For each routine that is called directly, it works out which registers the routine reads, which it changes, and which of those it returns: the ones it changes on every path without only passing them on to another call, and the ones it reads and changes. It then follows the code from every label and warns where a register is read after a call or syscall overwrote a value that nothing had read:
+
+```console
+$ ./vmasm -W minidos.asm
+disk.asm:80: warning: R6 set at line 74 is overwritten by CALL load_directory at line 77 before it is read here
+```
+
+A value counts as overwritten when the call changes the register without returning it, or when the program set the register itself and the call returns a result there, as every syscall does with its status in R5. Routines that jump through registers or move SP other than by constants are taken to read and change everything, so they cause no warnings. The check is a heuristic: it can miss mistakes, and it warns about a register that a routine returns on only some paths.
 
 By default, a binary includes the symbols and source lines that the disassembler, the debugger and fault reports use. Errors are reported as `file:line: error: message`, and vmasm then exits with status 1.
 
@@ -938,6 +948,7 @@ Comment lines in a test adjust the checks:
 | `; expect-exit: N` | Expected exit status (default 0) |
 | `; expect-stderr: text` | Text that must appear on stderr |
 | `; expect-error: text` | Expected assembler error (only in `tests/errors`) |
+| `; expect-warning: text` | A warning of `vmasm -W` that has to appear. Programs are assembled with `-W`, and every warning needs such a line |
 | `; asm-args: ...` | Extra arguments for the assembler |
 | `; vm-args: ...` | Extra options for the VM |
 | `; program-args: ...` | Arguments passed to the program |

@@ -178,6 +178,9 @@ void asm_free(Assembler *as);
 int asm_assemble(Assembler *as, const char *path);
 void asm_error(Assembler *as, const char *format, ...);
 
+// check.c
+int check_registers(Assembler *as);
+
 // output.c
 int output_binary(Assembler *as, const char *path, int with_debug);
 int output_listing(Assembler *as, const char *path);
