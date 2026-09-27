@@ -5,12 +5,15 @@
 # "; expect-error:", "; expect-warning:", "; asm-args:", "; vm-args:" and "; program-args:" lines.
 # Programs are assembled with -W, and every warning needs an "; expect-warning:" line of its own.
 # "; disk-sectors:" attaches an empty disk image, NAME.x holds debugger commands, NAME.keys a key script
-# and NAME.err, if present, the whole expected stderr. -u rewrites NAME.out and an existing NAME.err
-# from the actual output of every program that exits as expected.
+# and NAME.err, if present, the whole expected stderr. "; link:" names modules in tests/programs to
+# assemble with -c and link with the program, and "; expect-link-error:" a message the link must fail
+# with. -u rewrites NAME.out and an existing NAME.err from the actual output of every program that
+# exits as expected.
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 vm="$root/vm"
 asm="$root/vmasm"
+ld="$root/vmld"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 passed=0
@@ -47,10 +50,26 @@ for src in "$root"/tests/programs/*.asm; do
 
     # Assemble with a relative path so debug info does not depend on the checkout location
     asm_args=$(expectation "$src" asm-args)
-    if ! (cd "$root" && "$asm" -W $asm_args "tests/programs/$name.asm" -o "$tmp/$name.bin" 2> "$tmp/$name.log"); then
+    modules=$(expectation "$src" link)
+    link_error=$(expectation "$src" expect-link-error)
+    output="$tmp/$name.bin"
+    if [ -n "$modules$link_error" ]; then
+        asm_args="$asm_args -c"
+        output="$tmp/$name.o"
+    fi
+    if ! (cd "$root" && "$asm" -W $asm_args "tests/programs/$name.asm" -o "$output" 2> "$tmp/$name.log"); then
         fail "$name" "does not assemble: $(head -n 1 "$tmp/$name.log")"
         continue
     fi
+    objects="$output"
+    for module in $modules; do
+        object="$tmp/$name.$(basename "$module" .asm).o"
+        objects="$objects $object"
+        if ! (cd "$root" && "$asm" -W -c "tests/programs/$module" -o "$object" 2>> "$tmp/$name.log"); then
+            fail "$name" "$module does not assemble: $(tail -n 1 "$tmp/$name.log")"
+            continue 2
+        fi
+    done
     warnings=$(grep -c ": warning: " "$tmp/$name.log")
     expected_warnings=$(sed -n "s/^; expect-warning: //p" "$src")
     missing=$(printf '%s\n' "$expected_warnings" | while IFS= read -r warning; do
@@ -62,6 +81,21 @@ for src in "$root"/tests/programs/*.asm; do
     elif [ "$warnings" -ne "$(printf '%s' "$expected_warnings" | grep -c .)" ]; then
         fail "$name" "unexpected warning: $(grep ": warning: " "$tmp/$name.log" | head -n 1)"
         continue
+    fi
+
+    if [ -n "$modules$link_error" ]; then
+        if (cd "$root" && "$ld" -o "$tmp/$name.bin" $objects 2> "$tmp/$name.link"); then
+            if [ -n "$link_error" ]; then
+                fail "$name" "linked although it should not"
+                continue
+            fi
+        elif [ -n "$link_error" ] && grep -qF -- "$link_error" "$tmp/$name.link"; then
+            passed=$((passed + 1))
+            continue
+        else
+            fail "$name" "does not link: $(head -n 1 "$tmp/$name.link")"
+            continue
+        fi
     fi
 
     input=/dev/null
