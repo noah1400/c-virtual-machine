@@ -13,8 +13,9 @@ LD_SRC  := $(wildcard linker/*.c src/common/*.c)
 LD_OBJ  := $(LD_SRC:%.c=$(BUILD)/%.o)
 VMC_SRC := $(wildcard ore/bootstrap/*.c)
 VMC_OBJ := $(VMC_SRC:%.c=$(BUILD)/%.o)
+ORE_SRC := $(wildcard ore/compiler/*.ore ore/lib/*.asm ore/lib/std/*)
 
-all: vm vmasm vmld vmc0
+all: vm vmasm vmld vmc0 vmc.bin
 
 vm: $(VM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ -lm
@@ -28,15 +29,19 @@ vmld: $(LD_OBJ)
 vmc0: $(VMC_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^
 
+# The Ore compiler written in Ore, which the vmc script runs on the VM
+vmc.bin: vmc0 vmasm $(ORE_SRC)
+	./vmc0 ore/compiler/vmc.ore -o $@
+
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) -c -o $@ $<
 
-test: vm vmasm vmld vmc0
+test: vm vmasm vmld vmc0 vmc.bin
 	sh tests/run.sh $(T)
 
 clean:
-	rm -rf $(BUILD) vm vmasm vmld vmc0
+	rm -rf $(BUILD) vm vmasm vmld vmc0 vmc.bin
 
 -include $(VM_OBJ:.o=.d) $(ASM_OBJ:.o=.d) $(LD_OBJ:.o=.d) $(VMC_OBJ:.o=.d)
 
