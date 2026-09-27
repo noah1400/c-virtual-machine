@@ -1,9 +1,11 @@
 #!/bin/sh
 # Usage: tests/run.sh [-u] [NAME...]
 # Runs tests/programs/*.asm and ore/tests/*.ore on the VM and checks that tests/errors/*.asm fail to
-# assemble and ore/tests/errors/*.ore fail to compile, or only the tests named. vmc, the Ore compiler
-# written in Ore, has to write the same assembly and errors as vmc0 for every Ore test, and the test
-# named vmc checks that it compiles itself into vmc.bin. Expectations come from NAME.out,
+# assemble and ore/tests/errors/*.ore fail to compile, or only the tests named. Ore tests are compiled
+# with vmc, the Ore compiler written in Ore, and with vmc0, and both builds have to meet the
+# expectations; the errors of an Ore program are compared by message and Ore line. vmc1.bin, the build
+# of vmc that vmc0 made, has to write the same assembly as vmc, all three compilers the same errors, and
+# the test named vmc checks that vmc compiles itself into vmc.bin. Expectations come from NAME.out,
 # NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:", "; expect-warning:",
 # "; asm-args:", "; vm-args:" and "; program-args:" lines, written with // in Ore, where "// vmc-args:"
 # gives vmc0 more arguments.
@@ -49,59 +51,71 @@ expectation() {
     sed -n -e "s/^; $2: //p" -e "s|^// $2: ||p" "$1" | head -n 1
 }
 
-# Compiles with vmc0 and vmc, the Ore compiler written in Ore, which have to agree on the assembly they
-# write after its first line, which names the compiler, and on their errors. Leaves the status of vmc0
-# in $status and its errors in $tmp/NAME.log.
-same_as_vmc0() {
+# Compiles an Ore test with vmc into $tmp/NAME.asm, and with vmc1.bin and vmc0 as well, which have to
+# agree with it. Leaves the status of vmc in $status and its errors in $tmp/NAME.log.
+compile_ore() {
     name=$1
     shift
-    (cd "$root" && ./vmc0 -S "$@" -o "$tmp/$name.vmc0.asm" 2> "$tmp/$name.log")
+    (cd "$root" && "$vm" -m 262144 -S 8192 ./vmc.bin -S "$@" -o "$tmp/$name.asm" 2> "$tmp/$name.log")
     status=$?
-    (cd "$root" && ./vmc -S "$@" -o "$tmp/$name.vmc.asm" 2> "$tmp/$name.vmc.log")
-    vmc_status=$?
-    sed 's/^vmc: /vmc0: /' "$tmp/$name.vmc.log" > "$tmp/$name.vmc.err"
-    if [ "$vmc_status" -ne "$status" ] || ! cmp -s "$tmp/$name.log" "$tmp/$name.vmc.err"; then
-        fail "$name" "vmc disagrees with vmc0: $(head -n 1 "$tmp/$name.vmc.log")"
+    (cd "$root" && "$vm" -m 262144 -S 8192 ./vmc1.bin -S "$@" -o "$tmp/$name.stage1.asm" 2> "$tmp/$name.stage1.log")
+    stage1=$?
+    (cd "$root" && ./vmc0 -S "$@" -o "$tmp/$name.vmc0.asm" 2> "$tmp/$name.vmc0.log")
+    vmc0=$?
+    sed 's/^vmc0: /vmc: /' "$tmp/$name.vmc0.log" > "$tmp/$name.vmc0.err"
+    if [ "$stage1" -ne "$status" ] || ! cmp -s "$tmp/$name.log" "$tmp/$name.stage1.log"; then
+        fail "$name" "vmc1.bin disagrees with vmc: $(head -n 1 "$tmp/$name.stage1.log")"
         return 1
-    fi
-    if [ "$status" -eq 0 ]; then
-        tail -n +2 "$tmp/$name.vmc0.asm" > "$tmp/$name.expected.asm"
-        tail -n +2 "$tmp/$name.vmc.asm" > "$tmp/$name.actual.asm"
-        if ! cmp -s "$tmp/$name.expected.asm" "$tmp/$name.actual.asm"; then
-            fail "$name" "vmc writes other assembly than vmc0"
-            diff "$tmp/$name.expected.asm" "$tmp/$name.actual.asm" | head -n 10
-            return 1
-        fi
+    elif [ "$vmc0" -ne "$status" ] || ! cmp -s "$tmp/$name.log" "$tmp/$name.vmc0.err"; then
+        fail "$name" "vmc0 disagrees with vmc: $(head -n 1 "$tmp/$name.vmc0.log")"
+        return 1
+    elif [ "$status" -eq 0 ] && ! cmp -s "$tmp/$name.stage1.asm" "$tmp/$name.asm"; then
+        fail "$name" "vmc1.bin writes other assembly than vmc"
+        diff "$tmp/$name.stage1.asm" "$tmp/$name.asm" | head -n 10
+        return 1
     fi
 }
 
-# Runs $tmp/NAME.bin and compares what it does with the expectations of its source
-run_program() {
-    name=$1
-    base=$2
-    src=$3
+# Runs DIR/NAME.bin as the test asks, from DIR so the files it creates stay there, and leaves its exit
+# status in $status. The instruction limit turns a runaway program into a failure instead of a hang.
+execute() {
+    dir=$1
+    name=$2
+    base=$3
+    src=$4
     input=/dev/null
     [ -f "$base.in" ] && input="$base.in"
-    # Programs run inside the scratch directory so the files they create do not leak; the
-    # instruction limit turns a runaway program into a failure instead of a hang
     args=$(expectation "$src" vm-args)
     program_args=$(expectation "$src" program-args)
     if [ -f "$base.x" ]; then
-        cp "$base.x" "$tmp/$name.x"
+        cp "$base.x" "$dir/$name.x"
         args="$args -x $name.x"
     fi
     if [ -f "$base.keys" ]; then
-        cp "$base.keys" "$tmp/$name.keys"
+        cp "$base.keys" "$dir/$name.keys"
         args="$args -k $name.keys"
     fi
     sectors=$(expectation "$src" disk-sectors)
     if [ -n "$sectors" ]; then
-        dd if=/dev/zero of="$tmp/$name.img" bs=512 count="$sectors" 2> /dev/null
+        dd if=/dev/zero of="$dir/$name.img" bs=512 count="$sectors" 2> /dev/null
         args="$args -b $name.img"
     fi
-    (cd "$tmp" && "$vm" -n 10000000 $args "$name.bin" $program_args < "$input" > "$name.out" 2> "$name.err")
+    (cd "$dir" && "$vm" -n 10000000 $args "$name.bin" $program_args < "$input" > "$name.out" 2> "$name.err")
     status=$?
+}
 
+# Errors of Ore programs are compared by message and source line, since the code addresses, labels and
+# instructions around them depend on the compiler, and so do heap addresses, as the heap follows the code
+normalize() {
+    sed -E -e 's/0x[0-9A-F]+ <[^>]*> //' -e 's/(\.ore:[0-9]+): .*/\1/' -e 's/0x[0-9A-Fa-f]+/0x?/g' "$1"
+}
+
+# Compares the run in DIR with the expectations of its source, reporting a failure as NAME
+check_run() {
+    dir=$1
+    name=$2
+    base=$3
+    src=$4
     expected_status=$(expectation "$src" expect-exit)
     expected_stderr=$(expectation "$src" expect-stderr)
     expected_out="$base.out"
@@ -109,14 +123,46 @@ run_program() {
         expected_out="$tmp/empty"
         : > "$expected_out"
     fi
+    expected_err="$base.err"
+    actual_err="$dir/$(basename "$name" " (vmc0)").err"
+    if [ -f "$expected_err" ] && [ "${src%.ore}" != "$src" ]; then
+        normalize "$expected_err" > "$dir/expected.err"
+        normalize "$actual_err" > "$dir/actual.err"
+        expected_err="$dir/expected.err"
+        actual_err="$dir/actual.err"
+    fi
+    actual_out="$dir/$(basename "$name" " (vmc0)").out"
 
-    if [ "$update" -eq 1 ] && [ "$status" = "${expected_status:-0}" ] && ! cmp -s "$expected_out" "$tmp/$name.out"; then
+    if [ "$status" != "${expected_status:-0}" ]; then
+        fail "$name" "exit status $status, expected ${expected_status:-0}: $(head -n 1 "$actual_err")"
+    elif ! cmp -s "$expected_out" "$actual_out"; then
+        fail "$name" "unexpected output"
+        diff "$expected_out" "$actual_out" | cat -v | head -n 20
+    elif [ -n "$expected_stderr" ] && ! grep -qF -- "$expected_stderr" "$actual_err"; then
+        fail "$name" "stderr lacks '$expected_stderr': $(head -n 1 "$actual_err")"
+    elif [ -f "$base.err" ] && ! cmp -s "$expected_err" "$actual_err"; then
+        fail "$name" "unexpected stderr"
+        diff "$expected_err" "$actual_err" | cat -v | head -n 20
+    else
+        return 0
+    fi
+    return 1
+}
+
+# Runs $tmp/NAME.bin and compares what it does with the expectations of its source, which -u rewrites
+run_program() {
+    name=$1
+    base=$2
+    src=$3
+    execute "$tmp" "$name" "$base" "$src"
+    expected_status=$(expectation "$src" expect-exit)
+    if [ "$update" -eq 1 ] && [ "$status" = "${expected_status:-0}" ] && [ -f "$base.out" -o -s "$tmp/$name.out" ] &&
+        ! cmp -s "$base.out" "$tmp/$name.out"; then
         if [ -s "$tmp/$name.out" ]; then
             cp "$tmp/$name.out" "$base.out"
         else
             rm -f "$base.out"
         fi
-        expected_out="$tmp/$name.out"
         echo "updated $name.out"
     fi
     if [ "$update" -eq 1 ] && [ "$status" = "${expected_status:-0}" ] && [ -f "$base.err" ] &&
@@ -124,20 +170,7 @@ run_program() {
         cp "$tmp/$name.err" "$base.err"
         echo "updated $name.err"
     fi
-
-    if [ "$status" != "${expected_status:-0}" ]; then
-        fail "$name" "exit status $status, expected ${expected_status:-0}: $(head -n 1 "$tmp/$name.err")"
-    elif ! cmp -s "$expected_out" "$tmp/$name.out"; then
-        fail "$name" "unexpected output"
-        diff "$expected_out" "$tmp/$name.out" | cat -v | head -n 20
-    elif [ -n "$expected_stderr" ] && ! grep -qF -- "$expected_stderr" "$tmp/$name.err"; then
-        fail "$name" "stderr lacks '$expected_stderr': $(head -n 1 "$tmp/$name.err")"
-    elif [ -f "$base.err" ] && ! cmp -s "$base.err" "$tmp/$name.err"; then
-        fail "$name" "unexpected stderr"
-        diff "$base.err" "$tmp/$name.err" | cat -v | head -n 20
-    else
-        passed=$((passed + 1))
-    fi
+    check_run "$tmp" "$name" "$base" "$src"
 }
 
 for src in "$root"/tests/programs/*.asm; do
@@ -196,22 +229,33 @@ for src in "$root"/tests/programs/*.asm; do
         fi
     fi
 
-    run_program "$name" "$base" "$src"
+    run_program "$name" "$base" "$src" && passed=$((passed + 1))
 done
 
+mkdir -p "$tmp/vmc0"
 for src in "$root"/ore/tests/*.ore; do
     [ -e "$src" ] || continue
     name=$(basename "$src" .ore)
     base=${src%.ore}
     wanted "$name" || continue
 
-    if ! (cd "$root" && ./vmc0 $(expectation "$src" vmc-args) "ore/tests/$name.ore" -o "$tmp/$name.bin" \
-        2> "$tmp/$name.log"); then
+    compile_ore "$name" $(expectation "$src" vmc-args) "ore/tests/$name.ore" || continue
+    if [ "$status" -ne 0 ]; then
         fail "$name" "does not compile: $(head -n 1 "$tmp/$name.log")"
         continue
     fi
-    same_as_vmc0 "$name" $(expectation "$src" vmc-args) "ore/tests/$name.ore" || continue
-    run_program "$name" "$base" "$src"
+    if ! (cd "$root" && "$asm" -I ./ore/lib -I . "$tmp/$name.asm" -o "$tmp/$name.bin" 2> "$tmp/$name.log" &&
+        "$asm" -I ./ore/lib -I . "$tmp/$name.vmc0.asm" -o "$tmp/vmc0/$name.bin" 2> "$tmp/$name.log"); then
+        fail "$name" "does not assemble: $(head -n 1 "$tmp/$name.log")"
+        continue
+    fi
+    run_program "$name" "$base" "$src" || continue
+    # A debugger script shows the code itself, which only the build of vmc matches
+    if [ ! -f "$base.x" ]; then
+        execute "$tmp/vmc0" "$name" "$base" "$src"
+        check_run "$tmp/vmc0" "$name (vmc0)" "$base" "$src" || continue
+    fi
+    passed=$((passed + 1))
 done
 
 for src in "$root"/tests/errors/*.asm; do
@@ -236,7 +280,7 @@ for src in "$root"/ore/tests/errors/*.ore; do
     wanted "$name" || continue
     expected=$(expectation "$src" expect-error)
 
-    same_as_vmc0 "$name" "ore/tests/errors/$name.ore" || continue
+    compile_ore "$name" "ore/tests/errors/$name.ore" || continue
     if [ "$status" -eq 0 ]; then
         fail "$name" "compiled although it should not"
     elif ! grep -qF -- "$expected" "$tmp/$name.log"; then
@@ -246,12 +290,12 @@ for src in "$root"/ore/tests/errors/*.ore; do
     fi
 done
 
-# vmc compiles itself into the very binary that vmc0 made of it
+# vmc compiles itself into itself
 if wanted vmc; then
     if ! (cd "$root" && ./vmc ore/compiler/vmc.ore -o "$tmp/vmc.bin" 2> "$tmp/vmc.log"); then
         fail vmc "does not compile itself: $(head -n 1 "$tmp/vmc.log")"
     elif ! cmp -s "$root/vmc.bin" "$tmp/vmc.bin"; then
-        fail vmc "compiles itself into another binary than vmc0 does"
+        fail vmc "compiles itself into another binary than vmc.bin"
     else
         passed=$((passed + 1))
     fi

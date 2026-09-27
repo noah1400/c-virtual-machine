@@ -29,9 +29,15 @@ vmld: $(LD_OBJ)
 vmc0: $(VMC_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^
 
-# The Ore compiler written in Ore, which the vmc script runs on the VM
-vmc.bin: vmc0 vmasm $(ORE_SRC)
+# The Ore compiler written in Ore: vmc0 compiles it into vmc1.bin, which compiles it again into vmc.bin,
+# the compiler that the vmc script runs on the VM
+vmc1.bin: vmc0 vmasm $(ORE_SRC)
 	./vmc0 ore/compiler/vmc.ore -o $@
+
+vmc.bin: vmc1.bin vm vmasm
+	./vm -m 262144 -S 8192 ./vmc1.bin ore/compiler/vmc.ore -o $@
+	./vmasm -I ./ore/lib -I . $@.asm -o $@
+	rm -f $@.asm
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -41,7 +47,7 @@ test: vm vmasm vmld vmc0 vmc.bin
 	sh tests/run.sh $(T)
 
 clean:
-	rm -rf $(BUILD) vm vmasm vmld vmc0 vmc.bin
+	rm -rf $(BUILD) vm vmasm vmld vmc0 vmc1.bin vmc.bin
 
 -include $(VM_OBJ:.o=.d) $(ASM_OBJ:.o=.d) $(LD_OBJ:.o=.d) $(VMC_OBJ:.o=.d)
 
