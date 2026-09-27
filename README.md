@@ -91,7 +91,7 @@ Everything after the program path is passed to the program, which reads it with 
 |---|---|
 | `-d` | Start the interactive [debugger](#debugger) |
 | `-D` | Disassemble the program instead of running it |
-| `-m KB` | Memory size in KB, 64 to 65536 (default 64) |
+| `-m KB` | Memory size in KB, 128 to 1048576 (default 1024) |
 | `-n COUNT` | Stop with an error after COUNT instructions |
 | `-p` | Print an execution profile on stderr when the program stops |
 | `-t` | Print each instruction on stderr before it executes |
@@ -116,7 +116,7 @@ A trace shows the address, the nearest label and the instruction:
 
 ```console
 $ ./vm -t hello.bin 2>&1 >/dev/null | head -4
-0x0000 <main>               LOAD R0, #0x4000  ; greeting
+0x0000 <main>               LOAD R0, #0x1000  ; greeting
 0x0004 <main+4>             SYSCALL #2
 0x0008 <main+8>             LOAD R8, #0x0
 0x000C <main+12>            LOAD R9, #0xA
@@ -133,7 +133,7 @@ vm: profile of 29 instructions
            4   13.8%  0x0000 <main>
 ```
 
-`-D` prints the header, then the code with its labels, then a hex dump of the data segment. A file without a VM32 header is treated as raw code and loaded at address 0.
+`-D` prints the header, then the code with its labels, then a hex dump of the data. A file without a VM32 header is treated as raw code and loaded at address 0.
 
 ## The machine
 
@@ -161,61 +161,123 @@ Status register bits:
 | 0x04 | C | Unsigned carry out of an addition, or borrow in a subtraction |
 | 0x08 | O | Signed overflow |
 | 0x10 | I | Device interrupts are enabled |
-| 0x20–0x80 | D, S, T | Reserved |
+| 0x20 | D | Reserved |
+| 0x40 | S | Supervisor mode; clear in [user mode](#user-mode) |
+| 0x80 | T | Trap after every instruction |
+
+### Control registers
+
+`MFCR Rd, NAME` reads a control register and `MTCR NAME, Rs` writes one. A register can also be given by number, as in `MFCR R8, #3`. Both instructions are privileged.
+
+| # | Name | Meaning | Initial value |
+|---|---|---|---|
+| 0 | IVTB | Address of the [interrupt vector table](#interrupts-and-exceptions); 0 means there is none | 0 |
+| 1 | KSP | Stack pointer for interrupts that arrive in user mode; 0 keeps the current SP | 0 |
+| 2 | PTB | Physical address of the page directory; 0 turns [paging](#paging) off | 0 |
+| 3 | FADDR | Address that caused the last memory fault | 0 |
+| 4 | ECODE | Details of the last page fault | 0 |
+| 5 | SLO | Lowest address the stack may grow to | Memory size − 64 KB |
+| 6 | SHI | Highest stack address, where SP and BP start | Memory size |
+| 7 | HEAPLO | Start of the heap | End of the program, rounded up to 16 |
+| 8 | HEAPHI | End of the heap | SLO |
+
+`RESET` restores these initial values along with the registers.
 
 ### Memory
 
-Memory is byte-addressed and little-endian. Unaligned data accesses are allowed. The first 64 KB are split into four 16 KB segments:
+Memory is flat, byte-addressed and little-endian. It is 1 MB by default, and `-m` sets any size from 128 KB to 1 GB. Unaligned data accesses are allowed.
 
-| Range | Segment | Contents |
-|---|---|---|
-| 0x0000–0x3FFF | Code | `.text`. The interrupt vector table is at 0x0100–0x04FF |
-| 0x4000–0x7FFF | Data | `.data` |
-| 0x8000–0xBFFF | Stack | SP and BP start at 0xC000, and the stack grows down |
-| 0xC000–0xFFFF | Heap | Blocks from `ALLOC` or syscall 20 |
+| Region | Contents |
+|---|---|
+| From 0 | Code, from `.text` |
+| From the next page boundary | Data, from `.data` |
+| From the end of the data up to SLO | Heap |
+| The top 64 KB | Stack, growing down from the top of memory |
 
-Memory added with `-m` starts at 0x10000. Instruction immediates are only 16 bits wide, so that memory can only be reached through a register.
+Every access is checked:
 
-Every access is bounds-checked:
-
-- Code, data and stack have no protection.
+- It must lie inside physical memory, after translation when paging is on.
 - An access that touches the heap must stay inside one allocated block and respect that block's protection.
-- Pushing below 0x8000 or popping above 0xC000 faults with stack overflow or underflow.
-- So does any stack operation while SP points outside the stack segment.
+- Pushing below SLO faults with stack overflow, and popping above SHI with stack underflow.
+- Any stack operation faults while SP lies outside SLO to SHI.
+
+Setting SLO to 0 and SHI to 0xFFFFFFFF turns the stack checks off.
 
 ### Heap
 
-The heap is a first-fit allocator. Its 8-byte block headers live in VM memory.
+The heap is a first-fit allocator. Its bookkeeping lives outside VM memory, where programs cannot damage it.
 
-- Sizes are rounded up to a multiple of 4, with a minimum of 8 bytes.
-- A single allocation can be at most 16376 bytes.
+- Sizes are rounded up to a multiple of 8, with a minimum of 8 bytes.
+- Every block is preceded by an 8-byte guard gap. Touching it faults, which catches small overruns.
 - New blocks are zero-filled.
-- A freed block is merged with free neighbours.
 - Freeing a block twice, or freeing an address that is not the start of a block, is an error.
+- Writing HEAPLO or HEAPHI empties the heap. Setting them equal turns the heap off, which leaves that memory to the program.
 
 `PROTECT` sets a block's permissions: 1 read, 2 write, 4 execute. New blocks get all three. Code only runs from the heap if its block has execute permission.
 
-### Interrupts
+### Interrupts and exceptions
 
-The interrupt vector table holds one 32-bit handler address per vector. The entry for vector *v* is at `0x0100 + 4*v`.
+The vector table at IVTB holds one 32-bit handler address for each of the 256 vectors. The entry for vector *v* is at `IVTB + 4*v`. An entry of 0, or an IVTB of 0, means there is no handler.
 
-When an interrupt is taken, the CPU:
+When the CPU enters a handler, it:
 
-1. Pushes all registers as `PUSHA` does. Afterwards `[SP + 4*n]` holds R*n*, and the saved PC is the return address.
-2. Clears I.
-3. Jumps to the handler.
+1. Switches to supervisor mode. If it was in user mode and KSP is set, it also switches to the stack at KSP.
+2. Pushes R15 down to R0, so `[SP + 4*n]` holds R*n*. The saved SP and SR are the interrupted values, and the saved PC is where execution resumes.
+3. Clears I and T.
+4. Jumps to the handler.
 
-`IRET` restores every register except SP, including PC and the flags. A handler can read or change the interrupted registers through that saved frame.
+`IRET` restores all sixteen registers from that frame, SP included, so it can return to user mode and to a user stack. A handler can read or change the interrupted registers through the frame.
+
+Handlers are entered for four reasons:
 
 - **Software interrupts:** `INT #v` raises vector *v* at once, whether or not I is set.
 - **Device interrupts:** these are latched, then delivered before the next instruction once I is set (`STI`).
-- **Missing handlers:** a zero entry in the table faults with "Unhandled interrupt".
+- **Exceptions:** a fault with a code from 1 to 14 goes to the vector with the same number (see [error codes](#error-codes)). The registers are put back as they were before the faulting instruction, and the saved PC points at that instruction. A handler can therefore fix the cause and return to retry it, or skip it. The instruction is 8 bytes long when bit 23 of its first word is set, and 4 bytes otherwise. Memory faults leave the address in FADDR.
+- **Single-step trap:** while T is set, vector 15 is raised after every instruction.
 
-The table overlaps the code segment. A program that uses interrupts either reserves its entries with `.org`, as `assembler/examples/interrupts.asm` does, or stores handler addresses at run time.
+Without a handler, a fault stops the machine. So does a fault while a handler is being entered, such as a stack overflow while the frame is pushed; that is reported as a double fault.
+
+### User mode
+
+The CPU starts in supervisor mode, with S set. A kernel enters user mode by executing `IRET` with a frame whose saved SR has S clear. In user mode:
+
+- The privileged instructions `HALT`, `CLI`, `STI`, `IRET`, `IN`, `OUT`, `RESET`, `MFCR`, `MTCR`, `SYSCALL` and `PROTECT` fault with a privilege violation.
+- Instructions cannot change S, I or T. Writes to SR keep their old values.
+- Pages whose entry lacks the user bit cannot be touched.
+
+User programs reach the kernel through `INT`. `assembler/examples/kernel.asm` shows the whole arrangement.
+
+### Paging
+
+When PTB is not 0, virtual addresses are translated through two levels of tables with 4 KB pages:
+
+- Bits 31–22 of an address select an entry in the page directory at PTB.
+- Bits 21–12 select an entry in the page table that directory entry points to.
+- Bits 11–0 are the offset in the page.
+
+An entry holds the physical address of a page table or page in bits 31–12, and flags in its low bits. Directory entries only use P.
+
+| Bit | Flag | Meaning |
+|---|---|---|
+| 0x1 | P | Present |
+| 0x2 | W | Writable |
+| 0x4 | U | Accessible in user mode |
+| 0x8 | X | Executable |
+
+A missing entry or a forbidden access raises a page fault, code 14. FADDR holds the virtual address, and ECODE describes the access:
+
+| Bit | Meaning |
+|---|---|
+| 1 | The page is present but does not allow the access |
+| 2 | The access was a write |
+| 4 | The CPU was in user mode |
+| 8 | The access was an instruction fetch |
+
+Syscall buffers and heap blocks are virtual addresses too. The vector table is read with supervisor rights, even when user code is interrupted.
 
 ### I/O ports
 
-`IN Rd, port` and `OUT port, Rs` take the port as an immediate or a register. Accessing a port that has no device faults.
+`IN Rd, port` and `OUT port, Rs` take the port as an immediate or a register. Both are privileged. Accessing a port that has no device faults.
 
 | Port | Device | IN | OUT |
 |---|---|---|---|
