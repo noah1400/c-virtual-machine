@@ -1,0 +1,127 @@
+// What MiniDos shows and reads: the VM's console, or files that output and input are redirected to
+import "std/io";
+import "std/str";
+import "fs";
+
+var output: *fs.File = null;
+var input: *fs.File = null;
+
+// Sends what follows to a file, or back to the screen for null, and returns where it went before
+pub fn redirect_output(file: *fs.File) *fs.File {
+    var before = output;
+    output = file;
+    return before;
+}
+
+pub fn redirect_input(file: *fs.File) *fs.File {
+    var before = input;
+    input = file;
+    return before;
+}
+
+pub fn write(text: []u8) {
+    if (output != null) {
+        fs.write(output, text);
+    } else {
+        io.write(io.STDOUT, text);
+    }
+}
+
+// Writes to the screen even while output goes to a file, as error messages do
+pub fn screen(text: []u8) {
+    io.write(io.STDOUT, text);
+}
+
+pub fn write_byte(c: u8) {
+    var bytes = [1]u8 { c };
+    write(bytes);
+}
+
+pub fn write_int(value: int) {
+    var buffer: [11]u8;
+    write(str.format_int(value, buffer));
+}
+
+pub fn line(text: []u8) {
+    write(text);
+    write("\n");
+}
+
+// Writes text and pads it with spaces to width
+pub fn column(text: []u8, width: int) {
+    write(text);
+    for (var i = text.len; i < width; i += 1) {
+        write(" ");
+    }
+}
+
+// Writes a number right-aligned in width, with commas between thousands
+pub fn number(value: int, width: int) {
+    var digits: [11]u8;
+    var plain = str.format_int(value, digits);
+    var buffer: [16]u8;
+    var length = 0;
+    for (var i = 0; i < plain.len; i += 1) {
+        if (i > 0 && (plain.len - i) % 3 == 0 && plain[i - 1] != '-') {
+            buffer[length] = ',';
+            length += 1;
+        }
+        buffer[length] = plain[i];
+        length += 1;
+    }
+    for (var i = length; i < width; i += 1) {
+        write(" ");
+    }
+    write(buffer[:length]);
+}
+
+pub fn clear() {
+    write("\x1b[2J\x1b[H");
+}
+
+// Reads a line without its end into buffer and makes *text the part it fills; false at the end of the
+// input
+pub fn read_line(buffer: []u8, text: *[]u8) bool {
+    if (input == null) {
+        return io.read_line(buffer, text);
+    }
+    var length = 0;
+    var c: [1]u8;
+    for (;;) {
+        if (fs.read(input, c) != 1) {
+            if (length == 0) {
+                return false;
+            }
+            break;
+        }
+        if (c[0] == '\n') {
+            break;
+        }
+        if (c[0] != '\r' && length < buffer.len - 1) {
+            buffer[length] = c[0];
+            length += 1;
+        }
+    }
+    *text = buffer[:length];
+    return true;
+}
+
+// The next byte of input, or -1 at its end
+pub fn read_char() int {
+    if (input == null) {
+        return io.read_char();
+    }
+    var c: [1]u8;
+    if (fs.read(input, c) != 1) {
+        return -1;
+    }
+    return c[0] as int;
+}
+
+// Reads up to buffer.len bytes of input and returns how many, 0 at its end or -1
+pub fn read(buffer: []u8) int {
+    if (input == null) {
+        return io.read(io.STDIN, buffer);
+    }
+    return fs.read(input, buffer);
+}
