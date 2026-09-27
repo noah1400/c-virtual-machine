@@ -23,6 +23,7 @@ struct Gen {
     loc_module: *ast.Module;
     loc_line: int;
     loc_path: []u8;         // the quoted path of loc_module
+    checked: ast.List;      // locals that are not null here, since code before checked them
 }
 
 struct Pooled {
@@ -348,6 +349,48 @@ fn zero(g: *Gen, t: *ast.Type, offset: int) {
     emitd(g, "    LEA R6, [BP%+d]\n    LOAD R7, #0\n    MEMSET R6, R7, #%d\n", []int { offset, t.size });
 }
 
+fn is_checked(g: *Gen, s: *ast.Symbol) bool {
+    for (var i = 0; i < g.checked.count; i += 1) {
+        if (g.checked.items[i] == s as *u8) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Code reaches a label from more than one place, and a check before one of them says nothing
+fn merge_label(g: *Gen, n: int) {
+    g.checked.count = 0;
+    emitd(g, ".L%d:\n", []int { n });
+}
+
+// After an assignment to a local, it is not null only if it was set to new memory or an address
+fn assigned(g: *Gen, target: *ast.Expr, value: *ast.Expr) {
+    if (target.kind != ast.ExprKind.NAME || target.symbol.kind != ast.SymbolKind.LOCAL) {
+        return;
+    }
+    for (var i = 0; i < g.checked.count; i += 1) {
+        if (g.checked.items[i] == target.symbol as *u8) {
+            g.checked.count -= 1;
+            g.checked.items[i] = g.checked.items[g.checked.count];
+        }
+    }
+    if (unshared(target) && value != null && (value.kind == ast.ExprKind.NEW && value.left == null ||
+        value.kind == ast.ExprKind.UNARY && value.op == ast.TokenKind.AMP)) {
+        ast.add(&g.checked, target.symbol as *u8);
+    }
+}
+
+// Checks the pointer that x left in R0, unless x is a local that was checked since it last changed
+fn check_pointer(g: *Gen, x: *ast.Expr) {
+    if (!unshared(x)) {
+        check_null(g, "R0");
+    } else if (!is_checked(g, x.symbol)) {
+        check_null(g, "R0");
+        ast.add(&g.checked, x.symbol as *u8);
+    }
+}
+
 fn check_null(g: *Gen, register: []u8) {
     var ok = label(g);
     emitf(g, "    CMP %s, #0\n    JNZ .L%d\n    CALL rt.null_error\n.L%d:\n", [][]u8 { register }, []int { ok, ok });
@@ -552,7 +595,7 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
         }
         emitf(g, "    CMP R0, #0\n    %s .L%d\n", [][]u8 { jump }, []int { end });
         gen_expr(g, e.right);
-        emitd(g, ".L%d:\n", []int { end });
+        merge_label(g, end);
         return;
     }
     if (left.kind == ast.TypeKind.POINTER && !is_comparison(e)) {
@@ -730,7 +773,9 @@ fn gen_print(g: *Gen, e: *ast.Expr) {
             emit(g, "    MOVE R6, R5\n    MOVE R5, R0\n    LOAD R0, #1\n    SYSCALL #13\n");
         } else if (t.kind == ast.TypeKind.BOOL) {
             var done = label(g);
-            emitd(g, "    LOAD R6, rt.false\n    CMP R0, #0\n    JZ .L%d\n    LOAD R6, rt.true\n.L%d:\n    MOVE R0, R6\n    SYSCALL #2\n", []int { done, done });
+            emitd(g, "    LOAD R6, rt.false\n    CMP R0, #0\n    JZ .L%d\n    LOAD R6, rt.true\n", []int { done });
+            merge_label(g, done);
+            emit(g, "    MOVE R0, R6\n    SYSCALL #2\n");
         } else if (t.kind == ast.TypeKind.POINTER || t.kind == ast.TypeKind.FN) {
             emit(g, "    SYSCALL #5\n");
         } else if (t.kind == ast.TypeKind.INT && !t.is_signed) {
@@ -836,7 +881,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
     if (index.ptr != null) {
         gen_expr(g, e.left);
         if (t.kind == ast.TypeKind.POINTER) {
-            check_null(g, "R0");
+            check_pointer(g, e.left);
         }
         if (t.kind == ast.TypeKind.ARRAY && e.right.is_const) {
             return wide.low(e.right.value) * size;
@@ -855,7 +900,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
 
     gen_expr(g, e.left);
     if (t.kind == ast.TypeKind.POINTER) {
-        check_null(g, "R0");
+        check_pointer(g, e.left);
     }
     emit(g, "    PUSH R0\n");
     if (t.kind == ast.TypeKind.SLICE) {
@@ -889,7 +934,7 @@ fn gen_slice(g: *Gen, e: *ast.Expr) {
     } else {
         gen_expr(g, e.left);
         if (t.kind == ast.TypeKind.POINTER) {
-            check_null(g, "R0");
+            check_pointer(g, e.left);
             emit(g, "    PUSH R0\n    PUSH #-1\n");
         } else {
             emit(g, "    PUSH R0\n    PUSH R5\n");
@@ -972,7 +1017,7 @@ fn gen_address(g: *Gen, e: *ast.Expr) int {
     if (e.kind == ast.ExprKind.FIELD && e.field != null) {
         gen_expr(g, e.left);
         if (e.left.type.kind == ast.TypeKind.POINTER) {
-            check_null(g, "R0");
+            check_pointer(g, e.left);
         }
         return e.field.offset;
     }
@@ -997,12 +1042,12 @@ fn gen_addr(g: *Gen, e: *ast.Expr) {
         }
         case ast.ExprKind.UNARY {
             gen_expr(g, e.left);
-            check_null(g, "R0");
+            check_pointer(g, e.left);
         }
         case ast.ExprKind.FIELD {
             gen_expr(g, e.left);
             if (e.left.type.kind == ast.TypeKind.POINTER) {
-                check_null(g, "R0");
+                check_pointer(g, e.left);
             }
             if (e.field.offset != 0) {
                 emitd(g, "    ADD R0, #%d\n", []int { e.field.offset });
@@ -1210,6 +1255,11 @@ fn gen_register_assign(g: *Gen, s: *ast.Stmt, register: []u8) {
 }
 
 fn gen_assign(g: *Gen, s: *ast.Stmt) {
+    gen_store(g, s);
+    assigned(g, s.target, s.value);
+}
+
+fn gen_store(g: *Gen, s: *ast.Stmt) {
     var t = s.target.type;
     var direct = place(s.target);
     var target = "R6";
@@ -1264,10 +1314,16 @@ fn gen_assign(g: *Gen, s: *ast.Stmt) {
 }
 
 fn gen_variable(g: *Gen, s: *ast.Stmt) {
-    var sym = s.symbol;
     if (s.kind == ast.StmtKind.CONST) {
         return;
     }
+    gen_declared(g, s);
+    var name = ast.Expr { kind: ast.ExprKind.NAME, symbol: s.symbol };
+    assigned(g, &name, s.value);
+}
+
+fn gen_declared(g: *Gen, s: *ast.Stmt) {
+    var sym = s.symbol;
     if (sym.reg != 0) {
         var register = register_names[sym.reg];
         if (s.value == null) {
@@ -1311,15 +1367,15 @@ fn gen_switch(g: *Gen, s: *ast.Stmt) {
         emitd(g, "    JMP .L%d\n", []int { end });
     }
     for (var i = 0; i < s.cases.len; i += 1) {
-        emitd(g, ".L%d:\n", []int { first + i });
+        merge_label(g, first + i);
         gen_block(g, s.cases[i].body);
         emitd(g, "    JMP .L%d\n", []int { end });
     }
     if (s.fallback != null) {
-        emitd(g, ".L%d:\n", []int { fallback });
+        merge_label(g, fallback);
         gen_block(g, s.fallback);
     }
-    emitd(g, ".L%d:\n", []int { end });
+    merge_label(g, end);
 }
 
 fn gen_loop(g: *Gen, s: *ast.Stmt) {
@@ -1332,7 +1388,7 @@ fn gen_loop(g: *Gen, s: *ast.Stmt) {
     if (s.init != null) {
         gen_stmt(g, s.init);
     }
-    emitd(g, ".L%d:\n", []int { top });
+    merge_label(g, top);
     if (s.cond != null) {
         loc(g, s.line);
         gen_branch(g, s.cond, end);
@@ -1342,11 +1398,12 @@ fn gen_loop(g: *Gen, s: *ast.Stmt) {
     gen_block(g, s.then);
     g.break_label = saved_break;
     g.continue_label = saved_continue;
-    emitd(g, ".L%d:\n", []int { next });
+    merge_label(g, next);
     if (s.step != null) {
         gen_stmt(g, s.step);
     }
-    emitd(g, "    JMP .L%d\n.L%d:\n", []int { top, end });
+    emitd(g, "    JMP .L%d\n", []int { top });
+    merge_label(g, end);
 }
 
 fn gen_stmt(g: *Gen, s: *ast.Stmt) {
@@ -1374,10 +1431,10 @@ fn gen_stmt(g: *Gen, s: *ast.Stmt) {
             if (s.otherwise != null) {
                 emitd(g, "    JMP .L%d\n", []int { end });
             }
-            emitd(g, ".L%d:\n", []int { otherwise });
+            merge_label(g, otherwise);
             if (s.otherwise != null) {
                 gen_stmt(g, s.otherwise);
-                emitd(g, ".L%d:\n", []int { end });
+                merge_label(g, end);
             }
         }
         case ast.StmtKind.WHILE, ast.StmtKind.FOR {
@@ -1545,6 +1602,7 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     }
 
     g.frame = 0;
+    g.checked.count = 0;
     str.clear(&g.body);
     for (var i = 0; i < d.params.len; i += 1) {
         d.params[i].symbol.offset = offset;

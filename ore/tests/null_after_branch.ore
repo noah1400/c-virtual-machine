@@ -1,0 +1,21 @@
+// A pointer checked on only one path of a branch has to be checked again after it
+// expect-exit: 1
+struct Node {
+    value: int;
+    next: *Node;
+}
+
+fn sum(n: *Node, twice: bool) int {
+    var total = 0;
+    if (twice) {
+        total = n.value;
+    }
+    return total + n.value;
+}
+
+fn main() {
+    var a = new(Node);
+    a.value = 5;
+    print(sum(a, true), "\n");
+    print(sum(a.next, false), "\n");
+}
