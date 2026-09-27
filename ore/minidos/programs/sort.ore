@@ -1,0 +1,76 @@
+// SORT [/R]: writes the lines of its input in order, ignoring case, or in reverse order with /R
+import "std/io";
+import "std/str";
+
+fn read_input() []u8 {
+    var text = str.builder(4096);
+    var buffer: [512]u8;
+    for (;;) {
+        var n = io.read(io.STDIN, buffer);
+        if (n <= 0) {
+            break;
+        }
+        str.append(&text, buffer[:n]);
+    }
+    return str.text(&text);
+}
+
+fn upper(c: u8) u8 {
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a' + 'A';
+    }
+    return c;
+}
+
+// Negative, zero or positive as a sorts before, with or after b when case does not count
+fn compare(a: []u8, b: []u8) int {
+    for (var i = 0; i < a.len && i < b.len; i += 1) {
+        var x = upper(a[i]);
+        var y = upper(b[i]);
+        if (x != y) {
+            return x as int - y as int;
+        }
+    }
+    return a.len - b.len;
+}
+
+fn main(args: [][]u8) {
+    var reverse = args.len > 1 && (str.equal(args[1], "/R") || str.equal(args[1], "/r"));
+    var text = read_input();
+    var count = 0;
+    for (var i = 0; i < text.len; i += 1) {
+        if (text[i] == '\n' || i == text.len - 1) {
+            count += 1;
+        }
+    }
+    var lines = new([]u8, count);
+    var start = 0;
+    count = 0;
+    for (var i = 0; i < text.len; i += 1) {
+        if (text[i] == '\n' || i == text.len - 1) {
+            var end = i;
+            if (text[i] != '\n') {
+                end = i + 1;
+            }
+            if (end > start && text[end - 1] == '\r') {
+                end -= 1;
+            }
+            lines[count] = text[start:end];
+            count += 1;
+            start = i + 1;
+        }
+    }
+    for (var i = 1; i < lines.len; i += 1) {
+        var line = lines[i];
+        var k = i;
+        while (k > 0 && (compare(lines[k - 1], line) > 0) != reverse && compare(lines[k - 1], line) != 0) {
+            lines[k] = lines[k - 1];
+            k -= 1;
+        }
+        lines[k] = line;
+    }
+    for (var i = 0; i < lines.len; i += 1) {
+        io.write(io.STDOUT, lines[i]);
+        io.write(io.STDOUT, "\n");
+    }
+}

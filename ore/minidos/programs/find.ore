@@ -1,0 +1,101 @@
+// FIND [/V] [/C] [/I] "text" [file]: writes the lines of a file or of its input that contain text, with
+// /V those that do not, with /C only how many, and with /I ignoring case
+import "std/io";
+import "std/str";
+
+var invert = false;
+var count_only = false;
+var ignore_case = false;
+
+fn upper(c: u8) u8 {
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a' + 'A';
+    }
+    return c;
+}
+
+fn contains(line: []u8, text: []u8) bool {
+    for (var i = 0; i + text.len <= line.len; i += 1) {
+        var k = 0;
+        while (k < text.len && (line[i + k] == text[k] || ignore_case && upper(line[i + k]) == upper(text[k]))) {
+            k += 1;
+        }
+        if (k == text.len) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn read_all(handle: int) []u8 {
+    var text = str.builder(4096);
+    var buffer: [512]u8;
+    for (;;) {
+        var n = io.read(handle, buffer);
+        if (n <= 0) {
+            break;
+        }
+        str.append(&text, buffer[:n]);
+    }
+    return str.text(&text);
+}
+
+fn main(args: [][]u8) int {
+    var text: []u8;
+    var path: []u8;
+    var have_text = false;
+    for (var i = 1; i < args.len; i += 1) {
+        var arg = args[i];
+        if (str.equal(arg, "/V") || str.equal(arg, "/v")) {
+            invert = true;
+        } else if (str.equal(arg, "/C") || str.equal(arg, "/c")) {
+            count_only = true;
+        } else if (str.equal(arg, "/I") || str.equal(arg, "/i")) {
+            ignore_case = true;
+        } else if (!have_text) {
+            text = arg;
+            have_text = true;
+        } else {
+            path = arg;
+        }
+    }
+    if (!have_text) {
+        print("Required parameter missing\n");
+        return 2;
+    }
+    var handle = io.STDIN;
+    if (path.len > 0) {
+        handle = io.open(path, io.READ);
+        if (handle < 0) {
+            print("File not found - ", path, "\n");
+            return 2;
+        }
+    }
+    var input = read_all(handle);
+    var found = 0;
+    var start = 0;
+    for (var i = 0; i <= input.len; i += 1) {
+        if (i == input.len || input[i] == '\n') {
+            var line = input[start:i];
+            if (line.len > 0 && line[line.len - 1] == '\r') {
+                line = line[:line.len - 1];
+            }
+            if (i < input.len || line.len > 0) {
+                if (contains(line, text) != invert) {
+                    found += 1;
+                    if (!count_only) {
+                        print(line, "\n");
+                    }
+                }
+            }
+            start = i + 1;
+        }
+    }
+    if (count_only) {
+        print(found, "\n");
+    }
+    if (found == 0) {
+        return 1;
+    }
+    return 0;
+}
