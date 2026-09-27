@@ -68,6 +68,9 @@ pub struct Symbol {
     string: *Expr;          // string constants
     builtin: Builtin;
     offset: int;            // frame offset of a local, set by the code generator
+    reg: int;               // the register that holds a local instead, or 0
+    gain: int;              // instructions a register would save for a local, counting loops more
+    address_taken: bool;
     label: []u8;            // string constants: the label of their bytes, once emitted
 }
 
