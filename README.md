@@ -883,7 +883,8 @@ Usage: vmc0 [options] program.ore [file.asm...]
   -L DIR    take the runtime and the standard library from DIR
 ```
 
-- **How it compiles:** `vmc0` writes the whole program as one assembly file. That file includes `ore/lib/runtime.asm` and any assembly files named on the command line, which define `extern fn` functions. `vmc0` then assembles it with the `vmasm` next to it.
+- **How it compiles:** `vmc0` writes the whole program as one assembly file. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that modules bring along for their `extern fn` functions. `vmc0` then assembles it with the `vmasm` next to it.
+- **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
 - **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines.
 - **Runtime errors**, such as an index out of bounds, a `null` pointer or a failed `assert`, stop the program with a message, reported at the Ore line that failed. For the `digits.ore` example in the language description:
 
@@ -1119,7 +1120,7 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `linker/` | `vmld` |
 | `assembler/examples/` | Example programs |
 | `ore/bootstrap/` | `vmc0`: lexer, parser, type checker and code generator for Ore |
-| `ore/lib/` | The runtime that compiled Ore programs start from |
+| `ore/lib/` | The runtime that compiled Ore programs start from, and the standard library in `std/` |
 | `ore/tests/` | Ore test programs, and the modules and assembly they use |
 | `docs/language.md` | The Ore language |
 | `include/` | Headers |

@@ -276,6 +276,7 @@ fn main() int {
 - The path names the file without `.ore`, relative to the importing file, or else in the directories given with `-I` and the standard library.
 - `as` gives the module another name in this file.
 - Modules may import each other in circles, since the compiler reads the whole program before it compiles any of it.
+- A module can bring assembly for its `extern fn` functions: a file with the module's name and `.asm`, next to it, becomes part of every program that imports the module.
 
 ## Memory
 
@@ -319,7 +320,7 @@ Integer overflow is not an error. It wraps around.
 
 | Builtin | |
 |---|---|
-| `print(a, b, ...)` | Writes each argument to stdout: integers in decimal, booleans as `true` or `false`, `[]u8` as text, `f32` with up to six digits, pointers in hex |
+| `print(a, b, ...)` | Writes each argument to stdout: integers in decimal, booleans as `true` or `false`, `[]u8` and arrays of `u8` as text, `f32` with up to six digits, pointers in hex |
 | `new(T)`, `new(T, n)` | Allocate zeroed memory (see [Memory](#memory)) |
 | `free(x)` | Free a pointer or slice from `new` |
 | `sizeof(T)` | The size of `T` in bytes, a constant |
@@ -331,17 +332,84 @@ A `u8` prints as a number; `print("a")` prints a character.
 
 ## Programs
 
-A program is the module given to `vmc` and every module it imports. Its `main` function takes no parameters or `args: [][]u8`, which holds the program path and its arguments. `main` returns nothing, or an `int` that becomes the exit status. Nothing runs before `main`.
+A program is the module given to `vmc0` and every module it imports. Its `main` function takes no parameters or `args: [][]u8`, which holds the program path and its arguments. `main` returns nothing, or an `int` that becomes the exit status. Nothing runs before `main`.
 
-The standard library is written in Ore, apart from `std/cpu`:
+## Standard library
 
-| Module | Contents |
+The standard library lives in `ore/lib/std` and is imported as `std/io`, `std/str` and so on. It is written in Ore, apart from `std/cpu`, which is assembly.
+
+### std/io
+
+| Function | |
 |---|---|
-| `std/io` | Reading lines and characters, files, output to stderr and in hex |
-| `std/str` | Comparing, searching, parsing and formatting numbers |
-| `std/mem` | Copying, filling and comparing memory |
-| `std/sys` | Exit, time, sleep, random numbers |
-| `std/cpu` | Ports, interrupt handlers and control registers, in assembly |
+| `write(handle: int, bytes: []u8) int` | Writes bytes and returns how many, or −1 |
+| `read(handle: int, buffer: []u8) int` | Reads into buffer and returns how many bytes, 0 at the end, or −1 |
+| `read_line(buffer: []u8, line: *[]u8) bool` | Reads a line of stdin without its line end, and points `line` at it inside buffer. Returns false at the end of the input. A line longer than the buffer comes in pieces |
+| `read_char() int` | The next byte of stdin, or −1 at the end |
+| `print_error(text: []u8)` | Writes to stderr |
+| `print_char(c: u8)`, `print_hex(value: u32)` | Writes a byte, or a number like `0x1f`, to stdout |
+| `open(path: []u8, mode: int) int` | A handle for the file, or −1. The modes are `READ`, `WRITE` (creating or emptying the file), `APPEND`, `UPDATE` (reading and writing a file that exists) and `REPLACE` (reading and writing a file it creates or empties) |
+| `close(handle: int)` | |
+| `seek(handle: int, offset: int, origin: int) int` | Moves to offset from `START`, `CURRENT` or `END`, and returns the new position or −1 |
+| `read_file(path: []u8) []u8` | The whole file on the heap, or a slice whose `ptr` is `null` if it cannot be read |
+| `write_file(path: []u8, bytes: []u8) bool` | Creates or replaces the file |
+
+`STDIN`, `STDOUT` and `STDERR` are the handles 0, 1 and 2. Paths are relative to the directory `vm` runs in.
+
+### std/str
+
+| Function | |
+|---|---|
+| `equal(a: []u8, b: []u8) bool`, `compare(a: []u8, b: []u8) int` | Compare byte by byte; `compare` is negative, zero or positive |
+| `starts_with(text, prefix) bool`, `ends_with(text, suffix) bool` | |
+| `find(text, part) int`, `find_byte(text, c) int`, `find_last_byte(text, c) int` | The index, or −1 |
+| `trim(text) []u8` | Without spaces, tabs and line ends at either end |
+| `is_space(c)`, `is_digit(c)`, `is_letter(c)` | |
+| `clone(text) []u8` | A copy on the heap |
+| `parse_int(text) Number` | A decimal number, or a hexadecimal one after `0x`, with an optional `-`. `Number` has `value` and `ok`, which is false for anything else or a value that does not fit in an `int` |
+| `format_int(value: int, buffer: []u8) []u8`, `format_hex(value: u32, buffer: []u8) []u8` | Write the digits at the end of buffer and return them; 11 bytes are always enough |
+
+A `Builder` collects text on the heap:
+
+| Function | |
+|---|---|
+| `builder(capacity: int) Builder` | An empty builder |
+| `append(b: *Builder, text: []u8)`, `append_byte`, `append_int`, `append_hex` | Add to the end |
+| `reserve(b: *Builder, count: int)` | Makes room for count more bytes |
+| `text(b: *Builder) []u8` | What was built so far; it moves when the builder grows |
+| `clear(b: *Builder)`, `release(b: *Builder)` | Empty it, or give its memory back |
+
+### std/mem
+
+| Function | |
+|---|---|
+| `copy(to: []u8, from: []u8) int` | Copies as many bytes as both hold, even when they overlap, and returns how many |
+| `fill(to: []u8, value: u8)` | |
+| `equal(a, b) bool`, `compare(a, b) int` | As in `std/str` |
+| `bytes(address: *u8, size: int) []u8` | The bytes of any memory, such as `mem.bytes(&p as *u8, sizeof(Point))` |
+
+### std/sys
+
+| Function | |
+|---|---|
+| `exit(status: int)` | Stops the program |
+| `time() int` | Milliseconds since the program started |
+| `ticks() u32` | Instructions executed so far |
+| `sleep(milliseconds: int)` | |
+| `random(limit: u32) u32`, `seed(value: u32)` | A number below limit, or any 32-bit value for 0. The sequence repeats unless seeded |
+| `memory_size() int` | The size of the VM's memory in bytes |
+
+### std/cpu
+
+These need supervisor mode, which programs start in.
+
+| Function | |
+|---|---|
+| `read_port(port: int) u32`, `write_port(port: int, value: u32)` | [I/O ports](../README.md#io-ports) |
+| `enable_interrupts()`, `disable_interrupts()` | Start or stop the delivery of device interrupts |
+| `set_handler(vector: int, handler: u32)` | Makes `handler`, the address of an `interrupt fn` (`on_tick as u32`), the handler of vector. The first call sets up a vector table if there is none |
+| `read_control(register: int) u32`, `write_control(register: int, value: u32)` | Control registers, numbered by the constants `IVTB`, `KSP`, `PTB`, `FADDR`, `ECODE`, `SLO`, `SHI`, `HEAPLO` and `HEAPHI` |
+| `halt()` | Stops the machine |
 
 ## Not in Ore
 
