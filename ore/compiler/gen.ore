@@ -381,12 +381,12 @@ fn assigned(g: *Gen, target: *ast.Expr, value: *ast.Expr) {
     }
 }
 
-// Checks the pointer that x left in R0, unless x is a local that was checked since it last changed
-fn check_pointer(g: *Gen, x: *ast.Expr) {
+// Checks the pointer x in a register, unless x is a local that was checked since it last changed
+fn check_pointer(g: *Gen, x: *ast.Expr, register: []u8) {
     if (!unshared(x)) {
-        check_null(g, "R0");
+        check_null(g, register);
     } else if (!is_checked(g, x.symbol)) {
-        check_null(g, "R0");
+        check_null(g, register);
         ast.add(&g.checked, x.symbol as *u8);
     }
 }
@@ -503,6 +503,9 @@ fn simple_operand(e: *ast.Expr) []u8 {
     var none: []u8;
     if (e.is_const && check.is_scalar(e.type)) {
         return ast.cat([][]u8 { "#", ast.number(wide.low(e.value)) });
+    }
+    if (e.kind == ast.ExprKind.NULL) {
+        return "#0";
     }
     var register = register_of(e);
     if (register.ptr != null) {
@@ -919,7 +922,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
     if (index.ptr != null) {
         gen_expr(g, e.left);
         if (t.kind == ast.TypeKind.POINTER) {
-            check_pointer(g, e.left);
+            check_pointer(g, e.left, "R0");
         }
         if (t.kind == ast.TypeKind.ARRAY && e.right.is_const) {
             return wide.low(e.right.value) * size;
@@ -938,7 +941,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
 
     gen_expr(g, e.left);
     if (t.kind == ast.TypeKind.POINTER) {
-        check_pointer(g, e.left);
+        check_pointer(g, e.left, "R0");
     }
     emit(g, "    PUSH R0\n");
     if (t.kind == ast.TypeKind.SLICE) {
@@ -972,7 +975,7 @@ fn gen_slice(g: *Gen, e: *ast.Expr) {
     } else {
         gen_expr(g, e.left);
         if (t.kind == ast.TypeKind.POINTER) {
-            check_pointer(g, e.left);
+            check_pointer(g, e.left, "R0");
             emit(g, "    PUSH R0\n    PUSH #-1\n");
         } else {
             emit(g, "    PUSH R0\n    PUSH R5\n");
@@ -1049,58 +1052,56 @@ fn gen_new(g: *Gen, e: *ast.Expr) {
     emit(g, "    PUSH R0\n    CALL rt.alloc\n    ADD SP, #4\n    POP R5\n");
 }
 
-// Leaves in R0 the base of the address of a place and returns the offset from it, which loads and stores
-// can take as a displacement
-fn gen_address(g: *Gen, e: *ast.Expr) int {
+// Leaves the pointer x in a register, R0 unless a local holds it, and checks it
+fn gen_pointer(g: *Gen, x: *ast.Expr, base: *[]u8) {
+    var register = register_of(x);
+    if (register.ptr != null) {
+        *base = register;
+    } else {
+        gen_expr(g, x);
+    }
+    check_pointer(g, x, *base);
+}
+
+// Leaves the base of the address of a place in a register, R0 unless a local holds it, and returns the
+// offset from it, which loads and stores can take as a displacement
+fn gen_address(g: *Gen, e: *ast.Expr, base: *[]u8) int {
+    *base = "R0";
     if (e.kind == ast.ExprKind.FIELD && e.field != null) {
-        gen_expr(g, e.left);
         if (e.left.type.kind == ast.TypeKind.POINTER) {
-            check_pointer(g, e.left);
+            gen_pointer(g, e.left, base);
+            return e.field.offset;
         }
-        return e.field.offset;
+        return gen_address(g, e.left, base) + e.field.offset;
+    }
+    if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.STAR) {
+        gen_pointer(g, e.left, base);
+        return 0;
     }
     if (e.kind == ast.ExprKind.INDEX) {
         return gen_index(g, e);
     }
-    gen_addr(g, e);
+    if (e.kind == ast.ExprKind.NAME) {
+        if (e.symbol.reg != 0) {
+            ast.fail(g.m, e.line, "a variable in a register has no address (internal error)");
+        }
+        if (e.symbol.kind == ast.SymbolKind.LOCAL) {
+            emitd(g, "    LEA R0, [BP%+d]\n", []int { e.symbol.offset });
+        } else {
+            emits(g, "    LOAD R0, %s\n", [][]u8 { symbol_name(e.symbol) });
+        }
+        return 0;
+    }
+    // Aggregates evaluate to their address
+    gen_expr(g, e);
     return 0;
 }
 
 fn gen_addr(g: *Gen, e: *ast.Expr) {
-    switch (e.kind) {
-        case ast.ExprKind.NAME {
-            if (e.symbol.reg != 0) {
-                ast.fail(g.m, e.line, "a variable in a register has no address (internal error)");
-            }
-            if (e.symbol.kind == ast.SymbolKind.LOCAL) {
-                emitd(g, "    LEA R0, [BP%+d]\n", []int { e.symbol.offset });
-            } else {
-                emits(g, "    LOAD R0, %s\n", [][]u8 { symbol_name(e.symbol) });
-            }
-        }
-        case ast.ExprKind.UNARY {
-            gen_expr(g, e.left);
-            check_pointer(g, e.left);
-        }
-        case ast.ExprKind.FIELD {
-            gen_expr(g, e.left);
-            if (e.left.type.kind == ast.TypeKind.POINTER) {
-                check_pointer(g, e.left);
-            }
-            if (e.field.offset != 0) {
-                emitd(g, "    ADD R0, #%d\n", []int { e.field.offset });
-            }
-        }
-        case ast.ExprKind.INDEX {
-            var displacement = gen_index(g, e);
-            if (displacement != 0) {
-                emitd(g, "    ADD R0, #%d\n", []int { displacement });
-            }
-        }
-        default {
-            // Aggregates evaluate to their address
-            gen_expr(g, e);
-        }
+    var base: []u8;
+    var offset = gen_address(g, e, &base);
+    if (offset != 0 || !ast.same(base, "R0")) {
+        emits(g, "    LEA R0, [%s]\n", [][]u8 { relative(base, offset) });
     }
 }
 
@@ -1125,11 +1126,12 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
         }
         case ast.ExprKind.FIELD, ast.ExprKind.INDEX {
             var at = place(e);
-            if (at.ptr != null) {
-                load_from(g, t, at);
-                return;
+            if (at.ptr == null) {
+                var base: []u8;
+                var offset = gen_address(g, e, &base);
+                at = relative(base, offset);
             }
-            load_from(g, t, relative("R0", gen_address(g, e)));
+            load_from(g, t, at);
         }
         case ast.ExprKind.CALL {
             if (e.builtin != ast.Builtin.NONE) {
@@ -1176,8 +1178,9 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
                 return;
             }
             if (e.op == ast.TokenKind.STAR) {
-                gen_addr(g, e);
-                load_from(g, t, "R0");
+                var base: []u8;
+                var offset = gen_address(g, e, &base);
+                load_from(g, t, relative(base, offset));
                 return;
             }
             gen_expr(g, e.left);
@@ -1299,8 +1302,6 @@ fn gen_assign(g: *Gen, s: *ast.Stmt) {
 
 fn gen_store(g: *Gen, s: *ast.Stmt) {
     var t = s.target.type;
-    var direct = place(s.target);
-    var target = "R6";
     var register = register_of(s.target);
     if (register.ptr != null) {
         gen_register_assign(g, s, register);
@@ -1309,15 +1310,28 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
 
     // x op= y with a y that needs no code works on x directly, as scaled for a pointer
     var operand = simple_operand(s.value);
-    if (s.op != ast.TokenKind.ASSIGN && operand.ptr != null && (t.kind != ast.TypeKind.POINTER || s.value.is_const)) {
+    var simple = s.op != ast.TokenKind.ASSIGN && operand.ptr != null && (t.kind != ast.TypeKind.POINTER || s.value.is_const);
+
+    // An address computed in R0 moves to R6, or to the stack while code computes the value
+    var target = place(s.target);
+    var pushed = false;
+    if (target.ptr == null) {
+        var base: []u8;
+        var offset = gen_address(g, s.target, &base);
+        if (ast.same(base, "R0")) {
+            base = "R6";
+            if (simple) {
+                emit(g, "    MOVE R6, R0\n");
+            } else {
+                emit(g, "    PUSH R0\n");
+                pushed = true;
+            }
+        }
+        target = relative(base, offset);
+    }
+    if (simple) {
         if (t.kind == ast.TypeKind.POINTER) {
             operand = ast.cat([][]u8 { "#", ast.number(wide.low(s.value.value) * t.base.size) });
-        }
-        if (direct.ptr != null) {
-            target = direct;
-        } else {
-            target = relative("R6", gen_address(g, s.target));
-            emit(g, "    MOVE R6, R0\n");
         }
         load_from(g, t, target);
         arithmetic(g, compound(s.op), t, operand);
@@ -1325,15 +1339,9 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
         return;
     }
 
-    if (direct.ptr != null) {
-        target = direct;
-    } else {
-        target = relative("R6", gen_address(g, s.target));
-        emit(g, "    PUSH R0\n");
-    }
     gen_expr(g, s.value);
     if (s.op == ast.TokenKind.ASSIGN) {
-        if (direct.ptr == null) {
+        if (pushed) {
             emit(g, "    POP R6\n");
         }
         store_to(g, t, target);
@@ -1343,7 +1351,7 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
         scale(g, t.base.size, "R0");
     }
     emit(g, "    MOVE R7, R0\n");
-    if (direct.ptr == null) {
+    if (pushed) {
         emit(g, "    POP R6\n");
     }
     load_from(g, t, target);
@@ -1516,11 +1524,17 @@ fn local_of(e: *ast.Expr) *ast.Symbol {
 }
 
 fn is_simple(e: *ast.Expr) bool {
-    return e.is_const || local_of(e) != null;
+    return e.is_const || e.kind == ast.ExprKind.NULL || local_of(e) != null;
+}
+
+// A field or the target of a pointer in a local, which a register can serve as the base of
+fn is_through_local(e: *ast.Expr) bool {
+    return (e.kind == ast.ExprKind.FIELD && e.field != null && e.left.type.kind == ast.TypeKind.POINTER ||
+        e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.STAR) && local_of(e.left) != null;
 }
 
 // Estimates what registers would save in an expression, and notes the locals whose address it takes:
-// comparing a local in a register takes one instruction less
+// comparing a local in a register, or reaching a field through one, takes one instruction less
 fn count_expr(e: *ast.Expr, weight: int) {
     if (e == null) {
         return;
@@ -1528,7 +1542,7 @@ fn count_expr(e: *ast.Expr, weight: int) {
     if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.AMP && local_of(e.left) != null) {
         e.left.symbol.address_taken = true;
     }
-    if (is_comparison(e) && local_of(e.left) != null && is_simple(e.right)) {
+    if (is_comparison(e) && local_of(e.left) != null && is_simple(e.right) || is_through_local(e)) {
         e.left.symbol.gain += weight;
     }
     count_expr(e.left, weight);
@@ -1572,6 +1586,8 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
                 } else if (is_simple(value)) {
                     target.gain += weight;
                 }
+            } else if (is_through_local(s.target)) {
+                s.target.left.symbol.gain += 2 * weight;
             }
             count_expr(s.target, weight);
             count_expr(value, weight);
