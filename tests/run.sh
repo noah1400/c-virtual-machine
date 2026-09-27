@@ -3,7 +3,8 @@
 # Runs tests/programs/*.asm and ore/tests/*.ore on the VM and checks that tests/errors/*.asm fail to
 # assemble and ore/tests/errors/*.ore fail to compile, or only the tests named. Expectations come from NAME.out,
 # NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:", "; expect-warning:",
-# "; asm-args:", "; vm-args:" and "; program-args:" lines, written with // in Ore.
+# "; asm-args:", "; vm-args:" and "; program-args:" lines, written with // in Ore, where "// vmc-args:"
+# gives vmc0 more arguments.
 # Programs are assembled with -W, and every warning needs an "; expect-warning:" line of its own.
 # "; disk-sectors:" attaches an empty disk image, NAME.x holds debugger commands, NAME.keys a key script
 # and NAME.err, if present, the whole expected stderr. "; link:" names modules in tests/programs to
@@ -176,7 +177,8 @@ for src in "$root"/ore/tests/*.ore; do
     base=${src%.ore}
     wanted "$name" || continue
 
-    if ! (cd "$root" && ./vmc0 "ore/tests/$name.ore" -o "$tmp/$name.bin" 2> "$tmp/$name.log"); then
+    if ! (cd "$root" && ./vmc0 $(expectation "$src" vmc-args) "ore/tests/$name.ore" -o "$tmp/$name.bin" \
+        2> "$tmp/$name.log"); then
         fail "$name" "does not compile: $(head -n 1 "$tmp/$name.log")"
         continue
     fi

@@ -1,0 +1,18 @@
+// extern fn calls assembly, and an interrupt fn handles an interrupt and returns with IRET
+// vmc-args: ore/tests/helpers/cpu.asm
+extern fn set_vector(vector: int, handler: u32);
+extern fn raise_test_interrupt();
+
+var handled: int;
+
+interrupt fn on_interrupt() {
+    handled += 1;
+}
+
+fn main() {
+    var before = 41;
+    set_vector(0x40, on_interrupt as u32);
+    raise_test_interrupt();
+    raise_test_interrupt();
+    print("handled ", handled, " interrupts, a local kept ", before + 1, "\n");
+}

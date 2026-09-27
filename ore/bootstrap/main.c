@@ -169,8 +169,9 @@ Module *load_module(Program *program, const char *path, const Module *importer, 
 }
 
 static void usage(FILE *out) {
-    fprintf(out, "Usage: vmc0 [options] program.ore\n"
-                 "Compiles an Ore program and the modules it imports into a VM32 binary.\n"
+    fprintf(out, "Usage: vmc0 [options] program.ore [file.asm...]\n"
+                 "Compiles an Ore program and the modules it imports into a VM32 binary, together with the\n"
+                 "assembly files that define its extern functions.\n"
                  "  -o FILE   write the binary to FILE (default: the program with .bin)\n"
                  "  -S        write the assembly instead, to FILE or the program with .asm\n"
                  "  -I DIR    look for imported modules in DIR as well\n"
@@ -202,11 +203,12 @@ static int write_file(const char *path, const char *text, size_t size) {
     return fclose(file) == 0 && ok;
 }
 
-// Runs vmasm from the directory vmc0 lives in, or else from the PATH
+// Runs vmasm from the directory vmc0 lives in, or else from the PATH. Assembly files given with
+// relative paths are found from the current directory.
 static int assemble(const char *self, const char *library, const char *source, const char *output) {
     const char *slash = strrchr(self, '/');
     char *vmasm = slash ? join(self, (size_t)(slash - self), "vmasm", "") : copy_text("vmasm", 5);
-    char *args[] = { vmasm, "-I", (char *)library, (char *)source, "-o", (char *)output, NULL };
+    char *args[] = { vmasm, "-I", (char *)library, "-I", ".", (char *)source, "-o", (char *)output, NULL };
 
     fflush(stdout);
     pid_t child = fork();
@@ -231,6 +233,7 @@ int main(int argc, char **argv) {
     const char *slash = strrchr(argv[0], '/');
     program.library = join(argv[0], slash ? (size_t)(slash - argv[0]) : 0, "ore/lib", "");
     program.include_dirs = allocate((size_t)argc * sizeof(char *));
+    program.assembly = allocate((size_t)argc * sizeof(char *));
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -247,7 +250,12 @@ int main(int argc, char **argv) {
             } else {
                 program.library = argv[++i];
             }
-        } else if (arg[0] == '-' || source) {
+        } else if (arg[0] == '-') {
+            usage(stderr);
+            return 1;
+        } else if (strlen(arg) > 4 && strcmp(arg + strlen(arg) - 4, ".asm") == 0) {
+            program.assembly[program.assembly_count++] = arg;
+        } else if (source) {
             usage(stderr);
             return 1;
         } else {

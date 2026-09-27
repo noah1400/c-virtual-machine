@@ -307,6 +307,8 @@ typedef struct {
     const char **include_dirs;
     int include_dir_count;
     const char *library;
+    const char **assembly;  // files of assembly for extern functions
+    int assembly_count;
     Symbol *main;
 } Program;
 
