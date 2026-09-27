@@ -44,6 +44,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -c FILE   Write how often each source line ran to FILE, - for stdout\n");
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
+    fprintf(out, "  -H COUNT  Show the last COUNT instructions when the program stops with an error\n");
     fprintf(out, "  -k FILE   Take keyboard input from a key script that releases keys at instruction counts\n");
     fprintf(out, "  -L SPEC   Print values each time execution reaches a location, as in -L 'loop:R8,[count]:d'\n");
     fprintf(out, "  -m KB     Memory size in KB, %d to %d (default %d)\n", MIN_MEMORY_KB, MAX_MEMORY_KB,
@@ -54,7 +55,6 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -t        Trace every executed instruction on stderr\n");
     fprintf(out, "  -v        Report loading and execution statistics on stderr\n");
     fprintf(out, "  -x FILE   Start the debugger and run its commands from FILE\n");
-    fprintf(out, "  -H COUNT  Show the last COUNT instructions when the program stops with an error\n");
     fprintf(out, "  -h        Show this help\n");
 }
 
