@@ -1,7 +1,9 @@
 #!/bin/sh
 # Usage: tests/run.sh [-u] [NAME...]
 # Runs tests/programs/*.asm and ore/tests/*.ore on the VM and checks that tests/errors/*.asm fail to
-# assemble and ore/tests/errors/*.ore fail to compile, or only the tests named. Expectations come from NAME.out,
+# assemble and ore/tests/errors/*.ore fail to compile, or only the tests named. vmc, the Ore compiler
+# written in Ore, has to write the same assembly and errors as vmc0 for every Ore test, and the test
+# named vmc checks that it compiles itself into vmc.bin. Expectations come from NAME.out,
 # NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:", "; expect-warning:",
 # "; asm-args:", "; vm-args:" and "; program-args:" lines, written with // in Ore, where "// vmc-args:"
 # gives vmc0 more arguments.
@@ -37,7 +39,7 @@ wanted() {
 }
 
 for name in $names; do
-    [ -f "$root/tests/programs/$name.asm" ] || [ -f "$root/tests/errors/$name.asm" ] ||
+    [ "$name" = vmc ] || [ -f "$root/tests/programs/$name.asm" ] || [ -f "$root/tests/errors/$name.asm" ] ||
         [ -f "$root/ore/tests/$name.ore" ] || [ -f "$root/ore/tests/errors/$name.ore" ] ||
         fail "$name" "there is no such test"
 done
@@ -45,6 +47,32 @@ done
 # Assembly tests write their expectations in ; comments, Ore tests in // comments
 expectation() {
     sed -n -e "s/^; $2: //p" -e "s|^// $2: ||p" "$1" | head -n 1
+}
+
+# Compiles with vmc0 and vmc, the Ore compiler written in Ore, which have to agree on the assembly they
+# write after its first line, which names the compiler, and on their errors. Leaves the status of vmc0
+# in $status and its errors in $tmp/NAME.log.
+same_as_vmc0() {
+    name=$1
+    shift
+    (cd "$root" && ./vmc0 -S "$@" -o "$tmp/$name.vmc0.asm" 2> "$tmp/$name.log")
+    status=$?
+    (cd "$root" && ./vmc -S "$@" -o "$tmp/$name.vmc.asm" 2> "$tmp/$name.vmc.log")
+    vmc_status=$?
+    sed 's/^vmc: /vmc0: /' "$tmp/$name.vmc.log" > "$tmp/$name.vmc.err"
+    if [ "$vmc_status" -ne "$status" ] || ! cmp -s "$tmp/$name.log" "$tmp/$name.vmc.err"; then
+        fail "$name" "vmc disagrees with vmc0: $(head -n 1 "$tmp/$name.vmc.log")"
+        return 1
+    fi
+    if [ "$status" -eq 0 ]; then
+        tail -n +2 "$tmp/$name.vmc0.asm" > "$tmp/$name.expected.asm"
+        tail -n +2 "$tmp/$name.vmc.asm" > "$tmp/$name.actual.asm"
+        if ! cmp -s "$tmp/$name.expected.asm" "$tmp/$name.actual.asm"; then
+            fail "$name" "vmc writes other assembly than vmc0"
+            diff "$tmp/$name.expected.asm" "$tmp/$name.actual.asm" | head -n 10
+            return 1
+        fi
+    fi
 }
 
 # Runs $tmp/NAME.bin and compares what it does with the expectations of its source
@@ -182,6 +210,7 @@ for src in "$root"/ore/tests/*.ore; do
         fail "$name" "does not compile: $(head -n 1 "$tmp/$name.log")"
         continue
     fi
+    same_as_vmc0 "$name" $(expectation "$src" vmc-args) "ore/tests/$name.ore" || continue
     run_program "$name" "$base" "$src"
 done
 
@@ -207,7 +236,8 @@ for src in "$root"/ore/tests/errors/*.ore; do
     wanted "$name" || continue
     expected=$(expectation "$src" expect-error)
 
-    if (cd "$root" && ./vmc0 "ore/tests/errors/$name.ore" 2> "$tmp/$name.log"); then
+    same_as_vmc0 "$name" "ore/tests/errors/$name.ore" || continue
+    if [ "$status" -eq 0 ]; then
         fail "$name" "compiled although it should not"
     elif ! grep -qF -- "$expected" "$tmp/$name.log"; then
         fail "$name" "expected '$expected', got: $(head -n 1 "$tmp/$name.log")"
@@ -215,6 +245,17 @@ for src in "$root"/ore/tests/errors/*.ore; do
         passed=$((passed + 1))
     fi
 done
+
+# vmc compiles itself into the very binary that vmc0 made of it
+if wanted vmc; then
+    if ! (cd "$root" && ./vmc ore/compiler/vmc.ore -o "$tmp/vmc.bin" 2> "$tmp/vmc.log"); then
+        fail vmc "does not compile itself: $(head -n 1 "$tmp/vmc.log")"
+    elif ! cmp -s "$root/vmc.bin" "$tmp/vmc.bin"; then
+        fail vmc "compiles itself into another binary than vmc0 does"
+    else
+        passed=$((passed + 1))
+    fi
+fi
 
 echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]
