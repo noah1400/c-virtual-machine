@@ -13,6 +13,7 @@
 
 typedef struct {
     const char *program;
+    const char *disk;
     int arg_count;
     char **args;
     uint32_t memory_size;
@@ -27,6 +28,7 @@ typedef struct {
 static void print_usage(FILE *out, const char *name) {
     fprintf(out, "Usage: %s [options] program.bin [arguments...]\n", name);
     fprintf(out, "Options:\n");
+    fprintf(out, "  -b FILE   Attach FILE as the disk image\n");
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
     fprintf(out, "  -m KB     Memory size in KB, %d to %d (default %d)\n", MIN_MEMORY_KB, MAX_MEMORY_KB,
@@ -52,6 +54,12 @@ static int parse_options(int argc, char **argv, Options *opts) {
             opts->arg_count = argc - i;
             opts->args = argv + i;
             break;
+        } else if (strcmp(arg, "-b") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "vm: -b needs a disk image\n");
+                return -1;
+            }
+            opts->disk = argv[++i];
         } else if (strcmp(arg, "-d") == 0) {
             opts->debug = 1;
         } else if (strcmp(arg, "-D") == 0) {
@@ -240,6 +248,11 @@ int main(int argc, char *argv[]) {
 
     if (vm_load_program_file(&vm, opts.program) != VM_ERROR_NONE) {
         fprintf(stderr, "vm: cannot load %s: %s\n", opts.program, vm_get_error_message(&vm));
+        vm_cleanup(&vm);
+        return 1;
+    }
+    if (opts.disk && io_attach_disk(&vm, opts.disk) != VM_ERROR_NONE) {
+        fprintf(stderr, "vm: cannot attach the disk image %s\n", vm_get_error_message(&vm));
         vm_cleanup(&vm);
         return 1;
     }

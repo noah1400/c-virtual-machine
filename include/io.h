@@ -7,6 +7,7 @@
 #define IO_PORT_TIMER    0x40
 #define IO_PORT_DISPLAY  0x50
 #define IO_PORT_KEYBOARD 0x60
+#define IO_PORT_DISK     0x70
 
 typedef struct IODevice IODevice;
 
@@ -24,6 +25,9 @@ struct IODevice {
 
 int io_init(VM *vm);
 void io_cleanup(VM *vm);
+
+// Opens path as the image of the disk device
+int io_attach_disk(VM *vm, const char *path);
 
 // Port accesses fault when no device claims the port
 uint32_t io_read(VM *vm, uint32_t port);

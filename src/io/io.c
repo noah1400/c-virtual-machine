@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "devices.h"
 #include "vm.h"
 
@@ -31,7 +32,7 @@ static int add_device(VM *vm, IODevice device) {
 
 int io_init(VM *vm) {
     static int (*const constructors[])(VM *, IODevice *) = {
-        console_device, timer_device, display_device, keyboard_device,
+        console_device, timer_device, display_device, keyboard_device, disk_device,
     };
 
     vm->io_devices = calloc(1, sizeof(struct IODevices));
@@ -64,6 +65,16 @@ void io_cleanup(VM *vm) {
     }
     free(io);
     vm->io_devices = NULL;
+}
+
+int io_attach_disk(VM *vm, const char *path) {
+    struct IODevices *io = vm->io_devices;
+    for (int i = 0; io && i < io->count; i++) {
+        if (strcmp(io->devices[i].name, "disk") == 0) {
+            return disk_attach(vm, &io->devices[i], path);
+        }
+    }
+    return vm_raise(vm, VM_ERROR_IO_ERROR, "There is no disk device");
 }
 
 static IODevice *find_device(VM *vm, uint32_t port) {
