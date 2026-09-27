@@ -29,6 +29,9 @@ void io_cleanup(VM *vm);
 // Opens path as the image of the disk device
 int io_attach_disk(VM *vm, const char *path);
 
+// Makes the display print each changed frame as plain text instead of drawing on the terminal
+void io_display_as_text(VM *vm);
+
 // Port accesses fault when no device claims the port
 uint32_t io_read(VM *vm, uint32_t port);
 void io_write(VM *vm, uint32_t port, uint32_t value);

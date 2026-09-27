@@ -20,6 +20,7 @@ typedef struct {
     const char *disk;
     const char *commands;
     uint32_t history;
+    int text_display;
     int arg_count;
     char **args;
     uint32_t memory_size;
@@ -41,6 +42,7 @@ static void print_usage(FILE *out, const char *name) {
             DEFAULT_MEMORY_KB);
     fprintf(out, "  -n COUNT  Stop with an error after COUNT instructions\n");
     fprintf(out, "  -p        Print an execution profile by label on stderr\n");
+    fprintf(out, "  -s        Print display frames as plain text instead of drawing them\n");
     fprintf(out, "  -t        Trace every executed instruction on stderr\n");
     fprintf(out, "  -v        Report loading and execution statistics on stderr\n");
     fprintf(out, "  -x FILE   Start the debugger and run its commands from FILE\n");
@@ -72,6 +74,8 @@ static int parse_options(int argc, char **argv, Options *opts) {
             opts->debug = 1;
         } else if (strcmp(arg, "-D") == 0) {
             opts->disassemble = 1;
+        } else if (strcmp(arg, "-s") == 0) {
+            opts->text_display = 1;
         } else if (strcmp(arg, "-t") == 0) {
             opts->trace = 1;
         } else if (strcmp(arg, "-p") == 0) {
@@ -160,6 +164,9 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "vm: cannot load %s: %s\n", opts.program, vm_get_error_message(&vm));
         vm_cleanup(&vm);
         return 1;
+    }
+    if (opts.text_display) {
+        io_display_as_text(&vm);
     }
     if (opts.disk && io_attach_disk(&vm, opts.disk) != VM_ERROR_NONE) {
         fprintf(stderr, "vm: cannot attach the disk image %s\n", vm_get_error_message(&vm));

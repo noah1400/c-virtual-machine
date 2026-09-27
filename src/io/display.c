@@ -14,12 +14,43 @@ typedef struct {
     uint32_t buffer;                    // physical address of the cells, 0 while the display is off
     uint8_t shown[DISPLAY_CELLS * 2];   // what the terminal shows
     int drawn;
+    int text;                           // print frames as plain text instead of drawing
+    uint32_t refreshes;
 } DisplayState;
 
 static void set_colors(uint8_t attribute) {
     int foreground = attribute & 0x0F, background = attribute >> 4;
     printf("\033[0;%d;%dm", foreground < 8 ? 30 + foreground : 82 + foreground,
            background < 8 ? 40 + background : 92 + background);
+}
+
+static char visible(uint8_t c) {
+    return c >= 32 && c < 127 ? (char)c : ' ';
+}
+
+// Prints the characters of the display when they changed since the last frame, with trailing
+// spaces left out
+static void print_frame(VM *vm, DisplayState *display, const uint8_t *cells) {
+    int changed = !display->drawn;
+    for (int i = 0; i < DISPLAY_CELLS && !changed; i++) {
+        changed = visible(cells[2 * i]) != visible(display->shown[2 * i]);
+    }
+    if (!changed) {
+        return;
+    }
+    printf("--- refresh %u, instruction %u ---\n", display->refreshes, vm->instruction_count);
+    for (int row = 0; row < DISPLAY_ROWS; row++) {
+        char line[DISPLAY_COLUMNS];
+        int length = 0;
+        for (int column = 0; column < DISPLAY_COLUMNS; column++) {
+            line[column] = visible(cells[2 * (row * DISPLAY_COLUMNS + column)]);
+            if (line[column] != ' ') {
+                length = column + 1;
+            }
+        }
+        printf("%.*s\n", length, line);
+    }
+    fflush(stdout);
 }
 
 // Draws the cells that changed since the last refresh
@@ -33,6 +64,14 @@ static void display_refresh(VM *vm, DisplayState *display) {
     }
 
     const uint8_t *cells = vm->memory + display->buffer;
+    display->refreshes++;
+    if (display->text) {
+        print_frame(vm, display, cells);
+        memcpy(display->shown, cells, sizeof(display->shown));
+        display->drawn = 1;
+        return;
+    }
+
     int attribute = -1, next = -1;
     for (int i = 0; i < DISPLAY_CELLS; i++) {
         const uint8_t *cell = cells + 2 * i;
@@ -46,7 +85,7 @@ static void display_refresh(VM *vm, DisplayState *display) {
             set_colors(cell[1]);
             attribute = cell[1];
         }
-        putchar(cell[0] >= 32 && cell[0] < 127 ? cell[0] : ' ');
+        putchar(visible(cell[0]));
         next = i + 1;
     }
     if (attribute >= 0) {
@@ -59,7 +98,7 @@ static void display_refresh(VM *vm, DisplayState *display) {
 
 // Gives the terminal back with the cursor below the display
 static void display_off(DisplayState *display) {
-    if (display->buffer) {
+    if (display->buffer && !display->text) {
         printf("\033[0m\033[?25h\033[%d;1H", DISPLAY_ROWS + 1);
         fflush(stdout);
     }
@@ -87,7 +126,7 @@ static void display_write(VM *vm, IODevice *device, uint16_t offset, uint32_t va
     DisplayState *display = device->state;
     switch (offset) {
         case 0:
-            if (value && !display->buffer) {
+            if (value && !display->buffer && !display->text) {
                 printf("\033[?25l\033[2J");
                 fflush(stdout);
             } else if (!value) {
@@ -107,6 +146,11 @@ static void display_write(VM *vm, IODevice *device, uint16_t offset, uint32_t va
 static void display_cleanup(VM *vm, IODevice *device) {
     (void)vm;
     display_off(device->state);
+}
+
+void display_as_text(IODevice *device) {
+    DisplayState *display = device->state;
+    display->text = 1;
 }
 
 int display_device(VM *vm, IODevice *device) {

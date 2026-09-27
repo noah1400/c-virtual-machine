@@ -67,14 +67,26 @@ void io_cleanup(VM *vm) {
     vm->io_devices = NULL;
 }
 
-int io_attach_disk(VM *vm, const char *path) {
+static IODevice *named_device(VM *vm, const char *name) {
     struct IODevices *io = vm->io_devices;
     for (int i = 0; io && i < io->count; i++) {
-        if (strcmp(io->devices[i].name, "disk") == 0) {
-            return disk_attach(vm, &io->devices[i], path);
+        if (strcmp(io->devices[i].name, name) == 0) {
+            return &io->devices[i];
         }
     }
-    return vm_raise(vm, VM_ERROR_IO_ERROR, "There is no disk device");
+    return NULL;
+}
+
+int io_attach_disk(VM *vm, const char *path) {
+    IODevice *disk = named_device(vm, "disk");
+    return disk ? disk_attach(vm, disk, path) : vm_raise(vm, VM_ERROR_IO_ERROR, "There is no disk device");
+}
+
+void io_display_as_text(VM *vm) {
+    IODevice *display = named_device(vm, "display");
+    if (display) {
+        display_as_text(display);
+    }
 }
 
 static IODevice *find_device(VM *vm, uint32_t port) {

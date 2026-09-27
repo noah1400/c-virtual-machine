@@ -96,6 +96,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-m KB` | Memory size in KB, 128 to 1048576 (default 1024) |
 | `-n COUNT` | Stop with an error after COUNT instructions |
 | `-p` | Print an execution profile on stderr when the program stops |
+| `-s` | Print [display](#display) frames as plain text instead of drawing them |
 | `-t` | Print each instruction on stderr before it executes |
 | `-v` | Print loading and execution statistics on stderr |
 | `-x FILE` | Start the debugger and run its commands from FILE |
@@ -334,6 +335,16 @@ Syscall buffers and heap blocks are virtual addresses too. The vector table is r
 The display shows an 80×25 buffer of cells in memory. A cell is two bytes: the character, then an attribute with the foreground color in the low nibble and the background color in the high nibble. Colors 0 to 7 are black, red, green, yellow, blue, magenta, cyan and white, and 8 to 15 are their bright versions. Characters outside printable ASCII show as spaces.
 
 Setting the buffer address clears the terminal and hides the cursor. Each write to the refresh port then draws the cells that changed with ANSI escape sequences, so a program updates its buffer and refreshes once per frame. When the display is turned off or the program ends, the cursor reappears below the display.
+
+With `vm -s`, a refresh prints the characters as plain text instead, when they changed since the last frame. A header line gives the number of the refresh and the instructions executed so far, and trailing spaces are left out:
+
+```console
+$ ./vm -s snake.bin 0 < keys.txt | tail -26 | head -4
+--- refresh 31, instruction 45700 ---
+ SNAKE   arrows or WASD steer, q quits                              score:    1
+################################################################################
+#                                                                              #
+```
 
 #### Keyboard
 
