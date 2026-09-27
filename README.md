@@ -1,10 +1,11 @@
 # VM32
 
-A 32-bit virtual machine written in C, with its own assembler, linker, disassembler and interactive debugger.
+A 32-bit virtual machine written in C, with its own assembler, linker, disassembler, interactive debugger and a compiler for Ore, a small systems language.
 
 - **`vm`** runs VM32 programs and can trace, disassemble or debug them.
 - **`vmasm`** turns assembly source into VM32 binaries or object files. It supports expressions, local labels, macros, structures, conditional assembly, includes and listings.
 - **`vmld`** links object files into one program.
+- **`vmc0`** compiles [Ore](docs/language.md) programs into VM32 binaries. It is written in C, to compile the Ore compiler written in Ore.
 
 ## Contents
 
@@ -15,6 +16,7 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 - [Instruction set](#instruction-set)
 - [Assembly language](#assembly-language)
 - [Linking](#linking)
+- [Ore](#ore)
 - [Syscalls](#syscalls)
 - [Debugger](#debugger)
 - [Binary format](#binary-format)
@@ -26,7 +28,7 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 You need a C11 compiler and a POSIX system.
 
 ```sh
-make          # builds ./vm, ./vmasm and ./vmld
+make          # builds ./vm, ./vmasm, ./vmld and ./vmc0
 make test     # builds them and runs the test suite
 make clean
 ```
@@ -863,6 +865,37 @@ An address may be added to or subtracted from a number, and two addresses in the
 
 Linking fails, and names the file, when a symbol is undefined, two files export the same name, or more than one file sets an entry point. `vm` refuses to run an object file.
 
+## Ore
+
+[docs/language.md](docs/language.md) describes the language. `vmc0` compiles a program, meaning its main module and every module that imports, into a binary:
+
+```console
+$ ./vmc0 primes.ore
+$ ./vm primes.bin
+168 primes below 1000, the largest is 997
+```
+
+```
+Usage: vmc0 [options] program.ore [file.asm...]
+  -o FILE   write the binary to FILE (default: the program with .bin)
+  -S        write the assembly instead, to FILE or the program with .asm
+  -I DIR    look for imported modules in DIR as well
+  -L DIR    take the runtime and the standard library from DIR
+```
+
+- **How it compiles:** `vmc0` writes the whole program as one assembly file. That file includes `ore/lib/runtime.asm` and any assembly files named on the command line, which define `extern fn` functions. `vmc0` then assembles it with the `vmasm` next to it.
+- **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines.
+- **Runtime errors**, such as an index out of bounds, a `null` pointer or a failed `assert`, stop the program with a message, reported at the Ore line that failed. For the `digits.ore` example in the language description:
+
+```console
+$ ./vm digits.bin
+vm: error: index 10 is out of bounds for length 10
+vm: at 0x0040 <digits.digit+16> digits.ore:2: CALL rt.index_error
+vm: #1 0x0084 <digits.main+12> digits.ore:6: CALL digits.digit
+```
+
+`vmc0` is the bootstrap compiler, so it leaves out `f32`. Its error messages name the file and line of the first problem, and compiling stops there.
+
 ## Syscalls
 
 `SYSCALL #n` takes its arguments in R0, R5, R6 and R7 and returns its result in R0. Every syscall also sets R5 to a status: 0 on success, otherwise one of the [error codes](#error-codes).
@@ -1043,10 +1076,12 @@ Code and data symbols hold offsets into their section. A relocation stores the a
 
 ## Tests
 
-`make test` runs `tests/run.sh`, which does two things:
+`make test` runs `tests/run.sh`, which does four things:
 
 - Assembles and runs every program in `tests/programs`. A program's output must match `NAME.out`, and `NAME.in`, if present, is fed to its stdin.
 - Checks that every file in `tests/errors` fails to assemble with the expected message.
+- Compiles and runs every Ore program in `ore/tests` the same way. Their comment lines start with `//` instead of `;`, and `// vmc-args:` gives `vmc0` more arguments.
+- Checks that every file in `ore/tests/errors` fails to compile with the expected message.
 
 Comment lines in a test adjust the checks:
 
@@ -1054,7 +1089,7 @@ Comment lines in a test adjust the checks:
 |---|---|
 | `; expect-exit: N` | Expected exit status (default 0) |
 | `; expect-stderr: text` | Text that must appear on stderr |
-| `; expect-error: text` | Expected assembler error (only in `tests/errors`) |
+| `; expect-error: text` | Expected assembler or compiler error (only in `tests/errors` and `ore/tests/errors`) |
 | `; expect-warning: text` | A warning of `vmasm -W` that has to appear. Programs are assembled with `-W`, and every warning needs such a line |
 | `; link: modules/a.asm ...` | Assemble the program and these files from `tests/programs` with `-c`, and link them |
 | `; expect-link-error: text` | Expected linker error |
@@ -1083,5 +1118,9 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `assembler/` | `vmasm`: lexer, expressions, symbols, includes and macros, the two passes, output and the register check |
 | `linker/` | `vmld` |
 | `assembler/examples/` | Example programs |
+| `ore/bootstrap/` | `vmc0`: lexer, parser, type checker and code generator for Ore |
+| `ore/lib/` | The runtime that compiled Ore programs start from |
+| `ore/tests/` | Ore test programs, and the modules and assembly they use |
+| `docs/language.md` | The Ore language |
 | `include/` | Headers |
 | `tests/` | Test programs and the test runner |

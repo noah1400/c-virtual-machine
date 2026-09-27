@@ -280,7 +280,7 @@ fn main() int {
 ## Memory
 
 - Global variables live in the data section. Local variables live on the stack, which holds 64 KB.
-- `new(T)` allocates a zeroed `T` on the heap and returns a `*T`. `new(T, n)` allocates *n* of them and returns a `[]T`. `free(x)` gives either back.
+- `new(T)` allocates a zeroed `T` on the heap and returns a `*T`. `new(T, n)` allocates *n* of them and returns a `[]T`. `free(x)` gives either back, and does nothing for `null`.
 - Nothing is freed automatically.
 
 The VM checks every heap access, so reading or writing freed memory, or past the end of an allocation, stops the program.
@@ -354,14 +354,14 @@ The standard library is written in Ore, apart from `std/cpu`:
 
 ## Implementation
 
-`vmc` reads the main module and its imports and writes one assembly file per module, with `.loc` lines. It assembles them with `vmasm -c` and links them with the runtime using `vmld`. `-S` stops after the assembly and `-o` names the output.
+`vmc0`, the bootstrap compiler written in C, reads the main module and its imports and writes the whole program as one assembly file with `.loc` lines. The file includes the runtime and any assembly files given on the command line, and `vmc0` assembles it with `vmasm`. `-S` stops after the assembly and `-o` names the output. `vmc0` leaves out `f32`.
 
 **Calling convention:**
 - **Arguments** are pushed from right to left, each taking its size rounded up to 4 bytes, and the caller removes them.
 - **Frames** use `ENTER` and `LEAVE`: arguments start at `[BP+8]` and locals lie below BP.
-- **Results** of up to 4 bytes return in R0, and results of up to 8 bytes, such as slices, in R0 and R5. For a larger result, the caller passes the address of room for it as a hidden first argument, and the callee returns that address in R0.
+- **Results:** integers, booleans, enums and pointers return in R0, and slices in R0 (the pointer) and R5 (the length). For a struct or array, the caller passes the address of room for it as a hidden first argument, and the callee returns that address in R0.
 - **Registers:** R0 and R5–R7 are free for the callee to change; R8–R15 must come back unchanged.
 
-**Symbols:** functions and globals of module `m` are named `m.name` in assembly, and the main module's `main` is also exported as `main`. `extern fn` names stay as written. An `interrupt fn` ends with `IRET` instead of `RET`.
+**Symbols:** functions and globals of module `m` are named `m.name` in assembly, and `main` calls the main module's `main`. `extern fn` names stay as written. An `interrupt fn` ends with `IRET` instead of `RET`.
 
-**Runtime:** it calls `main` and passes its result to the Exit syscall. For a runtime error it formats the message and makes syscall 35, Abort, which stops the program the way a fault does. R0 holds the message, and R5 the number of calls to leave out of the report, so that it starts at the Ore line that failed.
+**Runtime:** `ore/lib/runtime.asm` calls `main` and passes its result to the Exit syscall. For a runtime error it formats the message and makes syscall 35, Abort, which stops the program the way a fault does. R0 holds the message, and R5 the number of calls to leave out of the report, so that it starts at the Ore line that failed.
