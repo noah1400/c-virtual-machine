@@ -690,6 +690,7 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.align n` | Pad to a multiple of *n*, a power of two up to 4096 |
 | `.org offset` | Pad forward to an offset from the start of the current section |
 | `.equ NAME, expr` or `.set` | Define a constant. A constant cannot be redefined |
+| `.struct NAME` ... `.ends` | Define a [structure](#structures) |
 | `.entry expr` | Start execution here instead of at 0x0000 |
 | `.error "message"` | Stop assembly with this message. Useful inside `.if` |
 | `.include "file"` | Insert a file. It is searched for next to the including file, then in `-I` directories |
@@ -699,6 +700,21 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 A value can be written signed or unsigned, but it must fit its width. For example, `.byte` accepts −128 to 255.
 
 The arguments of `.space`, `.align`, `.org` and `.if` decide the layout. They may only use symbols defined earlier, and must not depend on labels whose addresses move when instructions grow.
+
+### Structures
+
+Between `.struct NAME` and `.ends`, a label names the offset of a field as `NAME.label`, and the data directives `.byte`, `.word`, `.dword`, `.float`, `.ascii`, `.asciiz`, `.space` and `.align` only reserve room. After `.ends`, `NAME` is the size of the whole structure. Nothing is emitted, and instructions are not allowed inside:
+
+```asm
+.struct Entry
+name:   .space 24
+size:   .dword 0
+.ends                           ; Entry.name = 0, Entry.size = 24, Entry = 28
+
+    LOAD R9, [R8 + Entry.size]
+entries:
+    .space Entry * 32
+```
 
 ### Macros
 

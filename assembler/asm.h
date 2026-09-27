@@ -134,6 +134,10 @@ typedef struct {
     Condition conditions[ASM_MAX_CONDITIONS];
     int condition_depth;
 
+    char structure[128];        // the .struct being defined, empty outside one
+    int64_t structure_offset;
+    const SourceLine *structure_line;
+
     int changed;        // a layout pass moved a label, changed a constant or widened an instruction
     int64_t entry;
     const SourceLine *entry_line;   // the .entry directive, if any

@@ -174,9 +174,46 @@ static void report_redefinition(Assembler *as, const char *name, const AsmSymbol
     }
 }
 
+// Constants whose value is known in pass 1 and cannot change afterwards
+static void define_constant(Assembler *as, const char *name, int64_t value) {
+    if (as->pass != PASS_DEFINE) {
+        return;
+    }
+    AsmSymbol *sym = symbols_find(&as->symbols, name);
+    if (sym) {
+        report_redefinition(as, name, sym);
+        return;
+    }
+    sym = symbols_add(&as->symbols, name);
+    if (!sym) {
+        asm_error(as, "out of memory");
+        return;
+    }
+    sym->kind = SYM_CONST;
+    sym->line = as->line;
+    sym->value = value;
+    sym->defined = 1;
+}
+
+// A label inside .struct names the offset of a field as STRUCTURE.FIELD
+static void define_field(Assembler *as, const char *text) {
+    char name[256];
+    const char *field = text[0] == '.' ? text + 1 : text;
+
+    if (snprintf(name, sizeof(name), "%s.%s", as->structure, field) >= (int)sizeof(name)) {
+        asm_error(as, "field name too long: %s", text);
+        return;
+    }
+    define_constant(as, name, as->structure_offset);
+}
+
 static void define_label(Assembler *as, const char *text) {
     char name[256];
 
+    if (as->structure[0]) {
+        define_field(as, text);
+        return;
+    }
     if (isa_register_index(text) >= 0) {
         if (as->pass == PASS_DEFINE) {
             asm_error(as, "register name %s cannot be used as a label", text);
@@ -404,9 +441,109 @@ static void directive_entry(Assembler *as, Parser *p) {
     }
 }
 
+static void directive_struct(Assembler *as, Parser *p) {
+    Token *t = peek(p);
+
+    if (as->structure[0]) {
+        asm_error(as, "structures cannot be nested");
+        return;
+    }
+    if (t->kind != TOK_IDENT || t->text[0] == '.' || isa_register_index(t->text) >= 0) {
+        asm_error(as, "expected a structure name");
+        return;
+    }
+    if (strlen(t->text) >= sizeof(as->structure)) {
+        asm_error(as, "structure name too long: %s", t->text);
+        return;
+    }
+    snprintf(as->structure, sizeof(as->structure), "%s", t->text);
+    as->structure_offset = 0;
+    as->structure_line = as->line;
+    p->pos++;
+    expect_end(p);
+}
+
+// Inside .struct, data directives only reserve room for fields; .ends names the size
+static void structure_directive(Assembler *as, Parser *p, const char *name) {
+    int64_t size = 0;
+
+    if (name_equals(name, ".ends")) {
+        if (expect_end(p)) {
+            define_constant(as, as->structure, as->structure_offset);
+        }
+        as->structure[0] = '\0';
+        return;
+    }
+    if (name_equals(name, ".byte") || name_equals(name, ".word") || name_equals(name, ".dword") ||
+        name_equals(name, ".float")) {
+        int width = name_equals(name, ".byte") ? 1 : name_equals(name, ".word") ? 2 : 4;
+        do {
+            if (width == 1 && peek(p)->kind == TOK_STRING) {
+                size += (int64_t)peek(p)->length;
+                p->pos++;
+                continue;
+            }
+            parse_expression(p);
+            if (p->failed) {
+                return;
+            }
+            size += width;
+        } while (accept(p, ','));
+    } else if (name_equals(name, ".ascii") || name_equals(name, ".asciiz") || name_equals(name, ".string")) {
+        do {
+            if (peek(p)->kind != TOK_STRING) {
+                asm_error(as, "expected a string");
+                return;
+            }
+            size += (int64_t)peek(p)->length + !name_equals(name, ".ascii");
+            p->pos++;
+        } while (accept(p, ','));
+    } else if (name_equals(name, ".space") || name_equals(name, ".skip")) {
+        if (!eval_now(p, &size, "the .space size")) {
+            return;
+        }
+        if (accept(p, ',')) {
+            parse_expression(p);
+        }
+        if (size < 0 || size > ASM_MAX_SECTION_SIZE) {
+            asm_error(as, ".space size %lld is out of range", (long long)size);
+            return;
+        }
+    } else if (name_equals(name, ".align")) {
+        int64_t alignment;
+        if (!eval_now(p, &alignment, "the alignment")) {
+            return;
+        }
+        if (alignment < 1 || alignment > 0x1000 || (alignment & (alignment - 1)) != 0) {
+            asm_error(as, "alignment must be a power of two up to 4096");
+            return;
+        }
+        size = (alignment - as->structure_offset % alignment) % alignment;
+    } else {
+        asm_error(as, "%s is not allowed inside .struct", name);
+        return;
+    }
+    if (!p->failed && expect_end(p)) {
+        as->structure_offset += size;
+    }
+}
+
 static void directive(Assembler *as, Parser *p) {
     const char *name = peek(p)->text;
     p->pos++;
+
+    if (name_equals(name, ".struct")) {
+        directive_struct(as, p);
+        return;
+    }
+    if (as->structure[0]) {
+        structure_directive(as, p, name);
+        return;
+    }
+    if (name_equals(name, ".ends")) {
+        asm_error(as, ".ends without .struct");
+        return;
+    }
 
     if (name_equals(name, ".text") || name_equals(name, ".data")) {
         if (expect_end(p)) {
@@ -782,6 +919,10 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
     }
     p->pos++;
 
+    if (as->structure[0]) {
+        asm_error(as, "instructions are not allowed inside .struct");
+        return;
+    }
     if (as->section != SECTION_TEXT) {
         asm_error(as, "instructions must be in the .text section");
         return;
@@ -967,6 +1108,7 @@ static void run_pass(Assembler *as, int pass) {
     as->section_depth = 0;
     as->condition_depth = 0;
     as->scope[0] = '\0';
+    as->structure[0] = '\0';
 
     for (size_t i = 0; i < as->line_count && as->errors < ASM_MAX_ERRORS; i++) {
         as->line = &as->lines[i];
@@ -989,6 +1131,11 @@ static void run_pass(Assembler *as, int pass) {
 
     if (as->condition_depth > 0 && pass == PASS_DEFINE) {
         asm_error(as, "missing .endif");
+    }
+    if (as->structure[0] && pass == PASS_DEFINE) {
+        as->line = as->structure_line;
+        asm_error(as, "structure %s is missing .ends", as->structure);
+        as->line = NULL;
     }
 
     // Data follows the code on the next page; moving it means another layout pass
