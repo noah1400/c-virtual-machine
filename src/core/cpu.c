@@ -126,10 +126,10 @@ static uint32_t vector_handler(VM *vm, uint8_t vector) {
     return table ? memory_read_dword(vm, table + vector * 4u) : 0;
 }
 
-// Saves the execution context and masks interrupts while the handler runs
+// Saves the execution context and masks interrupts and single-stepping while the handler runs
 static void enter_handler(VM *vm, uint32_t handler) {
     cpu_push_all(vm);
-    vm->registers[R4_SR] &= ~(uint32_t)INT_FLAG;
+    vm->registers[R4_SR] &= ~(uint32_t)(INT_FLAG | TRAP_FLAG);
     vm->registers[R3_PC] = handler;
     vm->entered_interrupt = 1;
 }

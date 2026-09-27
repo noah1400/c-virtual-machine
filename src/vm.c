@@ -97,6 +97,7 @@ int vm_step(VM *vm) {
         vm->error_pc = vm->registers[R3_PC];
     }
 
+    int trap = cpu_get_flag(vm, TRAP_FLAG) && !vm->entered_interrupt;
     if (execute_next(vm) != VM_ERROR_NONE) {
         memcpy(vm->registers, saved, sizeof(saved));
         return cpu_exception(vm);
@@ -104,6 +105,9 @@ int vm_step(VM *vm) {
 
     vm->instruction_count++;
     io_tick(vm);
+    if (trap && !vm->halted && !vm->entered_interrupt && vm->last_error == VM_ERROR_NONE) {
+        cpu_interrupt(vm, VM_TRAP_VECTOR);
+    }
     return vm->last_error;
 }
 

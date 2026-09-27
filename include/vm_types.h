@@ -105,4 +105,7 @@ typedef struct {
 // Faults with a code below this are delivered to the interrupt vector of the same number
 #define VM_EXCEPTION_VECTORS          16
 
+// Raised after every instruction that starts with the trap flag set
+#define VM_TRAP_VECTOR                15
+
 #endif // _VM_TYPES_H_
