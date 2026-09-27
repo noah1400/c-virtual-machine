@@ -134,6 +134,16 @@ static int execute_arithmetic(VM *vm, const Instruction *instr) {
             set_zero_negative(vm, result);
             *dest = result;
             break;
+        case MULH_OP:
+            result = (uint32_t)(((int64_t)(int32_t)a * (int32_t)b) >> 32);
+            set_zero_negative(vm, result);
+            *dest = result;
+            break;
+        case UMULH_OP:
+            result = (uint32_t)(((uint64_t)a * b) >> 32);
+            set_zero_negative(vm, result);
+            *dest = result;
+            break;
         case IDIV_OP:
         case IMOD_OP: {
             int32_t x = (int32_t)a, y = (int32_t)b;
@@ -232,12 +242,55 @@ static int execute_float(VM *vm, const Instruction *instr) {
     return VM_ERROR_NONE;
 }
 
+static uint32_t count_bits(uint32_t value) {
+    uint32_t count = 0;
+    for (; value; value &= value - 1) {
+        count++;
+    }
+    return count;
+}
+
+static uint32_t leading_zeros(uint32_t value) {
+    uint32_t count = 0;
+    for (uint32_t bit = 0x80000000u; bit && !(value & bit); bit >>= 1) {
+        count++;
+    }
+    return count;
+}
+
+static uint32_t trailing_zeros(uint32_t value) {
+    uint32_t count = 0;
+    for (uint32_t bit = 1; bit && !(value & bit); bit <<= 1) {
+        count++;
+    }
+    return count;
+}
+
+static int execute_bit_count(VM *vm, const Instruction *instr) {
+    uint32_t value = read_operand(vm, instr, instr->reg2, 4);
+    if (vm->last_error != VM_ERROR_NONE) {
+        return vm->last_error;
+    }
+
+    uint32_t result = instr->opcode == POPCNT_OP ? count_bits(value)
+                      : instr->opcode == CLZ_OP  ? leading_zeros(value)
+                                                 : trailing_zeros(value);
+    set_zero_negative(vm, result);
+    cpu_set_flag(vm, CARRY_FLAG, 0);
+    cpu_set_flag(vm, OVER_FLAG, 0);
+    vm->registers[instr->reg1] = result;
+    return VM_ERROR_NONE;
+}
+
 static int execute_unary(VM *vm, const Instruction *instr) {
     uint32_t *dest = &vm->registers[instr->reg1];
     uint32_t a = *dest;
     uint32_t result;
 
     switch (instr->opcode) {
+        case BSWAP_OP:
+            result = (a >> 24) | ((a >> 8) & 0xFF00) | ((a << 8) & 0xFF0000) | (a << 24);
+            break;
         case INC_OP:
             result = a + 1;
             cpu_set_flag(vm, OVER_FLAG, a == 0x7FFFFFFF);
@@ -648,7 +701,20 @@ int cpu_execute_instruction(VM *vm, const Instruction *instr) {
         case DEC_OP:
         case NEG_OP:
         case NOT_OP:
+        case BSWAP_OP:
             return execute_unary(vm, instr);
+
+        case POPCNT_OP:
+        case CLZ_OP:
+        case CTZ_OP:
+            return execute_bit_count(vm, instr);
+
+        case SET_OP:
+            if (!isa_is_conditional_jump((uint8_t)instr->immediate) || instr->immediate > 0xFF) {
+                return vm_raise(vm, VM_ERROR_INVALID_INSTRUCTION, "Invalid SET condition 0x%X", instr->immediate);
+            }
+            vm->registers[instr->reg1] = (uint32_t)branch_taken(vm, (uint8_t)instr->immediate);
+            return VM_ERROR_NONE;
 
         default:
             if (instr->opcode >= FADD_OP && instr->opcode <= FTOI_OP) {

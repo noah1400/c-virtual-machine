@@ -26,6 +26,8 @@ static const InstructionInfo instruction_table[] = {
     { "SUBC",    SUBC_OP,    FMT_REG_OPERAND,  MODES_SRC,          0 },
     { "IDIV",    IDIV_OP,    FMT_REG_OPERAND,  MODES_SRC,          0 },
     { "IMOD",    IMOD_OP,    FMT_REG_OPERAND,  MODES_SRC,          0 },
+    { "MULH",    MULH_OP,    FMT_REG_OPERAND,  MODES_SRC,          0 },
+    { "UMULH",   UMULH_OP,   FMT_REG_OPERAND,  MODES_SRC,          0 },
     { "FADD",    FADD_OP,    FMT_REG_OPERAND,  MODES_SRC,          0 },
     { "FSUB",    FSUB_OP,    FMT_REG_OPERAND,  MODES_SRC,          0 },
     { "FMUL",    FMUL_OP,    FMT_REG_OPERAND,  MODES_SRC,          0 },
@@ -47,6 +49,11 @@ static const InstructionInfo instruction_table[] = {
     { "ROL",     ROL_OP,     FMT_REG_OPERAND,  MODES_SRC,          0 },
     { "ROR",     ROR_OP,     FMT_REG_OPERAND,  MODES_SRC,          0 },
     { "TEST",    TEST_OP,    FMT_REG_OPERAND,  MODES_SRC,          0 },
+    { "POPCNT",  POPCNT_OP,  FMT_REG_OPERAND,  MODES_SRC,          0 },
+    { "CLZ",     CLZ_OP,     FMT_REG_OPERAND,  MODES_SRC,          0 },
+    { "CTZ",     CTZ_OP,     FMT_REG_OPERAND,  MODES_SRC,          0 },
+    { "BSWAP",   BSWAP_OP,   FMT_REG,          0,                  0 },
+    { "SET",     SET_OP,     FMT_REG_COND,     MODE_BIT(IMM_MODE), 0 },
 
     { "JMP",     JMP_OP,     FMT_OPERAND,      MODES_SRC,          0 },
     { "JZ",      JZ_OP,      FMT_OPERAND,      MODES_SRC,          0 },
@@ -152,6 +159,10 @@ const InstructionInfo *isa_by_mnemonic(const char *mnemonic) {
 const InstructionInfo *isa_table(size_t *count) {
     *count = INSTRUCTION_COUNT;
     return instruction_table;
+}
+
+int isa_is_conditional_jump(uint8_t opcode) {
+    return (opcode >= JZ_OP && opcode <= JA_OP) || (opcode >= JL_OP && opcode <= JAE_OP);
 }
 
 int isa_has_relative_target(uint8_t opcode) {

@@ -112,6 +112,11 @@ void disasm_format(const Instruction *instr, uint32_t address, const DebugInfo *
         case FMT_REG_CTRL:
             snprintf(buffer, size, "%s %s, %s", op->mnemonic, r1, isa_control_register_name(instr->immediate));
             return;
+        case FMT_REG_COND: {
+            const InstructionInfo *jump = instr->immediate <= 0xFF ? isa_by_opcode((uint8_t)instr->immediate) : NULL;
+            snprintf(buffer, size, "SET%s %s", jump && isa_is_conditional_jump(jump->opcode) ? jump->mnemonic + 1 : "?", r1);
+            return;
+        }
         case FMT_CTRL_REG:
             snprintf(buffer, size, "%s %s, %s", op->mnemonic, isa_control_register_name(instr->immediate), r1);
             return;

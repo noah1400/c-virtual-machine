@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -644,7 +645,7 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
     static const int operand_counts[] = {
         [FMT_NONE] = 0, [FMT_REG] = 1, [FMT_IMM] = 1, [FMT_OPT_IMM] = 1, [FMT_OPERAND] = 1,
         [FMT_REG_OPERAND] = 2, [FMT_OPERAND_REG] = 2, [FMT_REG_REG] = 2, [FMT_REG_REG_SIZE] = 3,
-        [FMT_REG_CTRL] = 2, [FMT_CTRL_REG] = 2,
+        [FMT_REG_CTRL] = 2, [FMT_CTRL_REG] = 2, [FMT_REG_COND] = 1,
     };
     int expected = operand_counts[info->format];
 
@@ -692,6 +693,10 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
         case FMT_REG_CTRL:
             in->reg1 = ops[0].reg;
             return expect_register(as, info, &ops[0], 1) && expect_control_register(as, &ops[1], in);
+        case FMT_REG_COND:
+            in->mode = IMM_MODE;
+            in->reg1 = ops[0].reg;
+            return expect_register(as, info, &ops[0], 1);
         case FMT_CTRL_REG:
             in->reg1 = ops[1].reg;
             return expect_register(as, info, &ops[1], 2) && expect_control_register(as, &ops[0], in);
@@ -730,7 +735,7 @@ static void emit_instruction(Assembler *as, const Instruction *in) {
 }
 
 // Alternative names for conditional jumps
-static const InstructionInfo *find_instruction(const char *mnemonic) {
+static const InstructionInfo *find_jump(const char *mnemonic) {
     static const char *const aliases[][2] = {
         { "JE", "JZ" }, { "JNE", "JNZ" }, { "JB", "JC" }, { "JNAE", "JC" }, { "JNB", "JAE" },
         { "JNC", "JAE" }, { "JNA", "JBE" }, { "JNBE", "JA" }, { "JNGE", "JL" }, { "JNL", "JGE" },
@@ -744,12 +749,35 @@ static const InstructionInfo *find_instruction(const char *mnemonic) {
     return isa_by_mnemonic(mnemonic);
 }
 
+// SETcc takes every condition, and alternative name, of the matching conditional jump
+static const InstructionInfo *find_instruction(const char *mnemonic, uint8_t *condition) {
+    char jump[32];
+
+    *condition = 0;
+    if (strlen(mnemonic) > 3 && strlen(mnemonic) < sizeof(jump) - 1 && toupper((unsigned char)mnemonic[0]) == 'S' &&
+        toupper((unsigned char)mnemonic[1]) == 'E' && toupper((unsigned char)mnemonic[2]) == 'T') {
+        snprintf(jump, sizeof(jump), "J%s", mnemonic + 3);
+        const InstructionInfo *info = find_jump(jump);
+        if (info && isa_is_conditional_jump(info->opcode)) {
+            *condition = info->opcode;
+            return isa_by_opcode(SET_OP);
+        }
+        return NULL;
+    }
+    return find_jump(mnemonic);
+}
+
 static void instruction(Assembler *as, Parser *p, LineResult *result) {
     Token *t = peek(p);
-    const InstructionInfo *info = find_instruction(t->text);
+    uint8_t condition;
+    const InstructionInfo *info = find_instruction(t->text, &condition);
 
     if (!info) {
         asm_error(as, "unknown instruction '%s'", t->text);
+        return;
+    }
+    if (info->format == FMT_REG_COND && !condition) {
+        asm_error(as, "SET needs a condition, as in SETZ");
         return;
     }
     p->pos++;
@@ -809,6 +837,9 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
 
     Instruction in;
     if (encode(as, info, ops, count, result->extended, &in)) {
+        if (info->format == FMT_REG_COND) {
+            in.immediate = condition;
+        }
         emit_instruction(as, &in);
     }
 }

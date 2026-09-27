@@ -46,6 +46,8 @@
 #define SUBC_OP     (uint8_t)0x2B // SUBC | Reg1, Reg2/Imm | Subtract with carry | Z, N, C, O
 #define IDIV_OP     (uint8_t)0x2C // IDIV | Reg1, Reg2/Imm | Signed divide | Z, N
 #define IMOD_OP     (uint8_t)0x2D // IMOD | Reg1, Reg2/Imm | Signed remainder | Z, N
+#define MULH_OP     (uint8_t)0x2E // MULH | Reg1, Reg2/Imm | High half of the signed product | Z, N
+#define UMULH_OP    (uint8_t)0x2F // UMULH | Reg1, Reg2/Imm | High half of the unsigned product | Z, N
 #define FADD_OP     (uint8_t)0x30 // FADD | Reg1, Reg2/Imm | Floating-point add | Z, N, C and O cleared
 #define FSUB_OP     (uint8_t)0x31 // FSUB | Reg1, Reg2/Imm | Floating-point subtract | Z, N, C and O cleared
 #define FMUL_OP     (uint8_t)0x32 // FMUL | Reg1, Reg2/Imm | Floating-point multiply | Z, N, C and O cleared
@@ -68,6 +70,11 @@
 #define ROL_OP      (uint8_t)0x47 // ROL | Reg, Count | Rotate left | Z, N, C
 #define ROR_OP      (uint8_t)0x48 // ROR | Reg, Count | Rotate right | Z, N, C
 #define TEST_OP     (uint8_t)0x49 // TEST | Reg1, Reg2/Imm | Test bits (AND without store) | Z, N, C and O cleared
+#define POPCNT_OP   (uint8_t)0x4A // POPCNT | Reg, Src | Count set bits | Z, N, C and O cleared
+#define CLZ_OP      (uint8_t)0x4B // CLZ | Reg, Src | Count leading zero bits | Z, N, C and O cleared
+#define CTZ_OP      (uint8_t)0x4C // CTZ | Reg, Src | Count trailing zero bits | Z, N, C and O cleared
+#define BSWAP_OP    (uint8_t)0x4D // BSWAP | Reg | Reverse the byte order | Z, N
+#define SET_OP      (uint8_t)0x4E // SETcc | Reg | 1 if the jump condition holds, else 0 | None
 
 // Control Flow Instructions (0x60-0x7F)
 #define JMP_OP      (uint8_t)0x60 // JMP | Target | Unconditional jump | None
@@ -173,7 +180,8 @@ typedef enum {
     FMT_REG_REG,        // MOVE Rd, Rs
     FMT_REG_REG_SIZE,   // MEMCPY Rd, Rs, #n | Rn (size register in the immediate field)
     FMT_REG_CTRL,       // MFCR Rd, IVTB (control register number in the immediate field)
-    FMT_CTRL_REG        // MTCR IVTB, Rs
+    FMT_CTRL_REG,       // MTCR IVTB, Rs
+    FMT_REG_COND        // SETZ Rd (opcode of the matching jump in the immediate field)
 } OperandFormat;
 
 typedef struct {
@@ -190,6 +198,7 @@ const InstructionInfo *isa_table(size_t *count);
 
 // Jumps, calls and LOOP, whose immediate operand is an offset from the next instruction
 int isa_has_relative_target(uint8_t opcode);
+int isa_is_conditional_jump(uint8_t opcode);
 
 int isa_register_index(const char *name);
 const char *isa_register_name(uint8_t reg);
