@@ -32,6 +32,9 @@ int io_attach_disk(VM *vm, const char *path);
 // Makes the display print each changed frame as plain text instead of drawing on the terminal
 void io_display_as_text(VM *vm);
 
+// Feeds the keyboard from a key script instead of stdin
+int io_keyboard_script(VM *vm, const char *path);
+
 // Port accesses fault when no device claims the port
 uint32_t io_read(VM *vm, uint32_t port);
 void io_write(VM *vm, uint32_t port, uint32_t value);

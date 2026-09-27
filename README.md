@@ -93,6 +93,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-d` | Start the interactive [debugger](#debugger) |
 | `-D` | Disassemble the program instead of running it |
 | `-H COUNT` | When the program stops with an error, first show the last COUNT instructions and the registers they changed |
+| `-k FILE` | Take [keyboard](#keyboard) input from a key script |
 | `-L SPEC` | Print values each time execution reaches a location (see below). Can be given up to 32 times |
 | `-m KB` | Memory size in KB, 128 to 1048576 (default 1024) |
 | `-n COUNT` | Stop with an error after COUNT instructions |
@@ -373,6 +374,16 @@ The keyboard reads stdin directly. The first access to one of its ports switches
 Other escape sequences are dropped, and up to 64 keys wait in a queue. Reading the status or the data port checks for new input. While the vector port holds a vector, the keyboard also checks every 10000 instructions and requests the interrupt for as long as keys wait.
 
 When stdin is a file or a pipe, its bytes arrive as keys and the status reports the end of input. Reading the console as well can split the input, because the console reads ahead into a buffer.
+
+`vm -k FILE` takes the keys from a key script instead, which makes runs of interactive programs repeatable. Each line holds an instruction count, or `+N` for N instructions after the line before, then a space and the keys. `\n`, `\r`, `\t`, `\e`, `\\` and `\xNN` stand for single bytes, and lines that are empty or start with `#` are skipped. The keys become available once the VM has executed that many instructions, and the input ends after the last line:
+
+```
+# Up arrow at instruction 50000, then q 20000 instructions later
+50000 \e[A
++20000 q
+```
+
+With a script, the keyboard leaves the terminal and stdin alone, and looks for keys after every instruction, so an interrupt comes at the exact count.
 
 #### Disk
 

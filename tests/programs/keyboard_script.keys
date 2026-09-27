@@ -1,0 +1,4 @@
+# The arrow comes with the a, the rest later
+100 a\e[A
++200 bc
++0 \x41

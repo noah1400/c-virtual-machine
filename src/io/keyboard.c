@@ -1,8 +1,11 @@
+#include <ctype.h>
 #include <errno.h>
 #include <poll.h>
 #include <stdlib.h>
+#include <string.h>
 #include <termios.h>
 #include <unistd.h>
+#include "binfmt.h"
 #include "cpu.h"
 #include "devices.h"
 #include "vm.h"
@@ -18,6 +21,12 @@
 #define KEY_ESCAPE 0x1B
 #define KEY_UP     0x100
 
+// Keys of a script that arrive once the VM has executed a number of instructions
+typedef struct {
+    uint32_t at;
+    uint32_t start, length;     // where the keys lie in the script's bytes
+} KeyEvent;
+
 typedef struct {
     uint16_t keys[KEYBOARD_QUEUE_SIZE];
     int first, count;
@@ -27,11 +36,15 @@ typedef struct {
     struct termios saved;
     uint8_t vector;
     uint32_t countdown;
+    KeyEvent *events;       // a key script that replaces stdin, or NULL
+    uint8_t *script;
+    uint32_t event_count, next_event, event_offset;
 } KeyboardState;
 
-// The first use of the keyboard stops the terminal from buffering lines and echoing keys
+// Without a script, the first use of the keyboard stops the terminal from buffering lines and
+// echoing keys
 static void keyboard_claim(KeyboardState *keyboard) {
-    if (keyboard->claimed) {
+    if (keyboard->claimed || keyboard->events) {
         return;
     }
     keyboard->claimed = 1;
@@ -44,11 +57,27 @@ static void keyboard_claim(KeyboardState *keyboard) {
     }
 }
 
+static int next_script_byte(const VM *vm, KeyboardState *keyboard) {
+    if (keyboard->ended || vm->instruction_count < keyboard->events[keyboard->next_event].at) {
+        return -1;
+    }
+    const KeyEvent *event = &keyboard->events[keyboard->next_event];
+    int byte = keyboard->script[event->start + keyboard->event_offset++];
+    if (keyboard->event_offset == event->length) {
+        keyboard->event_offset = 0;
+        keyboard->ended = ++keyboard->next_event == keyboard->event_count;
+    }
+    return byte;
+}
+
 // Returns the next byte of input if one is waiting, or -1
-static int next_byte(KeyboardState *keyboard) {
+static int next_byte(const VM *vm, KeyboardState *keyboard) {
     struct pollfd input = { .fd = STDIN_FILENO, .events = POLLIN };
     unsigned char byte;
 
+    if (keyboard->events) {
+        return next_script_byte(vm, keyboard);
+    }
     if (keyboard->ended || poll(&input, 1, 0) <= 0) {
         return -1;
     }
@@ -70,14 +99,14 @@ static void add_key(KeyboardState *keyboard, int key) {
 
 // Moves waiting input into the queue; a terminal sends a whole escape sequence at once, so an
 // escape that nothing follows yet is the Escape key
-static void keyboard_poll(KeyboardState *keyboard) {
+static void keyboard_poll(const VM *vm, KeyboardState *keyboard) {
     int byte;
-    while (keyboard->count < KEYBOARD_QUEUE_SIZE && (byte = next_byte(keyboard)) >= 0) {
+    while (keyboard->count < KEYBOARD_QUEUE_SIZE && (byte = next_byte(vm, keyboard)) >= 0) {
         if (byte != KEY_ESCAPE) {
             add_key(keyboard, byte);
             continue;
         }
-        int kind = next_byte(keyboard);
+        int kind = next_byte(vm, keyboard);
         if (kind != '[' && kind != 'O') {
             add_key(keyboard, KEY_ESCAPE);
             if (kind >= 0) {
@@ -85,9 +114,9 @@ static void keyboard_poll(KeyboardState *keyboard) {
             }
             continue;
         }
-        int final = next_byte(keyboard);
+        int final = next_byte(vm, keyboard);
         while (final >= 0x20 && final < 0x40) {
-            final = next_byte(keyboard);
+            final = next_byte(vm, keyboard);
         }
         if (final >= 'A' && final <= 'D') {
             add_key(keyboard, KEY_UP + final - 'A');
@@ -99,10 +128,9 @@ static void keyboard_poll(KeyboardState *keyboard) {
 // interrupt vector that is requested while keys wait (0 for none)
 static uint32_t keyboard_read(VM *vm, IODevice *device, uint16_t offset) {
     KeyboardState *keyboard = device->state;
-    (void)vm;
     keyboard_claim(keyboard);
     if (keyboard->count == 0 && offset < 2) {
-        keyboard_poll(keyboard);
+        keyboard_poll(vm, keyboard);
     }
     switch (offset) {
         case 0:
@@ -133,16 +161,22 @@ static void keyboard_write(VM *vm, IODevice *device, uint16_t offset, uint32_t v
     }
 }
 
+// Keys that arrive request the interrupt, and keys left waiting request it again with every poll.
+// Scripted keys are looked for after every instruction, so they arrive at their exact count.
 static void keyboard_tick(VM *vm, IODevice *device) {
     KeyboardState *keyboard = device->state;
-    if (--keyboard->countdown) {
+    int waiting = keyboard->count, poll_due = --keyboard->countdown == 0;
+
+    if (!poll_due && !keyboard->events) {
         return;
     }
-    keyboard->countdown = KEYBOARD_POLL_INTERVAL;
-    keyboard_poll(keyboard);
-    if (keyboard->count) {
+    if (poll_due) {
+        keyboard->countdown = KEYBOARD_POLL_INTERVAL;
+    }
+    keyboard_poll(vm, keyboard);
+    if (keyboard->count > waiting || (poll_due && keyboard->count)) {
         cpu_request_interrupt(vm, keyboard->vector);
-    } else if (keyboard->ended) {
+    } else if (keyboard->ended && !keyboard->count) {
         io_set_ticking(vm, device, 0);
     }
 }
@@ -154,6 +188,87 @@ static void keyboard_cleanup(VM *vm, IODevice *device) {
         tcsetattr(STDIN_FILENO, TCSADRAIN, &keyboard->saved);
         keyboard->raw = 0;
     }
+    free(keyboard->events);
+    free(keyboard->script);
+    keyboard->events = NULL;
+    keyboard->script = NULL;
+}
+
+// Decodes the keys of a script line in place; returns their number, or -1 for a bad escape
+static int decode_keys(char *text) {
+    static const char escapes[] = "n\nr\rt\te\033\\\\";
+    char *out = text;
+    for (const char *in = text; *in; in++) {
+        const char *escape;
+        if (*in != '\\') {
+            *out++ = *in;
+        } else if (in[1] == 'x' && isxdigit((unsigned char)in[2]) && isxdigit((unsigned char)in[3])) {
+            char hex[3] = { in[2], in[3], 0 };
+            *out++ = (char)strtol(hex, NULL, 16);
+            in += 3;
+        } else if (in[1] && (escape = strchr(escapes, in[1])) != NULL && (escape - escapes) % 2 == 0) {
+            *out++ = escape[1];
+            in++;
+        } else {
+            return -1;
+        }
+    }
+    return (int)(out - text);
+}
+
+// Each line of a key script holds an instruction count, or +N for N instructions after the line
+// before, a space and the keys, where \n, \r, \t, \e, \\ and \xNN stand for single bytes. Empty lines
+// and lines that start with # are skipped.
+int keyboard_script(VM *vm, IODevice *device, const char *path) {
+    KeyboardState *keyboard = device->state;
+    uint32_t size, at = 0, number = 0;
+    const char *problem;
+    char *text = (char *)read_binary_file(path, &size, &problem);
+
+    if (!text) {
+        return vm_raise(vm, VM_ERROR_IO_ERROR, "%s: %s", path, problem);
+    }
+    KeyEvent *events = calloc(size / 2 + 1, sizeof(KeyEvent));
+    uint32_t count = 0;
+    for (char *line = text, *next; events && line; line = next) {
+        next = strchr(line, '\n');
+        if (next) {
+            *next++ = '\0';
+        }
+        number++;
+        size_t length = strlen(line);
+        if (length > 0 && line[length - 1] == '\r') {
+            line[--length] = '\0';
+        }
+        if (length == 0 || line[0] == '#') {
+            continue;
+        }
+
+        char *keys;
+        unsigned long value = strtoul(line + (line[0] == '+'), &keys, 10);
+        uint64_t when = line[0] == '+' ? (uint64_t)at + value : value;
+        int decoded = *keys == ' ' ? decode_keys(keys + 1) : -1;
+        if (!isdigit((unsigned char)line[line[0] == '+']) || when > UINT32_MAX || when < at || decoded <= 0) {
+            free(events);
+            free(text);
+            return vm_raise(vm, VM_ERROR_IO_ERROR, "%s:%u: expected an instruction count at or after %u, "
+                            "a space and keys", path, number, at);
+        }
+        at = (uint32_t)when;
+        events[count++] = (KeyEvent){ at, (uint32_t)(keys + 1 - text), (uint32_t)decoded };
+    }
+    if (!events) {
+        free(text);
+        return vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Failed to allocate the key script");
+    }
+
+    keyboard_cleanup(vm, device);
+    keyboard->events = events;
+    keyboard->script = (uint8_t *)text;
+    keyboard->event_count = count;
+    keyboard->next_event = keyboard->event_offset = 0;
+    keyboard->ended = count == 0;
+    return VM_ERROR_NONE;
 }
 
 int keyboard_device(VM *vm, IODevice *device) {

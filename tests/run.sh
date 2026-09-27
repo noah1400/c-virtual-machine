@@ -3,7 +3,8 @@
 # Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble, or only the
 # tests named. Expectations come from NAME.out, NAME.in and "; expect-exit:", "; expect-stderr:",
 # "; expect-error:", "; asm-args:", "; vm-args:" and "; program-args:" lines; "; disk-sectors:" attaches
-# an empty disk image, NAME.x holds debugger commands and NAME.err, if present, the whole expected stderr.
+# an empty disk image, NAME.x holds debugger commands, NAME.keys a key script and NAME.err, if present,
+# the whole expected stderr.
 # -u rewrites NAME.out and an existing NAME.err from the actual output of every program that exits as
 # expected.
 
@@ -60,6 +61,10 @@ for src in "$root"/tests/programs/*.asm; do
     if [ -f "$base.x" ]; then
         cp "$base.x" "$tmp/$name.x"
         args="$args -x $name.x"
+    fi
+    if [ -f "$base.keys" ]; then
+        cp "$base.keys" "$tmp/$name.keys"
+        args="$args -k $name.keys"
     fi
     sectors=$(expectation "$src" disk-sectors)
     if [ -n "$sectors" ]; then

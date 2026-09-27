@@ -82,6 +82,11 @@ int io_attach_disk(VM *vm, const char *path) {
     return disk ? disk_attach(vm, disk, path) : vm_raise(vm, VM_ERROR_IO_ERROR, "There is no disk device");
 }
 
+int io_keyboard_script(VM *vm, const char *path) {
+    IODevice *keyboard = named_device(vm, "keyboard");
+    return keyboard ? keyboard_script(vm, keyboard, path) : vm_raise(vm, VM_ERROR_IO_ERROR, "There is no keyboard");
+}
+
 void io_display_as_text(VM *vm) {
     IODevice *display = named_device(vm, "display");
     if (display) {

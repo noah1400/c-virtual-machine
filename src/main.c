@@ -22,6 +22,7 @@ typedef struct {
     const char *commands;
     uint32_t history;
     int text_display;
+    const char *keys;
     const char *logpoints[MAX_LOGPOINTS];
     int logpoint_count;
     int arg_count;
@@ -41,6 +42,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -b FILE   Attach FILE as the disk image\n");
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
+    fprintf(out, "  -k FILE   Take keyboard input from a key script that releases keys at instruction counts\n");
     fprintf(out, "  -L SPEC   Print values each time execution reaches a location, as in -L 'loop:R8,[count]:d'\n");
     fprintf(out, "  -m KB     Memory size in KB, %d to %d (default %d)\n", MIN_MEMORY_KB, MAX_MEMORY_KB,
             DEFAULT_MEMORY_KB);
@@ -112,6 +114,12 @@ static int parse_options(int argc, char **argv, Options *opts) {
                 return -1;
             }
             opts->history = (uint32_t)count;
+        } else if (strcmp(arg, "-k") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "vm: -k needs a key script\n");
+                return -1;
+            }
+            opts->keys = argv[++i];
         } else if (strcmp(arg, "-L") == 0) {
             if (i + 1 >= argc || opts->logpoint_count == MAX_LOGPOINTS) {
                 fprintf(stderr, "vm: -L needs a location and takes up to %d of them\n", MAX_LOGPOINTS);
@@ -177,6 +185,11 @@ int main(int argc, char *argv[]) {
     }
     if (opts.text_display) {
         io_display_as_text(&vm);
+    }
+    if (opts.keys && io_keyboard_script(&vm, opts.keys) != VM_ERROR_NONE) {
+        fprintf(stderr, "vm: cannot read keys from %s\n", vm_get_error_message(&vm));
+        vm_cleanup(&vm);
+        return 1;
     }
     if (opts.disk && io_attach_disk(&vm, opts.disk) != VM_ERROR_NONE) {
         fprintf(stderr, "vm: cannot attach the disk image %s\n", vm_get_error_message(&vm));
