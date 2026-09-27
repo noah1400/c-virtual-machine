@@ -66,7 +66,7 @@ fn new_type(kind: ast.TypeKind, base: *ast.Type) *ast.Type {
     return t;
 }
 
-pub fn same_type(a: *ast.Type, b: *ast.Type) bool {
+fn same_type(a: *ast.Type, b: *ast.Type) bool {
     if (a == b) {
         return true;
     }
@@ -103,7 +103,7 @@ fn cut(text: []u8) []u8 {
     return text;
 }
 
-pub fn type_name(t: *ast.Type) []u8 {
+fn type_name(t: *ast.Type) []u8 {
     switch (t.kind) {
         case ast.TypeKind.POINTER {
             return cut(ast.cat([][]u8 { "*", type_name(t.base) }));

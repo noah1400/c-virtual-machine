@@ -80,10 +80,6 @@ fn format(out: *str.Builder, pattern: []u8, texts: [][]u8, numbers: []int) {
     str.append(out, pattern[start:]);
 }
 
-fn put(out: *str.Builder, pattern: []u8, texts: [][]u8, numbers: []int) {
-    format(out, pattern, texts, numbers);
-}
-
 fn emit(g: *Gen, text: []u8) {
     str.append(&g.body, text);
 }
@@ -315,7 +311,7 @@ fn string_label(g: *Gen, bytes: []u8) []u8 {
         return pooled.label;
     }
     var name = pool_label(g);
-    put(&g.pool, "%s:\n    .asciiz ", [][]u8 { name }, []int {});
+    format(&g.pool, "%s:\n    .asciiz ", [][]u8 { name }, []int {});
     quoted(&g.pool, bytes);
     str.append(&g.pool, "\n");
     pooled = ast.allocate(sizeof(Pooled)) as *Pooled;
@@ -1087,21 +1083,21 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     }
     str.append(&g.text, "\n");
     str.append(&g.text, body[:start]);
-    put(&g.text, "%s:\n    ENTER #%d\n", [][]u8 { symbol_name(d.symbol) }, []int { g.frame });
+    format(&g.text, "%s:\n    ENTER #%d\n", [][]u8 { symbol_name(d.symbol) }, []int { g.frame });
     str.append(&g.text, body[start:]);
-    put(&g.text, ".ret:\n    LEAVE\n    %s\n", [][]u8 { ending }, []int {});
+    format(&g.text, ".ret:\n    LEAVE\n    %s\n", [][]u8 { ending }, []int {});
 }
 
 // Emits the initial value of data of type t
 fn gen_data(g: *Gen, out: *str.Builder, t: *ast.Type, e: *ast.Expr) {
     if (e == null) {
         if (t.size > 0) {
-            put(out, "    .space %d\n", [][]u8 {}, []int { t.size });
+            format(out, "    .space %d\n", [][]u8 {}, []int { t.size });
         }
         return;
     }
     if (e.kind == ast.ExprKind.CONVERT && e.type.kind == ast.TypeKind.SLICE) {
-        put(out, "    .dword %s, %d\n", [][]u8 { symbol_name(e.left.symbol) }, []int { e.left.type.length });
+        format(out, "    .dword %s, %d\n", [][]u8 { symbol_name(e.left.symbol) }, []int { e.left.type.length });
         return;
     }
     if (t.kind == ast.TypeKind.SLICE && e.kind == ast.ExprKind.ARRAY) {
@@ -1115,15 +1111,15 @@ fn gen_data(g: *Gen, out: *str.Builder, t: *ast.Type, e: *ast.Expr) {
         if (align == 0) {
             align = 1;
         }
-        put(&inner, "    .align %d\n%s:\n", [][]u8 { name }, []int { align });
+        format(&inner, "    .align %d\n%s:\n", [][]u8 { name }, []int { align });
         gen_data(g, &inner, &array, e);
         str.append(&g.pool, str.text(&inner));
         str.release(&inner);
-        put(out, "    .dword %s, %d\n", [][]u8 { name }, []int { e.args.len });
+        format(out, "    .dword %s, %d\n", [][]u8 { name }, []int { e.args.len });
         return;
     }
     if (t.kind == ast.TypeKind.SLICE) {
-        put(out, "    .dword %s, %d\n", [][]u8 { string_of(g, e) }, []int { string_size(e) });
+        format(out, "    .dword %s, %d\n", [][]u8 { string_of(g, e) }, []int { string_size(e) });
         return;
     }
     if (t.kind == ast.TypeKind.STRUCT || t.kind == ast.TypeKind.ARRAY) {
@@ -1142,13 +1138,13 @@ fn gen_data(g: *Gen, out: *str.Builder, t: *ast.Type, e: *ast.Expr) {
                 }
             }
             if (at > offset) {
-                put(out, "    .space %d\n", [][]u8 {}, []int { at - offset });
+                format(out, "    .space %d\n", [][]u8 {}, []int { at - offset });
             }
             gen_data(g, out, element, e.args[i]);
             offset = at + element.size;
         }
         if (t.size > offset) {
-            put(out, "    .space %d\n", [][]u8 {}, []int { t.size - offset });
+            format(out, "    .space %d\n", [][]u8 {}, []int { t.size - offset });
         }
         return;
     }
@@ -1159,15 +1155,15 @@ fn gen_data(g: *Gen, out: *str.Builder, t: *ast.Type, e: *ast.Expr) {
         directive = ".word";
     }
     if (e.is_const) {
-        put(out, "    %s %d\n", [][]u8 { directive }, []int { wide.low(e.value) });
+        format(out, "    %s %d\n", [][]u8 { directive }, []int { wide.low(e.value) });
     } else if (e.kind == ast.ExprKind.NULL) {
         str.append(out, "    .dword 0\n");
     } else if (e.kind == ast.ExprKind.CAST) {
         gen_data(g, out, t, e.left);
     } else if (e.kind == ast.ExprKind.UNARY) {
-        put(out, "    .dword %s\n", [][]u8 { symbol_name(e.left.symbol) }, []int {});
+        format(out, "    .dword %s\n", [][]u8 { symbol_name(e.left.symbol) }, []int {});
     } else {
-        put(out, "    .dword %s\n", [][]u8 { symbol_name(e.symbol) }, []int {});
+        format(out, "    .dword %s\n", [][]u8 { symbol_name(e.symbol) }, []int {});
     }
 }
 
@@ -1217,7 +1213,7 @@ fn gen_global(g: *Gen, d: *ast.Decl) {
     if (align <= 0) {
         align = 1;
     }
-    put(&g.data, "    .align %d\n%s:\n", [][]u8 { symbol_name(d.symbol) }, []int { align });
+    format(&g.data, "    .align %d\n%s:\n", [][]u8 { symbol_name(d.symbol) }, []int { align });
     gen_data(g, &g.data, t, d.value);
 }
 
@@ -1234,7 +1230,7 @@ fn gen_entry(g: *Gen) {
     if (t.params.len > 0) {
         str.append(&g.text, "    CALL rt.args\n    PUSH R5\n    PUSH R0\n");
     }
-    put(&g.text, "    CALL %s\n", [][]u8 { symbol_name(main) }, []int {});
+    format(&g.text, "    CALL %s\n", [][]u8 { symbol_name(main) }, []int {});
     if (t.params.len > 0) {
         str.append(&g.text, "    ADD SP, #8\n");
     }
