@@ -281,10 +281,6 @@ fn store_to(g: *Gen, t: *ast.Type, place: []u8) {
     }
 }
 
-fn store(g: *Gen, t: *ast.Type) {
-    store_to(g, t, "R6");
-}
-
 fn local_place(offset: int) []u8 {
     var digits: [11]u8;
     var sign = "+";
@@ -1317,26 +1313,39 @@ fn gen_literal(g: *Gen, e: *ast.Expr) {
     }
     var temp = alloc_frame(g, storage.size);
     zero(g, storage, temp);
+    fill(g, e, temp);
+    emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
+    if (t.kind == ast.TypeKind.SLICE) {
+        emitd(g, "    LOAD R5, #%d\n", []int { e.args.len });
+    }
+}
+
+fn is_literal(e: *ast.Expr) bool {
+    return (e.kind == ast.ExprKind.STRUCT || e.kind == ast.ExprKind.ARRAY) && e.type.kind != ast.TypeKind.SLICE;
+}
+
+// Stores the values of a literal in zeroed memory of the frame, or of a slice literal its elements
+fn fill(g: *Gen, e: *ast.Expr, at: int) {
+    var t = e.type;
     for (var i = 0; i < e.args.len; i += 1) {
         var field = t.base;
-        var offset = 0;
+        var offset = at;
         if (e.kind == ast.ExprKind.STRUCT) {
             for (var k = 0; k < t.fields.len; k += 1) {
                 if (ast.same(t.fields[k].name, e.fields[i])) {
                     field = t.fields[k].type;
-                    offset = t.fields[k].offset;
+                    offset += t.fields[k].offset;
                 }
             }
         } else {
-            offset = i * t.base.size;
+            offset += i * t.base.size;
         }
-        gen_expr(g, e.args[i]);
-        emitd(g, "    LEA R6, [BP%+d]\n", []int { temp + offset });
-        store(g, field);
-    }
-    emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
-    if (t.kind == ast.TypeKind.SLICE) {
-        emitd(g, "    LOAD R5, #%d\n", []int { e.args.len });
+        if (is_literal(e.args[i])) {
+            fill(g, e.args[i], offset);
+        } else {
+            gen_expr(g, e.args[i]);
+            store_to(g, field, local_place(offset));
+        }
     }
 }
 
@@ -1759,6 +1768,12 @@ fn gen_declared(g: *Gen, s: *ast.Stmt) {
     sym.offset = alloc_frame(g, sym.type.size);
     if (s.value == null) {
         zero(g, sym.type, sym.offset);
+        return;
+    }
+    // A literal goes where the variable is, which it cannot refer to
+    if (is_literal(s.value) && s.value.type.size == sym.type.size) {
+        zero(g, sym.type, sym.offset);
+        fill(g, s.value, sym.offset);
         return;
     }
     gen_expr(g, s.value);
