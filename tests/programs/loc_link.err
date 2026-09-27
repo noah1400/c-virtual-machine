@@ -1,0 +1,5 @@
+vm: error: Division by zero
+vm: at 0x0028 <fact+24> fact.c:3: DIV R5, R0
+vm: #1 0x0040 <fact.recurse+8> fact.c:4: CALL fact
+vm: ... the same 1 more times
+vm: #3 0x0004 <main+4> tests/programs/loc_link.asm:9: CALL fact
