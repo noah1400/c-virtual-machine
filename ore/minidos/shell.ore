@@ -80,6 +80,14 @@ fn join(a: []u8, b: []u8, c: []u8) []u8 {
     return result;
 }
 
+// The path of name in the directory dir
+fn path_in(dir: []u8, name: []u8) []u8 {
+    if (dir.len == 0 || str.ends_with(dir, "\\") || str.ends_with(dir, "/") || str.ends_with(dir, ":")) {
+        return join(dir, "", name);
+    }
+    return join(dir, "\\", name);
+}
+
 fn upper(text: []u8) []u8 {
     var result = str.clone(text);
     for (var i = 0; i < result.len; i += 1) {
@@ -245,7 +253,7 @@ pub fn variable(name: []u8) []u8 {
     for (var i = 0; i < variable_count; i += 1) {
         var v = variables[i];
         var equals = str.find_byte(v, '=');
-        if (equals == name.len && same(name, upper(v[:equals]))) {
+        if (equals == name.len && same(name, v[:equals])) {
             return v[equals + 1:];
         }
     }
@@ -441,16 +449,9 @@ fn locate(word: []u8) []u8 {
 
 fn locate_in(directory: []u8, word: []u8) []u8 {
     var none: []u8;
-    var base = word;
-    if (directory.len > 0 && !str.ends_with(directory, "\\")) {
-        base = join(directory, "\\", word);
-    } else if (directory.len > 0) {
-        base = join(directory, "", word);
-    }
+    var base = path_in(directory, word);
     var name = upper(base);
-    if (base.ptr != word.ptr) {
-        free(base);
-    }
+    free(base);
     var last = name[str.find_last_byte(name, '\\') + 1:];
     var candidates = [2][]u8 { ".EXE", ".BAT" };
     if (str.find_byte(last, '.') >= 0) {
@@ -681,9 +682,12 @@ fn dir(argument: []u8) {
     if (slash < 0) {
         slash = str.find(argument, "/w");
     }
-    if (slash >= 0) {
+    if (slash > 0) {
         wide = true;
-        path = str.trim(join(argument[:slash], "", argument[slash + 2:]));
+        path = str.trim(argument[:slash]);
+    } else if (slash == 0) {
+        wide = true;
+        path = str.trim(argument[2:]);
     }
     var selection = fs.Selection {};
     var e = fs.select(path, true, &selection);
@@ -825,14 +829,10 @@ fn copy(argument: []u8) {
         var buffer: [12]u8;
         var name = fs.name_text(entries[i].name, buffer);
         var from = join(source_dir, "", name);
-        var to = join(target, "", "");
+        var to = str.clone(target);
         if (into) {
             free(to);
-            to = join(target, "\\", name);
-            if (str.ends_with(target, "\\") || str.ends_with(target, ":")) {
-                free(to);
-                to = join(target, "", name);
-            }
+            to = path_in(target, name);
         }
         var bytes: []u8;
         e = fs.read_file(from, &bytes);
@@ -905,7 +905,9 @@ fn delete(argument: []u8) {
         return;
     }
     if (!fs.has_wildcards(argument) && is_directory(argument)) {
-        delete(join(argument, "\\", "*.*"));
+        var all = path_in(argument, "*.*");
+        delete(all);
+        free(all);
         return;
     }
     var selection = fs.Selection {};
