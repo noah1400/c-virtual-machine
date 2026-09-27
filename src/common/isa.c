@@ -76,6 +76,8 @@ static const InstructionInfo instruction_table[] = {
     { "CPUID",   CPUID_OP,   FMT_NONE,         0 },
     { "RESET",   RESET_OP,   FMT_NONE,         0 },
     { "DEBUG",   DEBUG_OP,   FMT_NONE,         0 },
+    { "MFCR",    MFCR_OP,    FMT_REG_CTRL,     MODE_BIT(IMM_MODE) },
+    { "MTCR",    MTCR_OP,    FMT_CTRL_REG,     MODE_BIT(IMM_MODE) },
 
     { "ALLOC",   ALLOC_OP,   FMT_REG_OPERAND,  MODES_IMM_REG },
     { "FREE",    FREE_OP,    FMT_REG,          0 },
@@ -97,6 +99,10 @@ static const struct {
 } register_aliases[] = {
     { "ACC", 0 }, { "R0_ACC", 0 }, { "BP", 1 }, { "R1_BP", 1 }, { "SP", 2 }, { "R2_SP", 2 },
     { "PC", 3 }, { "R3_PC", 3 }, { "SR", 4 }, { "R4_SR", 4 }, { "LR", 15 }, { "R15_LR", 15 },
+};
+
+static const char *const control_register_names[CR_COUNT] = {
+    "IVTB", "KSP", "PTB", "FADDR", "ECODE", "SLO", "SHI", "HEAPLO", "HEAPHI"
 };
 
 static int equals_ignore_case(const char *a, const char *b) {
@@ -164,6 +170,19 @@ int isa_register_index(const char *name) {
 
 const char *isa_register_name(uint8_t reg) {
     return register_names[reg & 0x0F];
+}
+
+int isa_control_register_index(const char *name) {
+    for (int i = 0; i < CR_COUNT; i++) {
+        if (equals_ignore_case(control_register_names[i], name)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+const char *isa_control_register_name(uint32_t index) {
+    return index < CR_COUNT ? control_register_names[index] : "?";
 }
 
 const char *isa_mode_name(uint8_t mode) {

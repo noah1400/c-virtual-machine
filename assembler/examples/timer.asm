@@ -5,13 +5,10 @@
 .equ TIMER_TICKS,    0x42
 .equ VECTOR,         0x20
 
-.entry main
-
 .text
-.org 0x0100 + VECTOR * 4
-    .dword on_timer
-
 main:
+    LOAD R8, vectors
+    MTCR IVTB, R8
     LOAD R8, #VECTOR
     OUT #TIMER_VECTOR, R8
     LOAD R8, #1000
@@ -45,6 +42,10 @@ on_timer:
     IRET
 
 .data
+vectors:
+    .space VECTOR * 4
+    .dword on_timer
+    .space (255 - VECTOR) * 4
 ticks:
     .dword 0
 done_text:

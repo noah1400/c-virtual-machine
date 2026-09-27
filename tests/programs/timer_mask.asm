@@ -2,13 +2,10 @@
 
 .equ VECTOR, 0x21
 
-.entry main
-
 .text
-.org 0x0100 + VECTOR * 4
-    .dword handler
-
 main:
+    LOAD R8, vectors
+    MTCR IVTB, R8
     LOAD R8, #VECTOR
     OUT #0x41, R8
     LOAD R8, #5
@@ -38,5 +35,9 @@ handler:
 .include "lib.inc"
 
 .data
+vectors:
+    .space VECTOR * 4
+    .dword handler
+    .space (255 - VECTOR) * 4
 count:
     .dword 0

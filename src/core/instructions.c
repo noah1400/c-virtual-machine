@@ -456,6 +456,17 @@ static int execute_system(VM *vm, const Instruction *instr) {
         case DEBUG_OP:
             vm->break_requested = 1;
             break;
+        case MFCR_OP:
+        case MTCR_OP:
+            if (instr->immediate >= CR_COUNT) {
+                return vm_raise(vm, VM_ERROR_INVALID_INSTRUCTION, "Invalid control register %u", instr->immediate);
+            }
+            if (instr->opcode == MFCR_OP) {
+                vm->registers[instr->reg1] = vm->control[instr->immediate];
+            } else {
+                vm->control[instr->immediate] = vm->registers[instr->reg1];
+            }
+            break;
     }
     return vm->last_error;
 }

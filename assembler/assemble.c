@@ -575,9 +575,11 @@ static const Operand *immediate_operand(const InstructionInfo *info, const Opera
         case FMT_OPT_IMM:
         case FMT_OPERAND:
         case FMT_OPERAND_REG:
+        case FMT_CTRL_REG:
             index = 0;
             break;
         case FMT_REG_OPERAND:
+        case FMT_REG_CTRL:
             index = 1;
             break;
         case FMT_REG_REG_SIZE:
@@ -597,11 +599,22 @@ static int expect_register(Assembler *as, const InstructionInfo *info, const Ope
     return 1;
 }
 
+static int expect_control_register(Assembler *as, const Operand *op, Instruction *in) {
+    if (op->mode != IMM_MODE || op->value < 0 || op->value >= CR_COUNT) {
+        asm_error(as, "expected a control register");
+        return 0;
+    }
+    in->mode = IMM_MODE;
+    in->immediate = (uint32_t)op->value;
+    return 1;
+}
+
 static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops, int count, int extended,
                   Instruction *in) {
     static const int operand_counts[] = {
         [FMT_NONE] = 0, [FMT_REG] = 1, [FMT_IMM] = 1, [FMT_OPT_IMM] = 1, [FMT_OPERAND] = 1,
         [FMT_REG_OPERAND] = 2, [FMT_OPERAND_REG] = 2, [FMT_REG_REG] = 2, [FMT_REG_REG_SIZE] = 3,
+        [FMT_REG_CTRL] = 2, [FMT_CTRL_REG] = 2,
     };
     int expected = operand_counts[info->format];
 
@@ -646,6 +659,12 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
             in->reg1 = ops[0].reg;
             in->reg2 = ops[1].reg;
             return expect_register(as, info, &ops[0], 1) && expect_register(as, info, &ops[1], 2);
+        case FMT_REG_CTRL:
+            in->reg1 = ops[0].reg;
+            return expect_register(as, info, &ops[0], 1) && expect_control_register(as, &ops[1], in);
+        case FMT_CTRL_REG:
+            in->reg1 = ops[1].reg;
+            return expect_register(as, info, &ops[1], 2) && expect_control_register(as, &ops[0], in);
         case FMT_REG_REG_SIZE:
             if (!expect_register(as, info, &ops[0], 1) || !expect_register(as, info, &ops[1], 2)) {
                 return 0;
@@ -714,6 +733,8 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
         return;
     }
 
+    // Control registers are named where MFCR and MTCR expect them
+    int control_position = info->format == FMT_REG_CTRL ? 1 : info->format == FMT_CTRL_REG ? 0 : -1;
     Operand ops[3];
     int count = 0;
     if (peek(p)->kind != TOK_END) {
@@ -722,7 +743,12 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
                 asm_error(as, "too many operands");
                 return;
             }
-            if (!parse_operand(p, &ops[count++])) {
+            int control = count == control_position && peek(p)->kind == TOK_IDENT
+                              ? isa_control_register_index(peek(p)->text) : -1;
+            if (control >= 0) {
+                ops[count++] = (Operand){ .mode = IMM_MODE, .value = control };
+                p->pos++;
+            } else if (!parse_operand(p, &ops[count++])) {
                 return;
             }
         } while (accept(p, ','));

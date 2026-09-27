@@ -37,7 +37,6 @@
 #define VM_ADDRESS_SPACE_SIZE 0x10000u
 
 // Interrupt vector table: 256 handler addresses of 4 bytes each
-#define INTERRUPT_VECTOR_TABLE 0x0100
 
 #define VM_RNG_DEFAULT_SEED     0x12345678
 
@@ -49,6 +48,7 @@
 typedef struct {
     // CPU registers
     uint32_t registers[16];  // R0-R15
+    uint32_t control[CR_COUNT];
 
     // Memory
     uint8_t *memory;         // Main memory array

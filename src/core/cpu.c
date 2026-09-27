@@ -110,7 +110,8 @@ void cpu_pop_all(VM *vm, int restore_pc) {
 
 void cpu_interrupt(VM *vm, uint8_t vector) {
     // The vector table holds one 32-bit handler address per vector
-    uint32_t handler = memory_read_dword(vm, INTERRUPT_VECTOR_TABLE + vector * 4u);
+    uint32_t table = vm->control[CR_IVTB];
+    uint32_t handler = table ? memory_read_dword(vm, table + vector * 4u) : 0;
     if (vm->last_error != VM_ERROR_NONE) {
         return;
     }

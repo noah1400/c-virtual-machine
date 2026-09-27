@@ -2,15 +2,12 @@
 
 .equ VECTOR, 0x10
 
-.entry main
-
 .text
-
-; The interrupt vector table starts at 0x0100 with one handler address per vector
-.org 0x0100 + VECTOR * 4
-    .dword handler
-
 main:
+    ; IVTB points at a table with one handler address per vector
+    LOAD R0, vectors
+    MTCR IVTB, R0
+
     LOAD R0, banner
     SYSCALL #2
 
@@ -38,6 +35,10 @@ handler:
     IRET
 
 .data
+vectors:
+    .space VECTOR * 4
+    .dword handler
+    .space (255 - VECTOR) * 4
 banner:
     .asciiz "Raising interrupt 0x10 with R8=0x55 R9=0x66\n"
 handler_text:

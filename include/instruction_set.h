@@ -100,6 +100,8 @@
 #define CPUID_OP    (uint8_t)0xA7 // CPUID | - | Get CPU information | None
 #define RESET_OP    (uint8_t)0xA8 // RESET | - | Reset VM | All
 #define DEBUG_OP    (uint8_t)0xA9 // DEBUG | - | Trigger debugger | None
+#define MFCR_OP     (uint8_t)0xAA // MFCR | Reg, Ctrl | Read a control register | None
+#define MTCR_OP     (uint8_t)0xAB // MTCR | Ctrl, Reg | Write a control register | None
 
 // Memory Control Instructions (0xC0-0xDF)
 #define ALLOC_OP    (uint8_t)0xC0 // ALLOC | Reg, Size | Allocate heap memory | None
@@ -117,6 +119,18 @@
 #define DIR_FLAG    (uint8_t)0x20 // Direction flag
 #define SYS_FLAG    (uint8_t)0x40 // System mode flag
 #define TRAP_FLAG   (uint8_t)0x80 // Trap flag (debug)
+
+// Control registers, read with MFCR and written with MTCR
+#define CR_IVTB     0   // Interrupt vector table base, 0 when there is no table
+#define CR_KSP      1   // Kernel stack pointer
+#define CR_PTB      2   // Page table base
+#define CR_FADDR    3   // Address of the last memory fault
+#define CR_ECODE    4   // Details of the last page fault
+#define CR_SLO      5   // Lowest address the stack may grow to
+#define CR_SHI      6   // Highest stack address, where the stack starts
+#define CR_HEAPLO   7   // Start of the heap
+#define CR_HEAPHI   8   // End of the heap
+#define CR_COUNT    9
 
 // Instruction structure that represents a decoded instruction
 typedef struct {
@@ -146,7 +160,9 @@ typedef enum {
     FMT_REG_OPERAND,    // LOAD Rd, source (operand register in reg2)
     FMT_OPERAND_REG,    // OUT port, Rs (operand register in reg2)
     FMT_REG_REG,        // MOVE Rd, Rs
-    FMT_REG_REG_SIZE    // MEMCPY Rd, Rs, #n | Rn (size register in the immediate field)
+    FMT_REG_REG_SIZE,   // MEMCPY Rd, Rs, #n | Rn (size register in the immediate field)
+    FMT_REG_CTRL,       // MFCR Rd, IVTB (control register number in the immediate field)
+    FMT_CTRL_REG        // MTCR IVTB, Rs
 } OperandFormat;
 
 typedef struct {
@@ -165,6 +181,8 @@ int isa_has_relative_target(uint8_t opcode);
 
 int isa_register_index(const char *name);
 const char *isa_register_name(uint8_t reg);
+int isa_control_register_index(const char *name);
+const char *isa_control_register_name(uint32_t index);
 const char *isa_mode_name(uint8_t mode);
 
 // Size in bytes of the instruction whose first word is given: 4, or 8 with an extension word
