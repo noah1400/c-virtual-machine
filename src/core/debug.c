@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "debug.h"
@@ -158,4 +159,15 @@ const SourceLine *debug_line_at(const DebugInfo *info, uint32_t address) {
         }
     }
     return best;
+}
+
+void debug_describe(const DebugInfo *info, uint32_t address, char *out, size_t size) {
+    const Symbol *sym = debug_symbol_near(info, address);
+    if (!sym) {
+        out[0] = '\0';
+    } else if (sym->address == address) {
+        snprintf(out, size, "<%s>", sym->name);
+    } else {
+        snprintf(out, size, "<%s+%u>", sym->name, address - sym->address);
+    }
 }

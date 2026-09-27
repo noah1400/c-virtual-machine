@@ -113,14 +113,12 @@ static int parse_options(int argc, char **argv, Options *opts) {
     return 1;
 }
 
-static void describe_address(const VM *vm, uint32_t address, char *out, size_t size);
-
 static void report_fault(const VM *vm) {
     uint32_t pc = vm->error_pc;
 
     fprintf(stderr, "vm: error: %s\n", vm_get_error_message(vm));
     char where[80];
-    describe_address(vm, pc, where, sizeof(where));
+    debug_describe(vm->debug_info, pc, where, sizeof(where));
     fprintf(stderr, "vm: at 0x%04X%s%s", pc, where[0] ? " " : "", where);
     const SourceLine *line = debug_line_at(vm->debug_info, pc);
     if (line && line->address == pc) {
@@ -136,17 +134,6 @@ static void report_fault(const VM *vm) {
     fprintf(stderr, "\n");
 }
 
-static void describe_address(const VM *vm, uint32_t address, char *out, size_t size) {
-    const Symbol *sym = debug_symbol_near(vm->debug_info, address);
-    if (!sym) {
-        out[0] = '\0';
-    } else if (sym->address == address) {
-        snprintf(out, size, "<%s>", sym->name);
-    } else {
-        snprintf(out, size, "<%s+%u>", sym->name, address - sym->address);
-    }
-}
-
 // Runs like vm_run, optionally printing each instruction on stderr before executing it and
 // counting how often each instruction of the loaded code executes
 static int run(VM *vm, int trace, uint32_t *counts) {
@@ -159,7 +146,7 @@ static int run(VM *vm, int trace, uint32_t *counts) {
             if (vm_peek_instruction(vm, pc, &instr)) {
                 disasm_format(&instr, pc, vm->debug_info, text, sizeof(text));
             }
-            describe_address(vm, pc, where, sizeof(where));
+            debug_describe(vm->debug_info, pc, where, sizeof(where));
             fflush(stdout);
             fprintf(stderr, "0x%04X %-20s %s\n", pc, where, text);
         }
@@ -224,7 +211,7 @@ static void report_profile(const VM *vm, const uint32_t *counts) {
     fprintf(stderr, "%12s  %6s  %s\n", "count", "share", "location");
     for (size_t e = 0; e < used && e < SHOWN; e++) {
         char where[80];
-        describe_address(vm, entries[e].address, where, sizeof(where));
+        debug_describe(vm->debug_info, entries[e].address, where, sizeof(where));
         fprintf(stderr, "%12llu  %5.1f%%  0x%04X%s%s\n", (unsigned long long)entries[e].count,
                 100.0 * (double)entries[e].count / (double)total, entries[e].address, where[0] ? " " : "", where);
     }

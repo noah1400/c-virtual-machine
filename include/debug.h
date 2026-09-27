@@ -1,6 +1,7 @@
 #ifndef _DEBUG_H_
 #define _DEBUG_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define SYMBOL_CODE  0
@@ -37,5 +38,8 @@ const Symbol *debug_symbol_at(const DebugInfo *info, uint32_t address);
 const Symbol *debug_symbol_near(const DebugInfo *info, uint32_t address);
 const Symbol *debug_symbol_named(const DebugInfo *info, const char *name);
 const SourceLine *debug_line_at(const DebugInfo *info, uint32_t address);
+
+// Writes "<label>" or "<label+offset>" for the closest label at or before the address, or ""
+void debug_describe(const DebugInfo *info, uint32_t address, char *out, size_t size);
 
 #endif // _DEBUG_H_
