@@ -628,11 +628,47 @@ fn simple_operand(e: *ast.Expr) []u8 {
     return none;
 }
 
+// A left operand that instructions can still take after the code for the right one
+fn is_left_operand(e: *ast.Expr) bool {
+    return !is_operand(e.right) && is_operand(e.left) && (is_stable(e.left) || !has_call(e.right));
+}
+
+fn is_commutative(op: ast.TokenKind) bool {
+    return op == ast.TokenKind.PLUS || op == ast.TokenKind.STAR || op == ast.TokenKind.AMP ||
+        op == ast.TokenKind.PIPE || op == ast.TokenKind.CARET;
+}
+
+// The comparison with its operands the other way round
+fn swapped(op: ast.TokenKind) ast.TokenKind {
+    switch (op) {
+        case ast.TokenKind.LT {
+            return ast.TokenKind.GT;
+        }
+        case ast.TokenKind.GT {
+            return ast.TokenKind.LT;
+        }
+        case ast.TokenKind.LE {
+            return ast.TokenKind.GE;
+        }
+        case ast.TokenKind.GE {
+            return ast.TokenKind.LE;
+        }
+    }
+    return op;
+}
+
 // Leaves the left operand in R0 and puts the right one where the instruction can take it
 fn operands(g: *Gen, e: *ast.Expr) []u8 {
     if (is_operand(e.right)) {
         gen_expr(g, e.left);
         return gen_operand(g, e.right);
+    }
+    if (is_left_operand(e)) {
+        var left = gen_operand(g, e.left);
+        gen_expr(g, e.right);
+        emit(g, "    MOVE R6, R0\n");
+        set_register(g, "R0", left);
+        return "R6";
     }
     gen_expr(g, e.left);
     emit(g, "    PUSH R0\n");
@@ -741,6 +777,17 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
             return;
         }
     }
+    // With the left operand taken last, the right one can stay in R0
+    if ((is_comparison(e) || is_commutative(e.op)) && is_left_operand(e)) {
+        var operand = gen_operand(g, e.left);
+        gen_expr(g, e.right);
+        if (is_comparison(e)) {
+            emits(g, "    CMP R0, %s\n    SET%s R0\n", [][]u8 { operand, condition(swapped(e.op), left, false) });
+        } else {
+            arithmetic(g, e.op, e.type, operand);
+        }
+        return;
+    }
     var right = operands(g, e);
     if (is_comparison(e)) {
         emits(g, "    CMP R0, %s\n    SET%s R0\n", [][]u8 { right, condition(e.op, left, false) });
@@ -787,6 +834,11 @@ fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
         if (register.ptr != null && is_operand(e.right)) {
             var operand = gen_operand(g, e.right);
             emitf(g, "    CMP %s, %s\n    J%s .L%d\n", [][]u8 { register, operand, code }, []int { target });
+        } else if (is_left_operand(e)) {
+            var operand = gen_operand(g, e.left);
+            gen_expr(g, e.right);
+            emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { operand, condition(swapped(e.op), e.left.type, !when) },
+                []int { target });
         } else {
             var right = operands(g, e);
             emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, code }, []int { target });

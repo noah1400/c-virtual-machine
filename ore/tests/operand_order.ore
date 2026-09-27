@@ -1,0 +1,16 @@
+// Operands are evaluated from left to right, also where a call on the right changes the left one
+var counter = 0;
+
+fn next() int {
+    counter += 1;
+    return counter;
+}
+
+fn main() {
+    print(counter + next(), " ", counter < next(), " ", counter - next(), "\n");
+    var local = 10;
+    print(local + next(), " ", local > next(), " ", local * next(), "\n");
+    if (counter == next() - 1) {
+        print("equal\n");
+    }
+}
