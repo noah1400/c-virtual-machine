@@ -512,11 +512,12 @@ static void execute_cpuid(VM *vm) {
             break;
         case 1:
             // Version 2.0; R5 features: I/O ports, heap protection, interrupts, syscalls, exceptions,
-            // user mode, paging, floating point; R6 features: debug support, timer device
+            // user mode, paging, floating point; R6 features: debug support, then the timer, display,
+            // keyboard and disk devices
             vm->registers[R0_ACC] = 0x00020000;
             vm->registers[R5] = 0x00000004 | 0x00000008 | 0x00000010 | 0x00000020 | 0x00000040 | 0x00000080 |
                                 0x00000100 | 0x00000200;
-            vm->registers[R6] = 0x00000001 | 0x00000002;
+            vm->registers[R6] = 0x00000001 | 0x00000002 | 0x00000004 | 0x00000008 | 0x00000010;
             vm->registers[R7] = 0;
             break;
         case 2:
