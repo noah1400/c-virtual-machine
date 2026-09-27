@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "ore.h"
 
 void *allocate(size_t size) {
@@ -168,15 +170,62 @@ Module *load_module(Program *program, const char *path, const Module *importer, 
 
 static void usage(FILE *out) {
     fprintf(out, "Usage: vmc0 [options] program.ore\n"
-                 "Reads and checks an Ore program and the modules it imports.\n"
+                 "Compiles an Ore program and the modules it imports into a VM32 binary.\n"
+                 "  -o FILE   write the binary to FILE (default: the program with .bin)\n"
+                 "  -S        write the assembly instead, to FILE or the program with .asm\n"
                  "  -I DIR    look for imported modules in DIR as well\n"
-                 "  -L DIR    take the standard library from DIR\n"
+                 "  -L DIR    take the runtime and the standard library from DIR\n"
                  "  -h        show this help\n");
+}
+
+static char *concat(const char *a, size_t a_length, const char *b) {
+    char *text = allocate(a_length + strlen(b) + 1);
+    memcpy(text, a, a_length);
+    strcpy(text + a_length, b);
+    return text;
+}
+
+// The source path with its extension replaced
+static char *derived(const char *path, const char *extension) {
+    const char *slash = strrchr(path, '/');
+    const char *dot = strrchr(path, '.');
+    size_t length = dot && (!slash || dot > slash) ? (size_t)(dot - path) : strlen(path);
+    return concat(path, length, extension);
+}
+
+static int write_file(const char *path, const char *text, size_t size) {
+    FILE *file = fopen(path, "wb");
+    if (!file) {
+        return 0;
+    }
+    int ok = fwrite(text, 1, size, file) == size;
+    return fclose(file) == 0 && ok;
+}
+
+// Runs vmasm from the directory vmc0 lives in, or else from the PATH
+static int assemble(const char *self, const char *library, const char *source, const char *output) {
+    const char *slash = strrchr(self, '/');
+    char *vmasm = slash ? join(self, (size_t)(slash - self), "vmasm", "") : copy_text("vmasm", 5);
+    char *args[] = { vmasm, "-I", (char *)library, (char *)source, "-o", (char *)output, NULL };
+
+    fflush(stdout);
+    pid_t child = fork();
+    if (child == 0) {
+        if (slash) {
+            execv(vmasm, args);
+        }
+        execvp("vmasm", args);
+        fprintf(stderr, "vmc0: error: cannot run vmasm\n");
+        _exit(127);
+    }
+    int status;
+    return child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 int main(int argc, char **argv) {
     Program program = { 0 };
-    const char *source = NULL;
+    const char *source = NULL, *output = NULL;
+    int assembly_only = 0;
 
     // The runtime and the standard library live in ore/lib next to vmc0
     const char *slash = strrchr(argv[0], '/');
@@ -188,8 +237,12 @@ int main(int argc, char **argv) {
         if (strcmp(arg, "-h") == 0) {
             usage(stdout);
             return 0;
-        } else if ((strcmp(arg, "-I") == 0 || strcmp(arg, "-L") == 0) && i + 1 < argc) {
-            if (arg[1] == 'I') {
+        } else if (strcmp(arg, "-S") == 0) {
+            assembly_only = 1;
+        } else if ((strcmp(arg, "-o") == 0 || strcmp(arg, "-I") == 0 || strcmp(arg, "-L") == 0) && i + 1 < argc) {
+            if (arg[1] == 'o') {
+                output = argv[++i];
+            } else if (arg[1] == 'I') {
                 program.include_dirs[program.include_dir_count++] = argv[++i];
             } else {
                 program.library = argv[++i];
@@ -207,5 +260,23 @@ int main(int argc, char **argv) {
     }
     load_module(&program, source, NULL, 0);
     check_program(&program);
+
+    size_t size;
+    char *assembly = generate(&program, &size);
+    if (!output) {
+        output = derived(source, assembly_only ? ".asm" : ".bin");
+    }
+    char *path = assembly_only ? (char *)output : concat(output, strlen(output), ".asm");
+    if (!write_file(path, assembly, size)) {
+        fail(NULL, 0, "cannot write %s", path);
+    }
+    if (assembly_only) {
+        return 0;
+    }
+    if (!assemble(argv[0], program.library, path, output)) {
+        fprintf(stderr, "vmc0: error: vmasm could not assemble %s\n", path);
+        return 1;
+    }
+    remove(path);
     return 0;
 }

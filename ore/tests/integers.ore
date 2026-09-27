@@ -1,0 +1,59 @@
+// Integer arithmetic wraps around in the type of its operands, and constants are exact
+const BIG = 1 << 40;
+const SMALL = BIG >> 38;
+const LIMIT: u8 = 200;
+
+fn show(label: []u8, value: int) {
+    print(label, " = ", value, "\n");
+}
+
+fn main() {
+    var a = 17;
+    var b = -5;
+    show("a + b", a + b);
+    show("a - b", a - b);
+    show("a * b", a * b);
+    show("a / b", a / b);
+    show("a % b", a % b);
+    show("-a / 4", -a / 4);
+    show("-a % 4", -a % 4);
+    show("a << 3", a << 3);
+    show("b >> 1", b >> 1);
+    show("a & 6 | 8 ^ 1", a & 6 | 8 ^ 1);
+    show("~a", ~a);
+    show("1 + 2 * 3 - 4 / 2", 1 + 2 * 3 - 4 / 2);
+    show("SMALL", SMALL);
+
+    var big: int = 2147483647;
+    big += 1;
+    show("2147483647 + 1", big);
+
+    var u: u32 = 0;
+    u -= 1;
+    print("0 - 1 as u32 = ", u, "\n");
+    print("u >> 28 = ", u >> 28, ", u / 3 = ", u / 3, ", u % 7 = ", u % 7, "\n");
+
+    var c: u8 = LIMIT;
+    c += 100;
+    print("200 + 100 as u8 = ", c, "\n");
+    var d: u8 = 3;
+    d -= 5;
+    print("3 - 5 as u8 = ", d, "\n");
+
+    var s: i8 = 100;
+    s *= 2;
+    print("100 * 2 as i8 = ", s, "\n");
+    var w: i16 = -32768;
+    w -= 1;
+    print("-32768 - 1 as i16 = ", w, "\n");
+    var h: u16 = 65535;
+    h += 2;
+    print("65535 + 2 as u16 = ", h, "\n");
+
+    // Smaller types widen to meet larger ones
+    var total: int = (c as int) + s + w;
+    print("mixed = ", total, "\n");
+    print("casts = ", 300 as u8, " ", -1 as u16, " ", 255 as i8, " ", (u as int), " ", (c as i8), "\n");
+    print("shift by 33 = ", 1 << (a + 16), "\n");
+    print("comparisons = ", a > b, " ", u > 5, " ", (b as u32) > 5, " ", a == 17 && b != 0, "\n");
+}

@@ -147,7 +147,7 @@ struct Symbol {
     Expr *string;           // string constants
     Builtin builtin;
     int offset;             // frame offset of a local, set by the code generator
-    int label;              // string constants: the label of their bytes, once emitted
+    const char *label;      // string constants: the label of their bytes, once emitted
 };
 
 typedef enum { TE_NAME, TE_POINTER, TE_ARRAY, TE_SLICE, TE_FN } TypeExprKind;
@@ -205,7 +205,6 @@ struct Expr {
     Symbol *symbol;         // what a name stands for
     Field *field;
     Builtin builtin;
-    int label;              // string literals, set by the code generator
 };
 
 typedef struct {
@@ -328,5 +327,7 @@ void check_program(Program *program);
 int same_type(const Type *a, const Type *b);
 const char *type_name(const Type *t);
 int is_scalar(const Type *t);
+
+char *generate(Program *program, size_t *size);
 
 #endif // _ORE_H_

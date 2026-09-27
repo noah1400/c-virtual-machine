@@ -1,7 +1,7 @@
 #!/bin/sh
 # Usage: tests/run.sh [-u] [NAME...]
-# Runs tests/programs/*.asm on the VM and checks that tests/errors/*.asm fail to assemble and
-# ore/tests/errors/*.ore fail to compile, or only the tests named. Expectations come from NAME.out,
+# Runs tests/programs/*.asm and ore/tests/*.ore on the VM and checks that tests/errors/*.asm fail to
+# assemble and ore/tests/errors/*.ore fail to compile, or only the tests named. Expectations come from NAME.out,
 # NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:", "; expect-warning:",
 # "; asm-args:", "; vm-args:" and "; program-args:" lines, written with // in Ore.
 # Programs are assembled with -W, and every warning needs an "; expect-warning:" line of its own.
@@ -37,7 +37,8 @@ wanted() {
 
 for name in $names; do
     [ -f "$root/tests/programs/$name.asm" ] || [ -f "$root/tests/errors/$name.asm" ] ||
-        [ -f "$root/ore/tests/errors/$name.ore" ] || fail "$name" "there is no such test"
+        [ -f "$root/ore/tests/$name.ore" ] || [ -f "$root/ore/tests/errors/$name.ore" ] ||
+        fail "$name" "there is no such test"
 done
 
 # Assembly tests write their expectations in ; comments, Ore tests in // comments
@@ -45,62 +46,11 @@ expectation() {
     sed -n -e "s/^; $2: //p" -e "s|^// $2: ||p" "$1" | head -n 1
 }
 
-for src in "$root"/tests/programs/*.asm; do
-    [ -e "$src" ] || continue
-    name=$(basename "$src" .asm)
-    base=${src%.asm}
-    wanted "$name" || continue
-
-    # Assemble with a relative path so debug info does not depend on the checkout location
-    asm_args=$(expectation "$src" asm-args)
-    modules=$(expectation "$src" link)
-    link_error=$(expectation "$src" expect-link-error)
-    output="$tmp/$name.bin"
-    if [ -n "$modules$link_error" ]; then
-        asm_args="$asm_args -c"
-        output="$tmp/$name.o"
-    fi
-    if ! (cd "$root" && "$asm" -W $asm_args "tests/programs/$name.asm" -o "$output" 2> "$tmp/$name.log"); then
-        fail "$name" "does not assemble: $(head -n 1 "$tmp/$name.log")"
-        continue
-    fi
-    objects="$output"
-    for module in $modules; do
-        object="$tmp/$name.$(basename "$module" .asm).o"
-        objects="$objects $object"
-        if ! (cd "$root" && "$asm" -W -c "tests/programs/$module" -o "$object" 2>> "$tmp/$name.log"); then
-            fail "$name" "$module does not assemble: $(tail -n 1 "$tmp/$name.log")"
-            continue 2
-        fi
-    done
-    warnings=$(grep -c ": warning: " "$tmp/$name.log")
-    expected_warnings=$(sed -n "s/^; expect-warning: //p" "$src")
-    missing=$(printf '%s\n' "$expected_warnings" | while IFS= read -r warning; do
-        [ -z "$warning" ] || grep -qF -- "$warning" "$tmp/$name.log" || echo "$warning"
-    done)
-    if [ -n "$missing" ]; then
-        fail "$name" "no warning '$(printf '%s\n' "$missing" | head -n 1)'"
-        continue
-    elif [ "$warnings" -ne "$(printf '%s' "$expected_warnings" | grep -c .)" ]; then
-        fail "$name" "unexpected warning: $(grep ": warning: " "$tmp/$name.log" | head -n 1)"
-        continue
-    fi
-
-    if [ -n "$modules$link_error" ]; then
-        if (cd "$root" && "$ld" -o "$tmp/$name.bin" $objects 2> "$tmp/$name.link"); then
-            if [ -n "$link_error" ]; then
-                fail "$name" "linked although it should not"
-                continue
-            fi
-        elif [ -n "$link_error" ] && grep -qF -- "$link_error" "$tmp/$name.link"; then
-            passed=$((passed + 1))
-            continue
-        else
-            fail "$name" "does not link: $(head -n 1 "$tmp/$name.link")"
-            continue
-        fi
-    fi
-
+# Runs $tmp/NAME.bin and compares what it does with the expectations of its source
+run_program() {
+    name=$1
+    base=$2
+    src=$3
     input=/dev/null
     [ -f "$base.in" ] && input="$base.in"
     # Programs run inside the scratch directory so the files they create do not leak; the
@@ -159,6 +109,78 @@ for src in "$root"/tests/programs/*.asm; do
     else
         passed=$((passed + 1))
     fi
+}
+
+for src in "$root"/tests/programs/*.asm; do
+    [ -e "$src" ] || continue
+    name=$(basename "$src" .asm)
+    base=${src%.asm}
+    wanted "$name" || continue
+
+    # Assemble with a relative path so debug info does not depend on the checkout location
+    asm_args=$(expectation "$src" asm-args)
+    modules=$(expectation "$src" link)
+    link_error=$(expectation "$src" expect-link-error)
+    output="$tmp/$name.bin"
+    if [ -n "$modules$link_error" ]; then
+        asm_args="$asm_args -c"
+        output="$tmp/$name.o"
+    fi
+    if ! (cd "$root" && "$asm" -W $asm_args "tests/programs/$name.asm" -o "$output" 2> "$tmp/$name.log"); then
+        fail "$name" "does not assemble: $(head -n 1 "$tmp/$name.log")"
+        continue
+    fi
+    objects="$output"
+    for module in $modules; do
+        object="$tmp/$name.$(basename "$module" .asm).o"
+        objects="$objects $object"
+        if ! (cd "$root" && "$asm" -W -c "tests/programs/$module" -o "$object" 2>> "$tmp/$name.log"); then
+            fail "$name" "$module does not assemble: $(tail -n 1 "$tmp/$name.log")"
+            continue 2
+        fi
+    done
+    warnings=$(grep -c ": warning: " "$tmp/$name.log")
+    expected_warnings=$(sed -n "s/^; expect-warning: //p" "$src")
+    missing=$(printf '%s\n' "$expected_warnings" | while IFS= read -r warning; do
+        [ -z "$warning" ] || grep -qF -- "$warning" "$tmp/$name.log" || echo "$warning"
+    done)
+    if [ -n "$missing" ]; then
+        fail "$name" "no warning '$(printf '%s\n' "$missing" | head -n 1)'"
+        continue
+    elif [ "$warnings" -ne "$(printf '%s' "$expected_warnings" | grep -c .)" ]; then
+        fail "$name" "unexpected warning: $(grep ": warning: " "$tmp/$name.log" | head -n 1)"
+        continue
+    fi
+
+    if [ -n "$modules$link_error" ]; then
+        if (cd "$root" && "$ld" -o "$tmp/$name.bin" $objects 2> "$tmp/$name.link"); then
+            if [ -n "$link_error" ]; then
+                fail "$name" "linked although it should not"
+                continue
+            fi
+        elif [ -n "$link_error" ] && grep -qF -- "$link_error" "$tmp/$name.link"; then
+            passed=$((passed + 1))
+            continue
+        else
+            fail "$name" "does not link: $(head -n 1 "$tmp/$name.link")"
+            continue
+        fi
+    fi
+
+    run_program "$name" "$base" "$src"
+done
+
+for src in "$root"/ore/tests/*.ore; do
+    [ -e "$src" ] || continue
+    name=$(basename "$src" .ore)
+    base=${src%.ore}
+    wanted "$name" || continue
+
+    if ! (cd "$root" && ./vmc0 "ore/tests/$name.ore" -o "$tmp/$name.bin" 2> "$tmp/$name.log"); then
+        fail "$name" "does not compile: $(head -n 1 "$tmp/$name.log")"
+        continue
+    fi
+    run_program "$name" "$base" "$src"
 done
 
 for src in "$root"/tests/errors/*.asm; do
