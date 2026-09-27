@@ -96,6 +96,7 @@ typedef struct {
     uint32_t end;       // one past the highest address written
     uint8_t *bytes;     // contents, allocated for the final pass
     uint32_t allocated;
+    uint32_t alignment; // the largest .align used in it
 } Section;
 
 // What each source line produced; the final pass fills in the addresses
@@ -107,7 +108,22 @@ typedef struct {
     int extended;       // the instruction carries an extension word
     int condition;      // result of a conditional directive, decided in pass 1
     int64_t layout_value;   // size, alignment or address argument of a directive, fixed in pass 1
+    int relocated;      // the linker supplies the instruction's immediate
 } LineResult;
+
+// A value in an object file that the linker fills in
+typedef struct {
+    int section;
+    int type;           // VMO_ABS32 or VMO_REL32
+    uint32_t offset;
+    int base;           // what the value is relative to
+    int64_t addend;
+} Relocation;
+
+typedef struct {
+    char *name;
+    const SourceLine *line;
+} GlobalName;
 
 // State of one open .if block
 typedef struct {
@@ -147,6 +163,11 @@ typedef struct {
     const SourceLine *structure_line;
 
     int object;         // assembling an object file, where addresses are relative to their section
+    Relocation *relocations;
+    size_t relocation_count;
+    size_t relocation_capacity;
+    GlobalName *globals;
+    size_t global_count;
     int changed;        // a layout pass moved a label, changed a constant or widened an instruction
     int64_t entry;
     const SourceLine *entry_line;   // the .entry directive, if any
@@ -201,6 +222,7 @@ int check_registers(Assembler *as);
 
 // output.c
 int output_binary(Assembler *as, const char *path, int with_debug);
+int output_object(Assembler *as, const char *path);
 int output_listing(Assembler *as, const char *path);
 void output_symbols(Assembler *as);
 

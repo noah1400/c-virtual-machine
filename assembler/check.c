@@ -19,6 +19,7 @@ typedef struct {
     const SourceLine *line;
     int routine;            // the routine that starts here, or -1
     int target;             // the instruction a direct jump or call goes to, or -1
+    int relocated;          // the linker supplies the target
 } Insn;
 
 // What calling a routine does to the registers. Its results are the registers it changes on
@@ -214,6 +215,7 @@ static int load_program(Checker *c) {
         insn->address = r->address;
         insn->size = r->size;
         insn->line = &as->lines[i];
+        insn->relocated = r->relocated;
         isa_decode(word, extension, &insn->instr);
     }
     qsort(c->insns, c->count, sizeof(Insn), compare_insns);
@@ -229,7 +231,7 @@ static int load_program(Checker *c) {
     for (size_t i = 0; i < c->count; i++) {
         Insn *insn = &c->insns[i];
         insn->target = -1;
-        if (isa_has_relative_target(insn->instr.opcode) && is_direct(&insn->instr)) {
+        if (isa_has_relative_target(insn->instr.opcode) && is_direct(&insn->instr) && !insn->relocated) {
             insn->target = find_insn(c, insn->address + insn->size + insn->instr.immediate);
         }
         if (insn->instr.opcode == CALL_OP && insn->target >= 0 && c->insns[insn->target].routine < 0) {

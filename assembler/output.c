@@ -4,6 +4,7 @@
 #include "asm.h"
 #include "binfmt.h"
 #include "buffer.h"
+#include "objfmt.h"
 
 static const char *trim(const char *text, char *out, size_t size) {
     while (*text == ' ' || *text == '\t') {
@@ -57,6 +58,86 @@ int output_binary(Assembler *as, const char *path, int with_debug) {
         write_debug_info(as, &b);
     }
     vm32_finish(&b, symbols_start);
+
+    int ok = buffer_save(&b, path);
+    if (!ok) {
+        fprintf(stderr, "vmasm: error: cannot write %s\n", path);
+    }
+    free(b.data);
+    return ok;
+}
+
+static uint8_t object_kind(const AsmSymbol *sym) {
+    if (sym->external) {
+        return VMO_EXTERN;
+    }
+    if (sym->base == BASE_TEXT) {
+        return VMO_CODE;
+    }
+    return sym->base == BASE_DATA ? VMO_DATA_SYMBOL : VMO_CONST;
+}
+
+static uint32_t relocation_target(int base) {
+    return base == BASE_TEXT ? VMO_TARGET_TEXT : base == BASE_DATA ? VMO_TARGET_DATA : VMO_SYMBOL + (uint32_t)(base - BASE_SYMBOL);
+}
+
+int output_object(Assembler *as, const char *path) {
+    const Section *text = &as->sections[SECTION_TEXT];
+    const Section *data = &as->sections[SECTION_DATA];
+    uint32_t text_size = text->end - text->base;
+    uint32_t data_size = data->end - data->base;
+    Buffer b = { 0 };
+
+    buffer_put(&b, VMO_MAGIC, 4);
+    buffer_u16(&b, VMO_VERSION);
+    buffer_u16(&b, as->entry_line ? VMO_HAS_ENTRY : 0);
+    buffer_u32(&b, as->entry_line ? (uint32_t)as->entry : 0);
+    buffer_u32(&b, text_size);
+    buffer_u32(&b, text->alignment > 4 ? text->alignment : 4);
+    buffer_u32(&b, data_size);
+    buffer_u32(&b, data->alignment > 4 ? data->alignment : 4);
+    buffer_put(&b, text->bytes, text_size);
+    buffer_put(&b, data->bytes, data_size);
+
+    // Constants that alias an external symbol only matter inside this file
+    buffer_u32(&b, (uint32_t)as->symbols.count);
+    for (size_t i = 0; i < as->symbols.count; i++) {
+        const AsmSymbol *sym = &as->symbols.items[i];
+        int alias = sym->base >= BASE_SYMBOL && !sym->external;
+        buffer_string(&b, sym->name);
+        buffer_u8(&b, alias ? VMO_CONST : object_kind(sym));
+        buffer_u8(&b, (uint8_t)sym->global);
+        buffer_u32(&b, alias ? 0 : (uint32_t)sym->value);
+        buffer_u32(&b, sym->line ? (uint32_t)sym->line->number : 0);
+        buffer_string(&b, sym->line ? sym->line->file : NULL);
+    }
+
+    buffer_u32(&b, (uint32_t)as->relocation_count);
+    for (size_t i = 0; i < as->relocation_count; i++) {
+        const Relocation *r = &as->relocations[i];
+        buffer_u8(&b, r->section == SECTION_TEXT ? VMO_TEXT : VMO_DATA);
+        buffer_u8(&b, (uint8_t)r->type);
+        buffer_u32(&b, r->offset);
+        buffer_u32(&b, relocation_target(r->base));
+        buffer_u32(&b, (uint32_t)r->addend);
+    }
+
+    uint32_t count = 0;
+    for (size_t i = 0; i < as->line_count; i++) {
+        count += as->results[i].section >= 0;
+    }
+    buffer_u32(&b, count);
+    for (size_t i = 0; i < as->line_count; i++) {
+        const LineResult *r = &as->results[i];
+        if (r->section >= 0) {
+            char line_text[1024];
+            buffer_u8(&b, r->section == SECTION_TEXT ? VMO_TEXT : VMO_DATA);
+            buffer_u32(&b, r->address);
+            buffer_u32(&b, (uint32_t)as->lines[i].number);
+            buffer_string(&b, trim(as->lines[i].text, line_text, sizeof(line_text)));
+            buffer_string(&b, as->lines[i].file);
+        }
+    }
 
     int ok = buffer_save(&b, path);
     if (!ok) {

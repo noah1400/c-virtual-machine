@@ -7,6 +7,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "Usage: %s [options] input.asm\n", name);
     fprintf(out, "Options:\n");
     fprintf(out, "  -o FILE   Write the binary to FILE (default: input with a .bin extension)\n");
+    fprintf(out, "  -c        Write an object file for vmld instead (default extension .o)\n");
     fprintf(out, "  -l FILE   Write a listing to FILE\n");
     fprintf(out, "  -I DIR    Also search DIR for included files\n");
     fprintf(out, "  -D NAME[=VALUE]  Define a constant, 1 unless a value is given\n");
@@ -17,14 +18,14 @@ static void print_usage(FILE *out, const char *name) {
 }
 
 // Replaces the extension of the input file, or appends one
-static char *default_output(const char *input) {
+static char *default_output(const char *input, const char *extension) {
     const char *slash = strrchr(input, '/');
     const char *dot = strrchr(input, '.');
     size_t stem = dot && (!slash || dot > slash) ? (size_t)(dot - input) : strlen(input);
-    char *path = malloc(stem + 5);
+    char *path = malloc(stem + strlen(extension) + 1);
     if (path) {
         memcpy(path, input, stem);
-        strcpy(path + stem, ".bin");
+        strcpy(path + stem, extension);
     }
     return path;
 }
@@ -72,6 +73,8 @@ int main(int argc, char *argv[]) {
             with_debug = 0;
         } else if (strcmp(arg, "-W") == 0) {
             check = 1;
+        } else if (strcmp(arg, "-c") == 0) {
+            as.object = 1;
         } else if (strcmp(arg, "-h") == 0) {
             print_usage(stdout, argv[0]);
             return 0;
@@ -92,9 +95,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    char *output_path = output ? NULL : default_output(input);
-    int ok = asm_assemble(&as, input) &&
-             output_binary(&as, output ? output : output_path, with_debug) &&
+    char *output_path = output ? NULL : default_output(input, as.object ? ".o" : ".bin");
+    const char *path = output ? output : output_path;
+    int ok = asm_assemble(&as, input) && (as.object ? output_object(&as, path) : output_binary(&as, path, with_debug)) &&
              (!listing || output_listing(&as, listing));
 
     if (ok && show_symbols) {

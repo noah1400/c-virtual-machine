@@ -5,6 +5,7 @@
 #include <string.h>
 #include "asm.h"
 #include "binfmt.h"
+#include "objfmt.h"
 #include "vm_types.h"
 
 typedef struct {
@@ -12,6 +13,7 @@ typedef struct {
     uint8_t reg;
     int64_t value;
     int unresolved;
+    int base;
 } Operand;
 
 void asm_error(Assembler *as, const char *format, ...) {
@@ -66,6 +68,11 @@ void asm_free(Assembler *as) {
         free(macro->body);
     }
     free(as->macros);
+    for (size_t i = 0; i < as->global_count; i++) {
+        free(as->globals[i].name);
+    }
+    free(as->globals);
+    free(as->relocations);
     free(as->lines);
     free(as->files);
     free(as->results);
@@ -145,6 +152,24 @@ static void emit(Assembler *as, const uint8_t *bytes, uint32_t count) {
     if (sec->pc > sec->end) {
         sec->end = sec->pc;
     }
+}
+
+// Records, in the final pass, a value at offset in the current section that the linker fills in
+static void add_relocation(Assembler *as, int type, uint32_t offset, int base, int64_t addend) {
+    if (as->pass != PASS_EMIT) {
+        return;
+    }
+    if (as->relocation_count == as->relocation_capacity) {
+        size_t capacity = as->relocation_capacity ? as->relocation_capacity * 2 : 64;
+        Relocation *grown = realloc(as->relocations, capacity * sizeof(Relocation));
+        if (!grown) {
+            asm_error(as, "out of memory");
+            return;
+        }
+        as->relocations = grown;
+        as->relocation_capacity = capacity;
+    }
+    as->relocations[as->relocation_count++] = (Relocation){ as->section, type, offset, base, addend };
 }
 
 static void emit_fill(Assembler *as, uint8_t value, uint32_t count) {
@@ -255,6 +280,7 @@ static void define_label(Assembler *as, const char *text) {
     sym->value = address;
     sym->defined = 1;
     sym->kind = as->section == SECTION_TEXT ? SYM_CODE : SYM_DATA;
+    sym->base = !as->object ? BASE_NONE : as->section == SECTION_TEXT ? BASE_TEXT : BASE_DATA;
     sym->line = as->line;
 }
 
@@ -272,9 +298,19 @@ static void directive_values(Assembler *as, Parser *p, int width) {
         }
 
         p->unresolved = 0;
+        p->relocatable = as->object;
         int64_t value = parse_expression(p);
+        p->relocatable = 0;
         if (p->failed) {
             return;
+        }
+        if (p->base != BASE_NONE) {
+            if (width != 4) {
+                asm_error(as, "only .dword can hold an address in an object file");
+                return;
+            }
+            add_relocation(as, VMO_ABS32, current(as)->pc - current(as)->base, p->base, value);
+            value = 0;
         }
         if (as->pass == PASS_EMIT && !fits(value, width)) {
             asm_error(as, "value %lld does not fit in %d byte%s", (long long)value, width, width > 1 ? "s" : "");
@@ -366,6 +402,9 @@ static void directive_align(Assembler *as, Parser *p) {
     }
     uint32_t pc = current(as)->pc;
     emit_fill(as, 0, (uint32_t)((alignment - pc % alignment) % alignment));
+    if (alignment > current(as)->alignment) {
+        current(as)->alignment = (uint32_t)alignment;
+    }
 }
 
 // Pads the current section up to an offset from its start
@@ -399,7 +438,9 @@ static void directive_equ(Assembler *as, Parser *p) {
     }
 
     p->unresolved = 0;
+    p->relocatable = as->object;
     int64_t value = parse_expression(p);
+    p->relocatable = 0;
     if (p->failed || !expect_end(p)) {
         return;
     }
@@ -407,8 +448,10 @@ static void directive_equ(Assembler *as, Parser *p) {
     AsmSymbol *sym = symbols_find(&as->symbols, name);
     if (as->pass != PASS_DEFINE) {
         // Constants that use later labels or constants settle during the layout passes
-        if (sym && sym->line == as->line && !p->unresolved && (!sym->defined || sym->value != value)) {
+        if (sym && sym->line == as->line && !p->unresolved &&
+            (!sym->defined || sym->value != value || sym->base != p->base)) {
             sym->value = value;
+            sym->base = p->base;
             sym->defined = 1;
             as->changed = 1;
         }
@@ -426,7 +469,57 @@ static void directive_equ(Assembler *as, Parser *p) {
     sym->kind = SYM_CONST;
     sym->line = as->line;
     sym->value = value;
+    sym->base = p->base;
     sym->defined = !p->unresolved;
+}
+
+// .global exports symbols from an object file, which is checked once they are all defined;
+// .extern names symbols that another object file defines
+static void directive_symbols(Assembler *as, Parser *p, int external) {
+    if (external && !as->object) {
+        asm_error(as, ".extern needs an object file, made with vmasm -c");
+        return;
+    }
+    do {
+        Token *t = peek(p);
+        char name[256];
+        if (t->kind != TOK_IDENT || isa_register_index(t->text) >= 0 || !qualify_name(as, t->text, name, sizeof(name))) {
+            asm_error(as, "expected a symbol name");
+            return;
+        }
+        p->pos++;
+        if (as->pass != PASS_DEFINE) {
+            continue;
+        }
+        if (!external) {
+            GlobalName *grown = realloc(as->globals, (as->global_count + 1) * sizeof(GlobalName));
+            char *copy = grown ? malloc(strlen(name) + 1) : NULL;
+            if (grown) {
+                as->globals = grown;
+            }
+            if (!copy) {
+                asm_error(as, "out of memory");
+                return;
+            }
+            strcpy(copy, name);
+            as->globals[as->global_count++] = (GlobalName){ copy, as->line };
+            continue;
+        }
+        AsmSymbol *sym = symbols_find(&as->symbols, name);
+        if (sym) {
+            report_redefinition(as, name, sym);
+            continue;
+        }
+        sym = symbols_add(&as->symbols, name);
+        if (!sym) {
+            asm_error(as, "out of memory");
+            return;
+        }
+        sym->kind = SYM_CONST;
+        sym->external = 1;
+        sym->line = as->line;
+    } while (accept(p, ','));
+    expect_end(p);
 }
 
 static void directive_entry(Assembler *as, Parser *p) {
@@ -437,7 +530,13 @@ static void directive_entry(Assembler *as, Parser *p) {
     as->entry_line = as->line;
 
     p->unresolved = 0;
+    p->relocatable = as->object;
     int64_t entry = parse_expression(p);
+    p->relocatable = 0;
+    if (!p->failed && as->object && p->base != BASE_TEXT && as->pass == PASS_EMIT) {
+        asm_error(as, "the entry point of an object file must be a label in its code");
+        return;
+    }
     if (!p->failed && expect_end(p) && as->pass == PASS_EMIT) {
         as->entry = entry;
     }
@@ -617,6 +716,8 @@ static void directive(Assembler *as, Parser *p) {
         directive_entry(as, p);
     } else if (name_equals(name, ".incbin")) {
         directive_incbin(as, p);
+    } else if (name_equals(name, ".global") || name_equals(name, ".extern")) {
+        directive_symbols(as, p, name_equals(name, ".extern"));
     } else if (name_equals(name, ".error")) {
         Token *message = peek(p);
         if (message->kind != TOK_STRING) {
@@ -668,8 +769,10 @@ static int parse_operand(Parser *p, Operand *op) {
                     return 0;
                 }
                 p->unresolved = 0;
+                p->relocatable = p->as->object;
                 op->value = parse_expression(p);
                 op->unresolved = p->unresolved;
+                op->base = p->base;
                 if (op->mode == REGM_MODE) {
                     op->mode = IDX_MODE;
                 }
@@ -677,8 +780,10 @@ static int parse_operand(Parser *p, Operand *op) {
         } else {
             op->mode = MEM_MODE;
             p->unresolved = 0;
+            p->relocatable = p->as->object;
             op->value = parse_expression(p);
             op->unresolved = p->unresolved;
+            op->base = p->base;
         }
         if (!p->failed && !accept(p, ']')) {
             asm_error(p->as, "expected ']'");
@@ -690,8 +795,10 @@ static int parse_operand(Parser *p, Operand *op) {
     }
 
     p->unresolved = 0;
+    p->relocatable = p->as->object;
     op->value = parse_expression(p);
     op->unresolved = p->unresolved;
+    op->base = p->base;
     return !p->failed;
 }
 
@@ -1008,7 +1115,18 @@ static void instruction(Assembler *as, Parser *p, LineResult *result) {
     Operand *immediate = (Operand *)immediate_operand(info, ops, count);
     int relative = immediate && immediate->mode == IMM_MODE && isa_has_relative_target(info->opcode);
     int64_t target = immediate ? immediate->value : 0;
-    if (relative) {
+
+    // Addresses that the linker supplies take the extension word; only jumps within the code are known
+    if (immediate && immediate->base != BASE_NONE && !(relative && immediate->base == BASE_TEXT)) {
+        if (!result->extended) {
+            result->extended = 1;
+            as->changed = 1;
+        }
+        result->relocated = 1;
+        add_relocation(as, relative ? VMO_REL32 : VMO_ABS32, as->statement_address + 4, immediate->base, target);
+        immediate->value = 0;
+        relative = 0;
+    } else if (relative) {
         immediate->value = target - (as->statement_address + (result->extended ? 8 : 4));
     }
 
@@ -1184,9 +1302,10 @@ static void run_pass(Assembler *as, int pass) {
         as->line = NULL;
     }
 
-    // Data follows the code on the next page; moving it means another layout pass
+    // Data follows the code on the next page; moving it means another layout pass. In an object file
+    // both sections start at 0 until the linker places them.
     uint32_t data_base = (as->sections[SECTION_TEXT].end + VM_PAGE_SIZE - 1) & ~(VM_PAGE_SIZE - 1);
-    if (as->sections[SECTION_DATA].base != data_base) {
+    if (!as->object && as->sections[SECTION_DATA].base != data_base) {
         as->sections[SECTION_DATA].base = data_base;
         as->changed = 1;
     }
@@ -1248,7 +1367,7 @@ static void settle_layout(Assembler *as) {
     }
     for (size_t i = 0; i < as->symbols.count; i++) {
         const AsmSymbol *sym = &as->symbols.items[i];
-        if (!sym->defined && sym->kind == SYM_CONST) {
+        if (!sym->defined && !sym->external && sym->kind == SYM_CONST) {
             as->line = sym->line;
             asm_error(as, "cannot resolve the value of '%s'", sym->name);
         }
@@ -1286,6 +1405,18 @@ int asm_assemble(Assembler *as, const char *path) {
     if (as->errors == 0) {
         as->entry = as->sections[SECTION_TEXT].base;
         run_pass(as, PASS_EMIT);
+    }
+
+    // Exported symbols have to be defined here, and in a way the linker can place
+    for (size_t i = 0; i < as->global_count && as->errors == 0; i++) {
+        AsmSymbol *sym = symbols_find(&as->symbols, as->globals[i].name);
+        if (!sym || !sym->defined || sym->external || sym->base >= BASE_SYMBOL) {
+            as->line = as->globals[i].line;
+            asm_error(as, "'%s' cannot be exported because this file does not define it", as->globals[i].name);
+            as->line = NULL;
+        } else {
+            sym->global = 1;
+        }
     }
 
     const Section *text = &as->sections[SECTION_TEXT];
