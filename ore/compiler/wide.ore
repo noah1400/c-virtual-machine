@@ -1,0 +1,253 @@
+// 64-bit integers for constants, which are exact to 64 bits while Ore has 32. A Wide holds the two's
+// complement of the number in two halves.
+
+pub struct Wide {
+    lo: u32;
+    hi: int;
+}
+
+pub fn of(value: int) Wide {
+    return Wide { lo: value as u32, hi: value >> 31 };
+}
+
+pub fn of_bool(value: bool) Wide {
+    if (value) {
+        return of(1);
+    }
+    return of(0);
+}
+
+pub fn equal(a: Wide, b: Wide) bool {
+    return a.lo == b.lo && a.hi == b.hi;
+}
+
+pub fn less(a: Wide, b: Wide) bool {
+    return a.hi < b.hi || a.hi == b.hi && a.lo < b.lo;
+}
+
+pub fn is_zero(a: Wide) bool {
+    return a.lo == 0 && a.hi == 0;
+}
+
+// The value fits in an int
+pub fn fits(a: Wide) bool {
+    return a.hi == (a.lo as int) >> 31;
+}
+
+// The low 32 bits, as the machine keeps them
+pub fn low(a: Wide) int {
+    return a.lo as int;
+}
+
+// a + b wrapped to 64 bits; overflow tells whether the exact sum does not fit
+pub fn add(a: Wide, b: Wide, overflow: *bool) Wide {
+    var sum = Wide { lo: a.lo + b.lo, hi: a.hi + b.hi };
+    if (sum.lo < a.lo) {
+        sum.hi += 1;
+    }
+    *overflow = (a.hi < 0) == (b.hi < 0) && (sum.hi < 0) != (a.hi < 0);
+    return sum;
+}
+
+pub fn sub(a: Wide, b: Wide, overflow: *bool) Wide {
+    var difference = Wide { lo: a.lo - b.lo, hi: a.hi - b.hi };
+    if (a.lo < b.lo) {
+        difference.hi -= 1;
+    }
+    *overflow = (a.hi < 0) != (b.hi < 0) && (difference.hi < 0) != (a.hi < 0);
+    return difference;
+}
+
+pub fn negate(a: Wide) Wide {
+    var overflow = false;
+    return sub(Wide {}, a, &overflow);
+}
+
+pub fn not(a: Wide) Wide {
+    return Wide { lo: ~a.lo, hi: ~a.hi };
+}
+
+pub fn and(a: Wide, b: Wide) Wide {
+    return Wide { lo: a.lo & b.lo, hi: a.hi & b.hi };
+}
+
+pub fn or(a: Wide, b: Wide) Wide {
+    return Wide { lo: a.lo | b.lo, hi: a.hi | b.hi };
+}
+
+pub fn xor(a: Wide, b: Wide) Wide {
+    return Wide { lo: a.lo ^ b.lo, hi: a.hi ^ b.hi };
+}
+
+// Shifts by 0 to 63 bits
+pub fn shl(a: Wide, count: int) Wide {
+    if (count == 0) {
+        return a;
+    }
+    if (count >= 32) {
+        return Wide { lo: 0, hi: (a.lo << count - 32) as int };
+    }
+    return Wide { lo: a.lo << count, hi: ((a.hi as u32) << count | a.lo >> 32 - count) as int };
+}
+
+// Shifts in copies of the sign bit
+pub fn sar(a: Wide, count: int) Wide {
+    if (count == 0) {
+        return a;
+    }
+    if (count >= 32) {
+        return Wide { lo: (a.hi >> count - 32) as u32, hi: a.hi >> 31 };
+    }
+    return Wide { lo: a.lo >> count | (a.hi as u32) << 32 - count, hi: a.hi >> count };
+}
+
+// Shifts in zeros
+pub fn shr(a: Wide, count: int) Wide {
+    if (count == 0) {
+        return a;
+    }
+    var high = a.hi as u32;
+    if (count >= 32) {
+        return Wide { lo: high >> count - 32, hi: 0 };
+    }
+    return Wide { lo: a.lo >> count | high << 32 - count, hi: (high >> count) as int };
+}
+
+// The four 16-bit limbs of a, lowest first, taking a as unsigned
+fn split(a: Wide, limbs: []u32) {
+    limbs[0] = a.lo & 0xFFFF;
+    limbs[1] = a.lo >> 16;
+    limbs[2] = (a.hi as u32) & 0xFFFF;
+    limbs[3] = (a.hi as u32) >> 16;
+}
+
+fn join(limbs: []u32) Wide {
+    return Wide { lo: limbs[0] | limbs[1] << 16, hi: (limbs[2] | limbs[3] << 16) as int };
+}
+
+// The magnitude of a as an unsigned number; that of the most negative value is 2^63
+fn magnitude(a: Wide) Wide {
+    if (a.hi < 0) {
+        return negate(a);
+    }
+    return a;
+}
+
+pub fn mul(a: Wide, b: Wide, overflow: *bool) Wide {
+    var x: [4]u32;
+    var y: [4]u32;
+    var product: [8]u32;
+    split(magnitude(a), x);
+    split(magnitude(b), y);
+    for (var i = 0; i < 4; i += 1) {
+        for (var j = 0; j < 4; j += 1) {
+            var carry = x[i] * y[j];
+            for (var k = i + j; carry != 0; k += 1) {
+                var sum = product[k] + (carry & 0xFFFF);
+                product[k] = sum & 0xFFFF;
+                carry = (carry >> 16) + (sum >> 16);
+            }
+        }
+    }
+    var result = join(product[:4]);
+    var negative = (a.hi < 0) != (b.hi < 0);
+    var high = product[4] | product[5] | product[6] | product[7];
+    // The magnitude has to stay below 2^63, or reach exactly 2^63 for a negative product
+    *overflow = high != 0 || result.hi < 0 && !(negative && result.lo == 0 && result.hi as u32 == 0x80000000);
+    if (negative) {
+        return negate(result);
+    }
+    return result;
+}
+
+fn below(a: Wide, b: Wide) bool {
+    return (a.hi as u32) < (b.hi as u32) || a.hi == b.hi && a.lo < b.lo;
+}
+
+// Unsigned division of the magnitudes, one bit at a time
+fn divide(n: Wide, d: Wide, remainder: *Wide) Wide {
+    var quotient = Wide {};
+    var rest = Wide {};
+    var overflow = false;
+    for (var i = 63; i >= 0; i -= 1) {
+        rest = shl(rest, 1);
+        rest.lo |= shr(n, i).lo & 1;
+        if (!below(rest, d)) {
+            rest = sub(rest, d, &overflow);
+            quotient = or(quotient, shl(of(1), i));
+        }
+    }
+    *remainder = rest;
+    return quotient;
+}
+
+// Division that rounds toward zero; b is not 0, and a / b fits
+pub fn div(a: Wide, b: Wide) Wide {
+    var rest = Wide {};
+    var quotient = divide(magnitude(a), magnitude(b), &rest);
+    if ((a.hi < 0) != (b.hi < 0)) {
+        return negate(quotient);
+    }
+    return quotient;
+}
+
+// The remainder, which takes the sign of a
+pub fn rem(a: Wide, b: Wide) Wide {
+    var rest = Wide {};
+    divide(magnitude(a), magnitude(b), &rest);
+    if (a.hi < 0) {
+        return negate(rest);
+    }
+    return rest;
+}
+
+// Appends a digit to value, taking it as unsigned, and tells whether the result still fits in 64 bits
+pub fn append_digit(value: *Wide, base: int, digit: int) bool {
+    var limbs: [4]u32;
+    split(*value, limbs);
+    var carry = digit as u32;
+    for (var i = 0; i < 4; i += 1) {
+        var current = limbs[i] * base as u32 + carry;
+        limbs[i] = current & 0xFFFF;
+        carry = current >> 16;
+    }
+    *value = join(limbs);
+    return carry == 0;
+}
+
+// The number in decimal, with a minus sign when it is negative
+pub fn text(a: Wide) []u8 {
+    var limbs: [4]u32;
+    var digits: [20]u8;
+    var i = digits.len;
+    split(magnitude(a), limbs);
+    for (;;) {
+        var rest: u32 = 0;
+        for (var k = 3; k >= 0; k -= 1) {
+            var current = rest << 16 | limbs[k];
+            limbs[k] = current / 10;
+            rest = current % 10;
+        }
+        i -= 1;
+        digits[i] = '0' + rest as u8;
+        if ((limbs[0] | limbs[1] | limbs[2] | limbs[3]) == 0) {
+            break;
+        }
+    }
+    var negative = a.hi < 0;
+    var size = digits.len - i;
+    if (negative) {
+        size += 1;
+    }
+    var result = new(u8, size);
+    var at = 0;
+    if (negative) {
+        result[0] = '-';
+        at = 1;
+    }
+    for (; i < digits.len; i += 1) {
+        result[at] = digits[i];
+        at += 1;
+    }
+    return result;
+}
