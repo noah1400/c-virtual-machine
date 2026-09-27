@@ -1,0 +1,1127 @@
+// The command interpreter: the commands MiniDos knows, programs, batch files and redirection
+import "std/io";
+import "std/str";
+import "std/sys";
+import "console";
+import "fs";
+import "machine";
+import "program";
+
+pub const VERSION = "MiniDos Version 2.0";
+
+// Shows each command after the prompt, for sessions that come from a file
+pub var echo_input = false;
+
+var echo_on = true;
+var errorlevel = 0;
+var variables: [][]u8;          // NAME=VALUE
+var variable_count = 0;
+var stopping = false;
+
+// A running batch file: its lines, where it is and its parameters
+struct Batch {
+    lines: [][]u8;
+    next: int;
+    parameters: [][]u8;
+    shift: int;
+}
+
+var batch: *Batch = null;
+
+pub fn stopped() bool {
+    return stopping;
+}
+
+// Reads commands at the prompt until EXIT or the end of the input
+pub fn interact() {
+    var buffer: [256]u8;
+    while (!stopping) {
+        prompt();
+        var line: []u8;
+        if (!console.read_line(buffer, &line)) {
+            console.write("\n");
+            return;
+        }
+        if (echo_input) {
+            console.write(line);
+            console.write("\n");
+        }
+        execute(line);
+    }
+}
+
+fn prompt() {
+    console.write("A:");
+    console.write(fs.current_directory());
+    console.write(">");
+}
+
+fn say(text: []u8) {
+    console.screen(text);
+    console.screen("\n");
+}
+
+fn complain(e: fs.Error) {
+    say(fs.message(e));
+}
+
+// a, b and c in one new text
+fn join(a: []u8, b: []u8, c: []u8) []u8 {
+    var result = new(u8, a.len + b.len + c.len);
+    for (var i = 0; i < a.len; i += 1) {
+        result[i] = a[i];
+    }
+    for (var i = 0; i < b.len; i += 1) {
+        result[a.len + i] = b[i];
+    }
+    for (var i = 0; i < c.len; i += 1) {
+        result[a.len + b.len + i] = c[i];
+    }
+    return result;
+}
+
+fn upper(text: []u8) []u8 {
+    var result = str.clone(text);
+    for (var i = 0; i < result.len; i += 1) {
+        if (result[i] >= 'a' && result[i] <= 'z') {
+            result[i] = result[i] - 'a' + 'A';
+        }
+    }
+    return result;
+}
+
+fn same(text: []u8, name: []u8) bool {
+    if (text.len != name.len) {
+        return false;
+    }
+    for (var i = 0; i < text.len; i += 1) {
+        var c = text[i];
+        if (c >= 'a' && c <= 'z') {
+            c = c - 'a' + 'A';
+        }
+        if (c != name[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Runs a command line: pipes and redirections, then the command
+pub fn execute(text: []u8) {
+    var line = str.trim(text);
+    if (line.len == 0 || line[0] == ':') {
+        return;
+    }
+    var bar = find_last_outside_quotes(line, '|');
+    if (bar >= 0) {
+        pipe(line[:bar], line[bar + 1:]);
+        return;
+    }
+
+    // Redirections go to the end of the line, where their file names end at a space
+    var command = line;
+    var output: []u8;
+    var input: []u8;
+    var appending = false;
+    var at = find_outside_quotes(line, '>');
+    var from = find_outside_quotes(line, '<');
+    if (at >= 0) {
+        appending = at + 1 < line.len && line[at + 1] == '>';
+        var start = at + 1;
+        if (appending) {
+            start += 1;
+        }
+        output = first_word(line[start:]);
+        command = line[:at];
+    }
+    if (from >= 0) {
+        input = first_word(line[from + 1:]);
+        if (from < command.len) {
+            command = line[:from];
+        }
+    }
+    if (at >= 0 && output.len == 0 || from >= 0 && input.len == 0) {
+        say("Syntax error");
+        return;
+    }
+    run_redirected(str.trim(command), input, output, appending);
+}
+
+fn find_outside_quotes(text: []u8, c: u8) int {
+    var quoted = false;
+    for (var i = 0; i < text.len; i += 1) {
+        if (text[i] == '"') {
+            quoted = !quoted;
+        } else if (text[i] == c && !quoted) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+fn find_last_outside_quotes(text: []u8, c: u8) int {
+    var last = -1;
+    var quoted = false;
+    for (var i = 0; i < text.len; i += 1) {
+        if (text[i] == '"') {
+            quoted = !quoted;
+        } else if (text[i] == c && !quoted) {
+            last = i;
+        }
+    }
+    return last;
+}
+
+fn first_word(text: []u8) []u8 {
+    var t = str.trim(text);
+    var end = 0;
+    while (end < t.len && t[end] != ' ' && t[end] != '<' && t[end] != '>') {
+        end += 1;
+    }
+    return t[:end];
+}
+
+fn run_redirected(command: []u8, input: []u8, output: []u8, appending: bool) {
+    var e = fs.Error.NONE;
+    var in_file: *fs.File = null;
+    var out_file: *fs.File = null;
+    if (input.len > 0) {
+        in_file = fs.open(input, fs.READ, &e);
+        if (in_file == null) {
+            complain(e);
+            return;
+        }
+    }
+    if (output.len > 0) {
+        var mode = fs.WRITE;
+        if (appending) {
+            mode = fs.APPEND;
+        }
+        out_file = fs.open(output, mode, &e);
+        if (out_file == null) {
+            if (in_file != null) {
+                fs.close(in_file);
+            }
+            complain(e);
+            return;
+        }
+    }
+    var saved_input = console.redirect_input(in_file);
+    var saved_output = console.redirect_output(out_file);
+    run(command);
+    console.redirect_output(saved_output);
+    console.redirect_input(saved_input);
+    if (out_file != null) {
+        e = fs.close(out_file);
+        if (e != fs.Error.NONE) {
+            complain(e);
+        }
+    }
+    if (in_file != null) {
+        fs.close(in_file);
+    }
+}
+
+var pipes = 0;
+
+// Runs left with its output going to a temporary file, then right with that file as its input
+fn pipe(left: []u8, right: []u8) {
+    pipes += 1;
+    var digits: [11]u8;
+    var temporary = join("\\PIPE", str.format_int(pipes, digits), ".$$$");
+    var first = join(left, " > ", temporary);
+    execute(first);
+    free(first);
+    var second = join(right, " < ", temporary);
+    execute(second);
+    free(second);
+    fs.delete(temporary);
+    free(temporary);
+    pipes -= 1;
+}
+
+// The value of an environment variable, or nothing
+pub fn variable(name: []u8) []u8 {
+    for (var i = 0; i < variable_count; i += 1) {
+        var v = variables[i];
+        var equals = str.find_byte(v, '=');
+        if (equals == name.len && same(name, upper(v[:equals]))) {
+            return v[equals + 1:];
+        }
+    }
+    return "";
+}
+
+fn set_variable(name: []u8, value: []u8) {
+    var key = upper(str.trim(name));
+    for (var i = 0; i < variable_count; i += 1) {
+        var equals = str.find_byte(variables[i], '=');
+        if (str.equal(variables[i][:equals], key)) {
+            free(variables[i]);
+            variable_count -= 1;
+            variables[i] = variables[variable_count];
+            break;
+        }
+    }
+    if (value.len > 0) {
+        if (variable_count == variables.len) {
+            var larger = new([]u8, variables.len * 2 + 8);
+            for (var i = 0; i < variable_count; i += 1) {
+                larger[i] = variables[i];
+            }
+            free(variables);
+            variables = larger;
+        }
+        variables[variable_count] = join(key, "=", value);
+        variable_count += 1;
+    }
+    free(key);
+}
+
+// Splits a command into its name and the rest. Commands that MiniDos knows may run into their
+// arguments, as in CD.. or ECHO.
+fn run(text: []u8) {
+    if (text.len == 0) {
+        return;
+    }
+    var end = 0;
+    while (end < text.len && text[end] != ' ' && text[end] != '\t') {
+        end += 1;
+    }
+    var word = text[:end];
+    var rest = str.trim(text[end:]);
+    var echo_text = text[end:];
+    if (echo_text.len > 0) {
+        echo_text = echo_text[1:];
+    }
+    for (var i = 1; i < word.len; i += 1) {
+        if ((word[i] == '.' || word[i] == '\\' || word[i] == '/') && is_builtin(word[:i])) {
+            rest = str.trim(text[i:]);
+            echo_text = text[i:];
+            word = word[:i];
+            break;
+        }
+    }
+    var name = upper(word);
+    if (!builtin(name, rest, echo_text)) {
+        external(word, rest);
+    }
+    free(name);
+}
+
+var builtins = [30][]u8 {
+    "CD", "CHDIR", "CLS", "COPY", "DEL", "DIR", "ECHO", "ERASE", "EXIT", "EXPORT", "FORMAT", "GOTO", "HELP", "IF",
+    "IMPORT", "MD", "MEM", "MKDIR", "PATH", "PAUSE", "RD", "REM", "REN", "RENAME", "RMDIR", "SET", "SHIFT", "TYPE",
+    "VER", "VOL",
+};
+
+fn is_builtin(word: []u8) bool {
+    for (var i = 0; i < builtins.len; i += 1) {
+        if (same(word, builtins[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn builtin(name: []u8, rest: []u8, echo_text: []u8) bool {
+    if (str.equal(name, "CLS")) {
+        console.clear();
+    } else if (str.equal(name, "DIR")) {
+        dir(rest);
+    } else if (str.equal(name, "CD") || str.equal(name, "CHDIR")) {
+        change_directory(rest);
+    } else if (str.equal(name, "MD") || str.equal(name, "MKDIR")) {
+        need(rest, fs.make_directory(rest));
+    } else if (str.equal(name, "RD") || str.equal(name, "RMDIR")) {
+        need(rest, fs.remove_directory(rest));
+    } else if (str.equal(name, "TYPE")) {
+        type(rest);
+    } else if (str.equal(name, "COPY")) {
+        copy(rest);
+    } else if (str.equal(name, "DEL") || str.equal(name, "ERASE")) {
+        delete(rest);
+    } else if (str.equal(name, "REN") || str.equal(name, "RENAME")) {
+        rename(rest);
+    } else if (str.equal(name, "ECHO")) {
+        echo(rest, echo_text);
+    } else if (str.equal(name, "VER")) {
+        console.write("\n");
+        console.line(VERSION);
+        console.write("\n");
+    } else if (str.equal(name, "VOL")) {
+        volume();
+    } else if (str.equal(name, "MEM")) {
+        memory();
+    } else if (str.equal(name, "FORMAT")) {
+        format(rest);
+    } else if (str.equal(name, "HELP")) {
+        help();
+    } else if (str.equal(name, "EXIT")) {
+        stopping = true;
+    } else if (str.equal(name, "PAUSE")) {
+        pause();
+    } else if (str.equal(name, "REM")) {
+    } else if (str.equal(name, "SET")) {
+        set(rest);
+    } else if (str.equal(name, "PATH")) {
+        path(rest);
+    } else if (str.equal(name, "IMPORT")) {
+        import_file(rest);
+    } else if (str.equal(name, "EXPORT")) {
+        export_file(rest);
+    } else if (str.equal(name, "GOTO")) {
+        go_to(rest);
+    } else if (str.equal(name, "IF")) {
+        condition(rest);
+    } else if (str.equal(name, "SHIFT")) {
+        if (batch != null) {
+            batch.shift += 1;
+        }
+    } else {
+        return false;
+    }
+    return true;
+}
+
+fn need(argument: []u8, e: fs.Error) {
+    if (argument.len == 0) {
+        say("Required parameter missing");
+    } else if (e != fs.Error.NONE) {
+        complain(e);
+    }
+}
+
+// Runs a program or a batch file, found as given or with .EXE or .BAT in the current directory and in
+// those of PATH
+fn external(word: []u8, rest: []u8) {
+    var found = locate(word);
+    if (found.len == 0) {
+        say("Bad command or file name");
+        return;
+    }
+    if (str.ends_with(found, ".BAT")) {
+        run_batch(found, rest);
+    } else {
+        var status = program.run(found, rest);
+        if (status >= 0) {
+            errorlevel = status;
+        }
+    }
+    free(found);
+}
+
+fn locate(word: []u8) []u8 {
+    var none: []u8;
+    var directories = variable("PATH");
+    var start = 0;
+    var directory = "";
+    for (;;) {
+        var found = locate_in(directory, word);
+        if (found.len > 0) {
+            return found;
+        }
+        if (start >= directories.len) {
+            return none;
+        }
+        var end = start;
+        while (end < directories.len && directories[end] != ';') {
+            end += 1;
+        }
+        directory = directories[start:end];
+        start = end + 1;
+    }
+    return none;
+}
+
+fn locate_in(directory: []u8, word: []u8) []u8 {
+    var none: []u8;
+    var base = word;
+    if (directory.len > 0 && !str.ends_with(directory, "\\")) {
+        base = join(directory, "\\", word);
+    } else if (directory.len > 0) {
+        base = join(directory, "", word);
+    }
+    var name = upper(base);
+    if (base.ptr != word.ptr) {
+        free(base);
+    }
+    var last = name[str.find_last_byte(name, '\\') + 1:];
+    var candidates = [2][]u8 { ".EXE", ".BAT" };
+    if (str.find_byte(last, '.') >= 0) {
+        if ((str.ends_with(name, ".EXE") || str.ends_with(name, ".BAT")) && is_file(name)) {
+            return name;
+        }
+        free(name);
+        return none;
+    }
+    for (var i = 0; i < candidates.len; i += 1) {
+        var full = join(name, "", candidates[i]);
+        if (is_file(full)) {
+            free(name);
+            return full;
+        }
+        free(full);
+    }
+    free(name);
+    return none;
+}
+
+fn is_file(path: []u8) bool {
+    var place = fs.Place {};
+    return fs.find(path, &place) == fs.Error.NONE && !fs.is_directory(&place);
+}
+
+pub fn run_batch(path: []u8, rest: []u8) {
+    var bytes: []u8;
+    var e = fs.read_file(path, &bytes);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    var count = 1;
+    for (var i = 0; i < bytes.len; i += 1) {
+        if (bytes[i] == '\n') {
+            count += 1;
+        }
+    }
+    var b = new(Batch);
+    b.lines = new([]u8, count);
+    var start = 0;
+    count = 0;
+    for (var i = 0; i <= bytes.len; i += 1) {
+        if (i == bytes.len || bytes[i] == '\n') {
+            var line = bytes[start:i];
+            if (line.len > 0 && line[line.len - 1] == '\r') {
+                line = line[:line.len - 1];
+            }
+            b.lines[count] = line;
+            count += 1;
+            start = i + 1;
+        }
+    }
+    var words = join(path, " ", rest);
+    b.parameters = words_of(words);
+    var outer = batch;
+    var outer_echo = echo_on;
+    batch = b;
+    while (b.next < b.lines.len && !stopping) {
+        var line = b.lines[b.next];
+        b.next += 1;
+        var expanded = expand(line, b);
+        var quiet = expanded.len > 0 && expanded[0] == '@';
+        var command = expanded;
+        if (quiet) {
+            command = expanded[1:];
+        }
+        if (echo_on && !quiet && str.trim(command).len > 0 && str.trim(command)[0] != ':') {
+            prompt();
+            console.line(command);
+        }
+        execute(command);
+        free(expanded);
+    }
+    batch = outer;
+    echo_on = outer_echo;
+    if (outer == null) {
+        echo_on = true;
+    }
+    free(words);
+    free(b.parameters);
+    free(b.lines);
+    free(b);
+    free(bytes);
+}
+
+fn words_of(text: []u8) [][]u8 {
+    var count = 0;
+    var i = 0;
+    while (i < text.len) {
+        while (i < text.len && text[i] == ' ') {
+            i += 1;
+        }
+        if (i < text.len) {
+            count += 1;
+        }
+        while (i < text.len && text[i] != ' ') {
+            i += 1;
+        }
+    }
+    var words = new([]u8, count);
+    i = 0;
+    for (var k = 0; k < count; k += 1) {
+        while (text[i] == ' ') {
+            i += 1;
+        }
+        var start = i;
+        while (i < text.len && text[i] != ' ') {
+            i += 1;
+        }
+        words[k] = text[start:i];
+    }
+    return words;
+}
+
+// Replaces %0 to %9 with the parameters of a batch file and %NAME% with variables
+fn expand(line: []u8, b: *Batch) []u8 {
+    var out = str.builder(line.len + 16);
+    var i = 0;
+    while (i < line.len) {
+        var c = line[i];
+        if (c == '%' && i + 1 < line.len && str.is_digit(line[i + 1])) {
+            var n = (line[i + 1] - '0') as int + b.shift;
+            if (n < b.parameters.len) {
+                str.append(&out, b.parameters[n]);
+            }
+            i += 2;
+        } else if (c == '%' && i + 1 < line.len && line[i + 1] == '%') {
+            str.append_byte(&out, '%');
+            i += 2;
+        } else if (c == '%' && str.find_byte(line[i + 1:], '%') > 0) {
+            var end = i + 1 + str.find_byte(line[i + 1:], '%');
+            str.append(&out, variable(line[i + 1:end]));
+            i = end + 1;
+        } else {
+            str.append_byte(&out, c);
+            i += 1;
+        }
+    }
+    var result = str.clone(str.text(&out));
+    str.release(&out);
+    return result;
+}
+
+fn go_to(label: []u8) {
+    if (batch == null) {
+        return;
+    }
+    var target = label;
+    if (target.len > 0 && target[0] == ':') {
+        target = target[1:];
+    }
+    var wanted = upper(str.trim(target));
+    for (var i = 0; i < batch.lines.len; i += 1) {
+        var line = str.trim(batch.lines[i]);
+        if (line.len > 1 && line[0] == ':' && same(str.trim(line[1:]), wanted)) {
+            batch.next = i + 1;
+            free(wanted);
+            return;
+        }
+    }
+    free(wanted);
+    say("Label not found");
+    batch.next = batch.lines.len;
+}
+
+// IF [NOT] EXIST file command, IF [NOT] ERRORLEVEL n command, IF [NOT] one==two command
+fn condition(text: []u8) {
+    var rest = str.trim(text);
+    var negate = false;
+    var word = first_word(rest);
+    if (same(word, "NOT")) {
+        negate = true;
+        rest = str.trim(rest[word.len:]);
+        word = first_word(rest);
+    }
+    var holds = false;
+    if (same(word, "EXIST")) {
+        rest = str.trim(rest[word.len:]);
+        var name = first_word(rest);
+        rest = rest[name.len:];
+        var place = fs.Place {};
+        holds = fs.find(name, &place) == fs.Error.NONE;
+    } else if (same(word, "ERRORLEVEL")) {
+        rest = str.trim(rest[word.len:]);
+        var number = first_word(rest);
+        rest = rest[number.len:];
+        var n = str.parse_int(number);
+        if (!n.ok) {
+            say("Syntax error");
+            return;
+        }
+        holds = errorlevel >= n.value;
+    } else {
+        var equals = str.find(rest, "==");
+        if (equals < 0) {
+            say("Syntax error");
+            return;
+        }
+        var left = str.trim(rest[:equals]);
+        var after = str.trim(rest[equals + 2:]);
+        var right = first_word(after);
+        rest = after[right.len:];
+        holds = str.equal(left, right);
+    }
+    if (holds != negate) {
+        execute(rest);
+    }
+}
+
+fn change_directory(path: []u8) {
+    if (path.len == 0) {
+        console.write("A:");
+        console.line(fs.current_directory());
+        return;
+    }
+    var e = fs.change_directory(path);
+    if (e != fs.Error.NONE) {
+        complain(e);
+    }
+}
+
+fn dir(argument: []u8) {
+    var wide = false;
+    var path = argument;
+    var slash = str.find(argument, "/W");
+    if (slash < 0) {
+        slash = str.find(argument, "/w");
+    }
+    if (slash >= 0) {
+        wide = true;
+        path = str.trim(join(argument[:slash], "", argument[slash + 2:]));
+    }
+    var selection = fs.Selection {};
+    var e = fs.select(path, true, &selection);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    var entries: []fs.Entry;
+    e = fs.list(selection.dir, selection.pattern, &entries);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    console.write("\n Volume in drive A ");
+    if (fs.label().len > 0) {
+        console.write("is ");
+        console.line(fs.label());
+    } else {
+        console.line("has no label");
+    }
+    console.write(" Directory of A:");
+    var shown = fs.absolute(path);
+    if (fs.has_wildcards(path) || !is_directory(path)) {
+        var slash_at = str.find_last_byte(shown, '\\');
+        if (slash_at < 1) {
+            slash_at = 1;
+        }
+        console.line(shown[:slash_at]);
+    } else {
+        console.line(shown);
+    }
+    free(shown);
+    console.write("\n");
+    var files = 0;
+    var directories = 0;
+    var bytes = 0;
+    for (var i = 0; i < entries.len; i += 1) {
+        var entry = entries[i];
+        var buffer: [12]u8;
+        if ((entry.attributes & fs.DIRECTORY) != 0) {
+            directories += 1;
+        } else {
+            files += 1;
+            bytes += entry.size;
+        }
+        if (wide) {
+            var name = fs.name_text(entry.name, buffer);
+            if ((entry.attributes & fs.DIRECTORY) != 0) {
+                console.write("[");
+                console.write(name);
+                console.write("]");
+                console.column("", 14 - name.len);
+            } else {
+                console.column(name, 16);
+            }
+            if (i % 5 == 4 || i == entries.len - 1) {
+                console.write("\n");
+            }
+            continue;
+        }
+        console.write(entry.name[0:8]);
+        console.write(" ");
+        console.write(entry.name[8:11]);
+        if ((entry.attributes & fs.DIRECTORY) != 0) {
+            console.line("    <DIR>");
+        } else {
+            console.number(entry.size, 14);
+            console.write("\n");
+        }
+    }
+    free(entries);
+    console.number(files, 9);
+    console.write(" file(s)");
+    console.number(bytes, 15);
+    console.line(" bytes");
+    console.number(directories, 9);
+    console.write(" dir(s) ");
+    console.number(fs.free_bytes(), 15);
+    console.line(" bytes free");
+}
+
+fn is_directory(path: []u8) bool {
+    var place = fs.Place {};
+    return fs.find(path, &place) == fs.Error.NONE && fs.is_directory(&place);
+}
+
+fn type(path: []u8) {
+    if (path.len == 0) {
+        say("Required parameter missing");
+        return;
+    }
+    var bytes: []u8;
+    var e = fs.read_file(path, &bytes);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    console.write(bytes);
+    free(bytes);
+}
+
+// COPY source [target], where the source may be CON or have wildcards and the target may be a directory
+fn copy(argument: []u8) {
+    var source = first_word(argument);
+    var target = first_word(argument[source.len:]);
+    if (source.len == 0) {
+        say("Required parameter missing");
+        return;
+    }
+    if (target.len == 0) {
+        target = ".";
+    }
+    if (same(source, "CON")) {
+        copy_console(target);
+        return;
+    }
+    var selection = fs.Selection {};
+    var e = fs.select(source, false, &selection);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    var entries: []fs.Entry;
+    e = fs.list(selection.dir, selection.pattern, &entries);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    var source_dir = directory_part(source);
+    var into = is_directory(target);
+    var copied = 0;
+    for (var i = 0; i < entries.len && e == fs.Error.NONE; i += 1) {
+        if ((entries[i].attributes & fs.DIRECTORY) != 0) {
+            continue;
+        }
+        var buffer: [12]u8;
+        var name = fs.name_text(entries[i].name, buffer);
+        var from = join(source_dir, "", name);
+        var to = join(target, "", "");
+        if (into) {
+            free(to);
+            to = join(target, "\\", name);
+            if (str.ends_with(target, "\\") || str.ends_with(target, ":")) {
+                free(to);
+                to = join(target, "", name);
+            }
+        }
+        var bytes: []u8;
+        e = fs.read_file(from, &bytes);
+        if (e == fs.Error.NONE) {
+            var full_from = fs.absolute(from);
+            var full_to = fs.absolute(to);
+            var same_file = str.equal(full_from, full_to);
+            free(full_from);
+            free(full_to);
+            if (same_file) {
+                say("File cannot be copied onto itself");
+                e = fs.Error.EXISTS;
+            } else {
+                e = fs.write_file(to, bytes);
+            }
+            free(bytes);
+        }
+        if (e == fs.Error.NONE) {
+            copied += 1;
+        } else if (e != fs.Error.EXISTS) {
+            complain(e);
+        }
+        free(from);
+        free(to);
+    }
+    free(entries);
+    if (copied == 0 && e == fs.Error.NONE) {
+        complain(fs.Error.NOT_FOUND);
+    }
+    console.number(copied, 9);
+    console.line(" file(s) copied");
+}
+
+// The directory of a path with its separator, or nothing
+fn directory_part(path: []u8) []u8 {
+    var end = path.len;
+    while (end > 0 && path[end - 1] != '\\' && path[end - 1] != '/' && path[end - 1] != ':') {
+        end -= 1;
+    }
+    return path[:end];
+}
+
+// Makes a file of the lines that follow, up to a line with Ctrl-Z or the end of the input
+fn copy_console(target: []u8) {
+    var text = str.builder(256);
+    var buffer: [256]u8;
+    var line: []u8;
+    while (console.read_line(buffer, &line)) {
+        var stop = str.find_byte(line, 0x1A);
+        if (stop >= 0) {
+            str.append(&text, line[:stop]);
+            break;
+        }
+        str.append(&text, line);
+        str.append(&text, "\r\n");
+    }
+    var e = fs.write_file(target, str.text(&text));
+    str.release(&text);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    console.number(1, 9);
+    console.line(" file(s) copied");
+}
+
+fn delete(argument: []u8) {
+    if (argument.len == 0) {
+        say("Required parameter missing");
+        return;
+    }
+    if (!fs.has_wildcards(argument) && is_directory(argument)) {
+        delete(join(argument, "\\", "*.*"));
+        return;
+    }
+    var selection = fs.Selection {};
+    var e = fs.select(argument, false, &selection);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    var entries: []fs.Entry;
+    e = fs.list(selection.dir, selection.pattern, &entries);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    var directory = directory_part(argument);
+    var deleted = 0;
+    for (var i = 0; i < entries.len; i += 1) {
+        if ((entries[i].attributes & fs.DIRECTORY) == 0) {
+            var buffer: [12]u8;
+            var path = join(directory, "", fs.name_text(entries[i].name, buffer));
+            e = fs.delete(path);
+            free(path);
+            if (e != fs.Error.NONE) {
+                complain(e);
+            } else {
+                deleted += 1;
+            }
+        }
+    }
+    free(entries);
+    if (deleted == 0 && e == fs.Error.NONE) {
+        complain(fs.Error.NOT_FOUND);
+    }
+}
+
+fn rename(argument: []u8) {
+    var from = first_word(argument);
+    var to = first_word(argument[from.len:]);
+    if (to.len == 0) {
+        say("Required parameter missing");
+        return;
+    }
+    var e = fs.rename(from, to);
+    if (e == fs.Error.EXISTS || e == fs.Error.NOT_FOUND) {
+        say("Duplicate file name or file not found");
+    } else if (e != fs.Error.NONE) {
+        complain(e);
+    }
+}
+
+fn echo(argument: []u8, text: []u8) {
+    if (same(argument, "ON")) {
+        echo_on = true;
+    } else if (same(argument, "OFF")) {
+        echo_on = false;
+    } else if (argument.len == 0 && (text.len == 0 || text[0] != '.')) {
+        if (echo_on) {
+            console.line("ECHO is on");
+        } else {
+            console.line("ECHO is off");
+        }
+    } else if (text.len > 0 && text[0] == '.') {
+        console.line(text[1:]);
+    } else {
+        console.line(text);
+    }
+}
+
+fn volume() {
+    if (!fs.mounted()) {
+        complain(fs.Error.NOT_FORMATTED);
+        return;
+    }
+    if (fs.label().len > 0) {
+        console.write(" Volume in drive A is ");
+        console.line(fs.label());
+    } else {
+        console.line(" Volume in drive A has no label");
+    }
+}
+
+fn memory() {
+    console.write("\n");
+    console.number(program.LIMIT, 12);
+    console.line(" bytes for programs");
+    console.number(sys.memory_size(), 12);
+    console.line(" bytes of memory");
+    console.number(machine.free_heap(), 12);
+    console.line(" bytes free for programs to allocate");
+    console.write("\n");
+}
+
+fn format(label: []u8) {
+    var e = fs.format(label);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    console.line("Format complete.");
+    console.write("\n");
+    console.number(fs.total_bytes(), 12);
+    console.line(" bytes total disk space");
+    console.number(fs.free_bytes(), 12);
+    console.line(" bytes available on disk");
+    console.write("\n");
+}
+
+fn help() {
+    console.line("CD [dir]           Shows or changes the current directory");
+    console.line("CLS                Clears the screen");
+    console.line("COPY from [to]     Copies files; COPY CON name makes one of the lines typed next");
+    console.line("DEL files          Deletes files");
+    console.line("DIR [files] [/W]   Lists files");
+    console.line("ECHO [text|ON|OFF] Shows text, or whether batch files show their commands");
+    console.line("EXIT               Stops MiniDos");
+    console.line("EXPORT file host   Copies a file to the host's file system");
+    console.line("FORMAT [label]     Makes an empty file system on the disk");
+    console.line("GOTO label         Continues a batch file after :label");
+    console.line("IF [NOT] EXIST file | ERRORLEVEL n | a==b command");
+    console.line("IMPORT host [file] Copies a file from the host's file system");
+    console.line("MD dir             Makes a directory");
+    console.line("MEM                Shows how memory is used");
+    console.line("PATH [dirs]        Shows or sets where programs are looked for");
+    console.line("PAUSE              Waits for Enter");
+    console.line("RD dir             Removes an empty directory");
+    console.line("REM text           Does nothing");
+    console.line("REN file name      Renames a file");
+    console.line("SET [name=[value]] Shows or sets environment variables");
+    console.line("SHIFT              Moves the parameters of a batch file down by one");
+    console.line("TYPE file          Shows a file");
+    console.line("VER                Shows the MiniDos version");
+    console.line("VOL                Shows the disk's label");
+    console.line("Other names run NAME.EXE or NAME.BAT. Commands take > file, >> file, < file and |.");
+}
+
+fn pause() {
+    console.screen("Press Enter to continue . . .");
+    var buffer: [256]u8;
+    var line: []u8;
+    console.read_line(buffer, &line);
+    console.screen("\n");
+}
+
+fn set(argument: []u8) {
+    var equals = str.find_byte(argument, '=');
+    if (equals < 0) {
+        var prefix = upper(argument);
+        for (var i = 0; i < variable_count; i += 1) {
+            if (str.starts_with(variables[i], prefix)) {
+                console.line(variables[i]);
+            }
+        }
+        free(prefix);
+        return;
+    }
+    set_variable(argument[:equals], argument[equals + 1:]);
+}
+
+fn path(argument: []u8) {
+    if (argument.len == 0) {
+        var value = variable("PATH");
+        if (value.len == 0) {
+            console.line("No Path");
+        } else {
+            console.write("PATH=");
+            console.line(value);
+        }
+        return;
+    }
+    if (str.equal(argument, ";")) {
+        set_variable("PATH", "");
+        return;
+    }
+    var value = upper(argument);
+    set_variable("PATH", value);
+    free(value);
+}
+
+// IMPORT host [name] copies a file of the host into MiniDos
+fn import_file(argument: []u8) {
+    var host = first_word(argument);
+    var name = first_word(argument[host.len:]);
+    if (host.len == 0) {
+        say("Required parameter missing");
+        return;
+    }
+    if (name.len == 0) {
+        name = host[str.find_last_byte(host, '/') + 1:];
+    }
+    var bytes = io.read_file(host);
+    if (bytes.ptr == null) {
+        say("Cannot read the host's file");
+        return;
+    }
+    var e = fs.write_file(name, bytes);
+    free(bytes);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    console.number(1, 9);
+    console.line(" file(s) imported");
+}
+
+// EXPORT name host copies a file of MiniDos to the host
+fn export_file(argument: []u8) {
+    var name = first_word(argument);
+    var host = first_word(argument[name.len:]);
+    if (host.len == 0) {
+        say("Required parameter missing");
+        return;
+    }
+    var bytes: []u8;
+    var e = fs.read_file(name, &bytes);
+    if (e != fs.Error.NONE) {
+        complain(e);
+        return;
+    }
+    var ok = io.write_file(host, bytes);
+    free(bytes);
+    if (!ok) {
+        say("Cannot write the host's file");
+        return;
+    }
+    console.number(1, 9);
+    console.line(" file(s) exported");
+}
