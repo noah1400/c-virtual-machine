@@ -6,8 +6,9 @@
 #include "disassembler.h"
 #include "vm.h"
 
-#define DEFAULT_MEMORY_KB 64
-#define MAX_MEMORY_KB     65536
+#define DEFAULT_MEMORY_KB 1024
+#define MIN_MEMORY_KB     128
+#define MAX_MEMORY_KB     1048576
 
 typedef struct {
     const char *program;
@@ -27,7 +28,8 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "Options:\n");
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
-    fprintf(out, "  -m KB     Memory size in KB, at least %d (default %d)\n", DEFAULT_MEMORY_KB, DEFAULT_MEMORY_KB);
+    fprintf(out, "  -m KB     Memory size in KB, %d to %d (default %d)\n", MIN_MEMORY_KB, MAX_MEMORY_KB,
+            DEFAULT_MEMORY_KB);
     fprintf(out, "  -n COUNT  Stop with an error after COUNT instructions\n");
     fprintf(out, "  -p        Print an execution profile by label on stderr\n");
     fprintf(out, "  -t        Trace every executed instruction on stderr\n");
@@ -65,8 +67,8 @@ static int parse_options(int argc, char **argv, Options *opts) {
         } else if (strcmp(arg, "-m") == 0) {
             char *end = NULL;
             long kb = i + 1 < argc ? strtol(argv[++i], &end, 10) : 0;
-            if (!end || *end != '\0' || kb < DEFAULT_MEMORY_KB || kb > MAX_MEMORY_KB) {
-                fprintf(stderr, "vm: memory size must be between %d and %d KB\n", DEFAULT_MEMORY_KB, MAX_MEMORY_KB);
+            if (!end || *end != '\0' || kb < MIN_MEMORY_KB || kb > MAX_MEMORY_KB) {
+                fprintf(stderr, "vm: memory size must be between %d and %d KB\n", MIN_MEMORY_KB, MAX_MEMORY_KB);
                 return -1;
             }
             opts->memory_size = (uint32_t)kb * 1024;

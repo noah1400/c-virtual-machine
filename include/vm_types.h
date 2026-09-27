@@ -36,6 +36,9 @@
 #define HEAP_SEGMENT_SIZE   0x4000
 #define VM_ADDRESS_SPACE_SIZE 0x10000u
 
+// The stack occupies the top of memory and grows down
+#define VM_STACK_SIZE 0x10000u
+
 // Interrupt vector table: 256 handler addresses of 4 bytes each
 
 #define VM_RNG_DEFAULT_SEED     0x12345678
@@ -77,6 +80,7 @@ typedef struct {
     uint32_t exit_code;      // Set by the exit syscall
     uint64_t start_ms;       // Host clock when the VM started
     uint32_t entry_point;    // Where execution starts and RESET returns to
+    uint32_t code_end;       // End of the loaded code
     FILE *files[VM_MAX_FILES];
     int arg_count;           // Program arguments, starting with the program path
     char **args;

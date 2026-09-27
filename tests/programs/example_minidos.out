@@ -18,7 +18,7 @@ Copyright (c) 2025
 
 A:\> hello world
 
-A:\> Total memory: 65536 bytes
+A:\> Total memory: 1048576 bytes
 Code segment: 0x0000-0x3FFF (16KB)
 Data segment: 0x4000-0x7FFF (16KB)
 Stack segment: 0x8000-0xBFFF (16KB)

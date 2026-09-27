@@ -458,14 +458,14 @@ static void cmd_stack(const Debugger *dbg, int argc, char **argv) {
     VM *vm = dbg->vm;
     uint32_t count = 8;
     uint32_t sp = vm->registers[R2_SP];
-    uint32_t top = STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE;
+    uint32_t top = vm->control[CR_SHI];
 
     if (argc > 1 && !parse_number(argv[1], &count)) {
         printf("Usage: stack [count]\n");
         return;
     }
-    if (sp < STACK_SEGMENT_BASE || sp > top) {
-        printf("SP 0x%08X is outside the stack segment\n", sp);
+    if (sp < vm->control[CR_SLO] || sp > top || top > vm->memory_size) {
+        printf("SP 0x%08X is outside the stack\n", sp);
         return;
     }
     if (sp == top) {
@@ -481,7 +481,7 @@ static void cmd_stack(const Debugger *dbg, int argc, char **argv) {
             printf("  <- BP");
         }
         const Symbol *sym = debug_symbol_near(vm->debug_info, value);
-        if (sym && sym->type == SYMBOL_CODE && value < CODE_SEGMENT_BASE + CODE_SEGMENT_SIZE) {
+        if (sym && sym->type == SYMBOL_CODE && value < vm->code_end) {
             printf("  ");
             print_symbolic(dbg, value);
         }

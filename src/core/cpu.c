@@ -5,12 +5,13 @@
 #include "memory.h"
 #include "vm.h"
 
-#define STACK_TOP (STACK_SEGMENT_BASE + STACK_SEGMENT_SIZE)
-
 void cpu_reset(VM *vm) {
     memset(vm->registers, 0, sizeof(vm->registers));
-    vm->registers[R2_SP] = STACK_TOP;
-    vm->registers[R1_BP] = STACK_TOP;
+    memset(vm->control, 0, sizeof(vm->control));
+    vm->control[CR_SHI] = vm->memory_size;
+    vm->control[CR_SLO] = vm->memory_size - VM_STACK_SIZE;
+    vm->registers[R2_SP] = vm->control[CR_SHI];
+    vm->registers[R1_BP] = vm->control[CR_SHI];
     vm->registers[R3_PC] = vm->entry_point;
     vm->halted = 0;
 }
@@ -27,9 +28,10 @@ void cpu_set_flag(VM *vm, uint8_t flag, int value) {
     }
 }
 
+// The stack lies between the SLO and SHI control registers
 static int stack_pointer_valid(VM *vm, uint32_t sp) {
-    if (sp < STACK_SEGMENT_BASE || sp > STACK_TOP) {
-        vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Stack pointer 0x%08X is outside the stack segment", sp);
+    if (sp < vm->control[CR_SLO] || sp > vm->control[CR_SHI]) {
+        vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Stack pointer 0x%08X is outside the stack", sp);
         return 0;
     }
     return 1;
@@ -40,7 +42,7 @@ void cpu_stack_push(VM *vm, uint32_t value) {
     if (!stack_pointer_valid(vm, sp)) {
         return;
     }
-    if (sp - STACK_SEGMENT_BASE < 4) {
+    if (sp - vm->control[CR_SLO] < 4) {
         vm_raise(vm, VM_ERROR_STACK_OVERFLOW, "Stack overflow");
         return;
     }
@@ -54,7 +56,7 @@ uint32_t cpu_stack_pop(VM *vm) {
     if (!stack_pointer_valid(vm, sp)) {
         return 0;
     }
-    if (STACK_TOP - sp < 4) {
+    if (vm->control[CR_SHI] - sp < 4) {
         vm_raise(vm, VM_ERROR_STACK_UNDERFLOW, "Stack underflow");
         return 0;
     }
@@ -71,7 +73,7 @@ void cpu_enter_frame(VM *vm, uint32_t locals_size) {
     }
 
     uint32_t sp = vm->registers[R2_SP];
-    if (locals_size > sp - STACK_SEGMENT_BASE) {
+    if (locals_size > sp - vm->control[CR_SLO]) {
         vm->registers[R2_SP] = sp + 4;
         vm_raise(vm, VM_ERROR_STACK_OVERFLOW, "Stack overflow during frame creation");
         return;
