@@ -1,0 +1,60 @@
+// std/cpu: code runs in user mode until a handler of one of its interrupts ends it, and its syscalls
+// arrive as privilege violations that the handler can serve, even by running more code in user mode
+import "std/cpu";
+
+const PRIVILEGE_VIOLATION = 13;
+const SYSCALL = 0x6C;
+
+var user_stack: [1024]u32;
+var from_user_mode: bool;
+
+interrupt fn on_violation(frame: *cpu.Frame) {
+    from_user_mode = (frame.sr & 0x40) == 0;
+    var word = *(frame.pc as *u32);
+    if (word >> 24 != SYSCALL) {
+        cpu.leave_user(1000 + (word >> 24));
+    }
+    var number = word & 0xFFFF;
+    if (number == 30) {
+        cpu.leave_user(frame.r0);
+    }
+    if (number == 50) {
+        frame.r0 = cpu.enter_user(inner as u32, &user_stack[0] as u32 + 1024);
+    } else {
+        print("syscall ", number, " with ", frame.r0, "\n");
+        frame.r0 = frame.r0 * 2;
+    }
+    frame.pc += 4;
+}
+
+fn twice(value: int) int {
+    return syscall(40, value).value;
+}
+
+fn counting() {
+    var total = 0;
+    for (var i = 1; i <= 3; i += 1) {
+        total += twice(i);
+    }
+    total += syscall(50).value;
+    syscall(30, total);
+}
+
+fn inner() {
+    syscall(30, twice(50));
+}
+
+fn halting() {
+    cpu.halt();
+}
+
+fn main() {
+    cpu.set_handler(PRIVILEGE_VIOLATION, on_violation as u32);
+    cpu.write_control(cpu.SLO, &user_stack[0] as u32);
+    var top = &user_stack[0] as u32 + 4096;
+    var counted = cpu.enter_user(counting as u32, top);
+    print("counting ended with ", counted, ", from user mode: ", from_user_mode, "\n");
+    var halted = cpu.enter_user(halting as u32, top);
+    print("halting ended on opcode ", halted - 1000, "\n");
+    print("the kernel goes on in supervisor mode: ", cpu.read_control(cpu.IVTB) != 0, "\n");
+}

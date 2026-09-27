@@ -50,3 +50,12 @@ pub extern fn write_control(register: int, value: u32);
 
 // Stops the machine
 pub extern fn halt();
+
+// Runs code in user mode from pc, with its stack at sp and interrupts off, until a handler of an interrupt
+// from it calls leave_user, and returns the value given there. Interrupts from the code use the stack
+// below the caller's, so sp has to lie elsewhere, below the caller's stack and within SLO and SHI.
+pub extern fn enter_user(pc: u32, sp: u32) u32;
+
+// Ends the code that enter_user started, which then returns value. Only a handler of an interrupt from
+// that code may call it.
+pub extern fn leave_user(value: u32);

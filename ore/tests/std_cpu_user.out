@@ -1,0 +1,7 @@
+syscall 40 with 1
+syscall 40 with 2
+syscall 40 with 3
+syscall 40 with 50
+counting ended with 112, from user mode: true
+halting ended on opcode 160
+the kernel goes on in supervisor mode: true
