@@ -1,0 +1,28 @@
+// An interrupt fn with a parameter gets the registers the interrupted code saved, and can change them
+// vmc-args: ore/tests/helpers/cpu.asm
+import "std/cpu";
+
+extern fn call_service(number: int, argument: int) u32;
+
+var calls: int;
+var frame_below_stack: bool;
+var from_supervisor: bool;
+
+interrupt fn service(frame: *cpu.Frame) {
+    calls += 1;
+    frame_below_stack = frame.sp == frame as u32 + 64;
+    from_supervisor = (frame.sr & 0x40) != 0;
+    if (frame.r0 == 1) {
+        frame.r0 = frame.r5 * 2;
+    } else {
+        frame.r0 = frame.r0 + frame.r5;
+    }
+}
+
+fn main() {
+    cpu.set_handler(0x41, service as u32);
+    var doubled = call_service(1, 21);
+    var added = call_service(40, 2);
+    print(doubled, " ", added, " after ", calls, " calls\n");
+    print("the frame lies below the stack: ", frame_below_stack, ", from supervisor mode: ", from_supervisor, "\n");
+}

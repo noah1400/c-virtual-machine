@@ -1525,8 +1525,8 @@ fn check_signature(c: *Checker, d: *ast.Decl) {
         }
         t.params[i] = value_type(c, d.params[i].type_expr);
     }
-    if (d.is_interrupt && (count > 0 || d.type_expr != null)) {
-        error(c, d.line, "an interrupt function takes no parameters and returns nothing");
+    if (d.is_interrupt && (count > 1 || count == 1 && t.params[0].kind != ast.TypeKind.POINTER || d.type_expr != null)) {
+        error(c, d.line, "an interrupt function returns nothing and takes nothing or a pointer to the saved registers");
     }
     d.symbol.type = t;
 }

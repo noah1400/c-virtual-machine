@@ -1357,8 +1357,9 @@ static void check_signature(Checker *c, Decl *d) {
         }
         t->params[i] = value_type(c, d->params[i].type_expr);
     }
-    if (d->is_interrupt && (d->param_count > 0 || d->type_expr)) {
-        error(c, d->line, "an interrupt function takes no parameters and returns nothing");
+    if (d->is_interrupt && (d->param_count > 1 || (d->param_count == 1 && t->params[0]->kind != TY_POINTER) ||
+                            d->type_expr)) {
+        error(c, d->line, "%s", "an interrupt function returns nothing and takes nothing or a pointer to the saved registers");
     }
     d->symbol->type = t;
 }

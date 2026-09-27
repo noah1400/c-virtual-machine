@@ -927,6 +927,11 @@ static void gen_function(Gen *g, Decl *d) {
     g->loc_module = NULL;
     loc(g, d->line);
     size_t start = g->body.size;
+    // The parameter of an interrupt function points at the registers saved above the frame
+    if (d->is_interrupt && d->param_count == 1) {
+        d->params[0].symbol->offset = alloc_frame(g, 4);
+        emit(g, "    LEA R0, [BP+4]\n    STORE R0, [BP%+d]\n", d->params[0].symbol->offset);
+    }
     gen_block(g, d->body);
     loc(g, d->body->end_line);
 

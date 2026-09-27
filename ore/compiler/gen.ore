@@ -2070,6 +2070,13 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
         d.params[i].symbol.offset = offset;
         offset += words(t.params[i].size);
     }
+    // The parameter of an interrupt function points at the registers saved above the frame
+    var frame: *ast.Symbol = null;
+    if (d.is_interrupt && d.params.len == 1) {
+        frame = d.params[0].symbol;
+        frame.offset = alloc_frame(g, 4);
+        ast.add(&g.checked, frame as *u8);
+    }
     var saved = assign_registers(d);
     g.loc_module = null;
     loc(g, d.line);
@@ -2093,7 +2100,12 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     for (var i = 0; i < saved; i += 1) {
         format(&g.text, "    PUSH %s\n", [][]u8 { register_names[8 + i] }, []int {});
     }
-    for (var i = 0; i < d.params.len; i += 1) {
+    if (frame != null && frame.reg != 0) {
+        format(&g.text, "    LEA %s, [BP+4]\n", [][]u8 { register_names[frame.reg] }, []int {});
+    } else if (frame != null) {
+        format(&g.text, "    LEA R0, [BP+4]\n    STORE R0, [BP%+d]\n", [][]u8 {}, []int { frame.offset });
+    }
+    for (var i = 0; i < d.params.len && frame == null; i += 1) {
         var s = d.params[i].symbol;
         if (s.reg != 0) {
             var load = "LOAD";

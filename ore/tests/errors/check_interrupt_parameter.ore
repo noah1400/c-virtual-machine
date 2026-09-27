@@ -1,0 +1,6 @@
+// expect-error: an interrupt function returns nothing and takes nothing or a pointer to the saved registers
+interrupt fn tick(count: int) {
+}
+
+fn main() {
+}

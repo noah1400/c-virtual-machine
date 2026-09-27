@@ -19,6 +19,14 @@ raise_test_interrupt:
     INT #0x40
     RET
 
+; call_service(number: int, argument: int) u32 raises interrupt 0x41 with the number in R0 and the
+; argument in R5, and returns what the handler left in R0
+call_service:
+    LOAD R0, [SP+4]
+    LOAD R5, [SP+8]
+    INT #0x41
+    RET
+
 .data
     .align 4
 vectors:

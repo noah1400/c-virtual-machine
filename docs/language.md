@@ -134,7 +134,13 @@ pub fn distance2(a: Point, b: Point) int {
 extern fn clear_screen();
 ```
 
-`interrupt fn` declares an interrupt handler. It takes no parameters and returns nothing. The CPU saves every register when it enters a handler and restores them on `IRET`, so the handler may use any of them. A handler cannot be called; `handler as u32` is its address for the interrupt vector table.
+`interrupt fn` declares an interrupt handler. It returns nothing and takes either nothing or one pointer. The CPU saves every register when it enters a handler and restores them on `IRET`, so the handler may use any of them. The pointer points at the saved registers, R0 first, as [`cpu.Frame`](#stdcpu) lays them out, and what the handler writes there is what the interrupted code gets back. A handler cannot be called; `handler as u32` is its address for the interrupt vector table.
+
+```
+interrupt fn on_call(frame: *cpu.Frame) {
+    frame.r0 = frame.r5 * 2;        // the result of an INT that passed its argument in R5
+}
+```
 
 ## Statements
 
@@ -410,6 +416,7 @@ These need supervisor mode, which programs start in.
 | `set_handler(vector: int, handler: u32)` | Makes `handler`, the address of an `interrupt fn` (`on_tick as u32`), the handler of vector. The first call sets up a vector table if there is none |
 | `read_control(register: int) u32`, `write_control(register: int, value: u32)` | Control registers, numbered by the constants `IVTB`, `KSP`, `PTB`, `FADDR`, `ECODE`, `SLO`, `SHI`, `HEAPLO` and `HEAPHI` |
 | `halt()` | Stops the machine |
+| `Frame` | The registers an interrupt saved: `r0`, `bp`, `sp`, `pc`, `sr`, `r5` to `r14` and `lr`, each a `u32` |
 
 ## Not in Ore
 

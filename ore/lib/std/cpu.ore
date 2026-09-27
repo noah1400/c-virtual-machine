@@ -12,6 +12,27 @@ pub const SHI = 6;
 pub const HEAPLO = 7;
 pub const HEAPHI = 8;
 
+// The registers an interrupt saved, from R0 up. An interrupt fn with a parameter of type *Frame can read
+// them and change what the interrupted code gets back.
+pub struct Frame {
+    r0: u32;
+    bp: u32;
+    sp: u32;
+    pc: u32;
+    sr: u32;
+    r5: u32;
+    r6: u32;
+    r7: u32;
+    r8: u32;
+    r9: u32;
+    r10: u32;
+    r11: u32;
+    r12: u32;
+    r13: u32;
+    r14: u32;
+    lr: u32;
+}
+
 pub extern fn read_port(port: int) u32;
 pub extern fn write_port(port: int, value: u32);
 
