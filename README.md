@@ -700,6 +700,7 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.error "message"` | Stop assembly with this message. Useful inside `.if` |
 | `.include "file"` | Insert a file. It is searched for next to the including file, then in `-I` directories |
 | `.incbin "file"[, offset[, length]]` | Insert the bytes of a file, found like an include, or *length* of them from *offset* on |
+| `.loc "file", line[, "text"]` | Attribute the code and labels that follow to a line of another source file (see below) |
 | `.macro` ... `.endm` | Define a macro |
 | `.if`, `.ifdef`, `.ifndef`, `.else`, `.endif` | Conditional assembly |
 
@@ -708,6 +709,22 @@ A value can be written signed or unsigned, but it must fit its width. For exampl
 The arguments of `.space`, `.align`, `.org` and `.if` decide the layout. They may only use symbols defined earlier, and must not depend on labels whose addresses move when instructions grow.
 
 The count of `.rept` is read along with the source, before any label exists, so it may only use numbers, `-D` constants and `.equ` constants defined earlier from those. Blocks can be nested, and a block with labels in it defines them once per repetition, which clashes; macros with `\@` avoid that.
+
+`.loc` is for compilers that write assembly. Up to the next `.loc`, debug information names the line of the original source instead of the line of assembly, so fault reports, backtraces, the debugger and coverage listings show where the code came from:
+
+```asm
+    .loc "fact.c", 3, "return 1 / (n - 1);"
+    LOAD R5, #1
+    SUB R0, #1
+    DIV R5, R0
+```
+
+```console
+vm: error: Division by zero
+vm: at 0x0024 <fact+24> fact.c:3: DIV R5, R0
+```
+
+The file name is recorded as written, without reading the file. The text is what coverage listings show, and what the debugger shows when it cannot open the file.
 
 ### Structures
 

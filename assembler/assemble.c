@@ -72,6 +72,11 @@ void asm_free(Assembler *as) {
         free(as->globals[i].name);
     }
     free(as->globals);
+    for (size_t i = 0; i < as->location_count; i++) {
+        free(as->locations[i].file);
+        free(as->locations[i].text);
+    }
+    free(as->locations);
     free(as->relocations);
     free(as->lines);
     free(as->files);
@@ -584,6 +589,68 @@ static void directive_incbin(Assembler *as, Parser *p) {
     free(path);
 }
 
+static size_t add_location(Assembler *as, const char *file, int line, const char *text) {
+    if (as->location_count == as->location_capacity) {
+        size_t capacity = as->location_capacity ? as->location_capacity * 2 : 64;
+        Location *grown = realloc(as->locations, capacity * sizeof(Location));
+        if (!grown) {
+            asm_error(as, "out of memory");
+            return 0;
+        }
+        as->locations = grown;
+        as->location_capacity = capacity;
+    }
+    char *file_copy = malloc(strlen(file) + 1);
+    char *text_copy = file_copy ? malloc(strlen(text) + 1) : NULL;
+    if (!text_copy) {
+        free(file_copy);
+        asm_error(as, "out of memory");
+        return 0;
+    }
+    as->locations[as->location_count] = (Location){ strcpy(file_copy, file), line, strcpy(text_copy, text) };
+    return ++as->location_count;
+}
+
+// Debug information attributes the code and labels that follow to a line of another source file
+static void directive_loc(Assembler *as, Parser *p) {
+    LineResult *result = &as->results[as->line - as->lines];
+    Token *file = peek(p);
+    const char *text = "";
+    int64_t line;
+
+    if (file->kind != TOK_STRING || file->length == 0) {
+        asm_error(as, "expected a file name in quotes");
+        return;
+    }
+    p->pos++;
+    if (!accept(p, ',')) {
+        asm_error(as, "expected a line number after the file name");
+        return;
+    }
+    if (!eval_now(p, &line, "the line number")) {
+        return;
+    }
+    if (accept(p, ',')) {
+        if (peek(p)->kind != TOK_STRING) {
+            asm_error(as, "expected the text of the line in quotes");
+            return;
+        }
+        text = peek(p)->text;
+        p->pos++;
+    }
+    if (!expect_end(p)) {
+        return;
+    }
+    if (line < 1 || line > INT32_MAX) {
+        asm_error(as, "invalid line number %lld", (long long)line);
+        return;
+    }
+    if (as->pass == PASS_DEFINE) {
+        result->location = add_location(as, file->text, (int)line, text);
+    }
+    as->location = result->location;
+}
+
 static void directive_struct(Assembler *as, Parser *p) {
     Token *t = peek(p);
 
@@ -716,6 +783,8 @@ static void directive(Assembler *as, Parser *p) {
         directive_entry(as, p);
     } else if (name_equals(name, ".incbin")) {
         directive_incbin(as, p);
+    } else if (name_equals(name, ".loc")) {
+        directive_loc(as, p);
     } else if (name_equals(name, ".global") || name_equals(name, ".extern")) {
         directive_symbols(as, p, name_equals(name, ".extern"));
     } else if (name_equals(name, ".error")) {
@@ -1233,6 +1302,7 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
     }
 
     if (conditional(as, &p, result) || !active) {
+        result->location = as->location;
         tokens_free(&tokens);
         return;
     }
@@ -1258,6 +1328,7 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
         result->address = start;
         result->size = as->sections[section].pc - start;
     }
+    result->location = as->location;
     tokens_free(&tokens);
 }
 
@@ -1273,6 +1344,7 @@ static void run_pass(Assembler *as, int pass) {
     as->condition_depth = 0;
     as->scope[0] = '\0';
     as->structure[0] = '\0';
+    as->location = 0;
 
     for (size_t i = 0; i < as->line_count && as->errors < ASM_MAX_ERRORS; i++) {
         as->line = &as->lines[i];

@@ -18,13 +18,30 @@ static const char *trim(const char *text, char *out, size_t size) {
     return out;
 }
 
+typedef struct {
+    const char *file;
+    uint32_t number;
+    const char *text;
+} Origin;
+
+// The line that debug information names for a line of assembly: the line of another source that a .loc
+// before it named, or the line itself
+static Origin origin(const Assembler *as, const SourceLine *line) {
+    size_t location = line ? as->results[line - as->lines].location : 0;
+    if (location) {
+        const Location *loc = &as->locations[location - 1];
+        return (Origin){ loc->file, (uint32_t)loc->line, loc->text };
+    }
+    return line ? (Origin){ line->file, (uint32_t)line->number, line->text } : (Origin){ NULL, 0, "" };
+}
+
 // Symbols in definition order, then one line record for every statement that emitted bytes
 static void write_debug_info(Assembler *as, Buffer *b) {
     buffer_u32(b, (uint32_t)as->symbols.count);
     for (size_t i = 0; i < as->symbols.count; i++) {
         const AsmSymbol *sym = &as->symbols.items[i];
-        vm32_write_symbol(b, sym->name, (uint32_t)sym->value, (uint8_t)sym->kind,
-                          sym->line ? (uint32_t)sym->line->number : 0, sym->line ? sym->line->file : NULL);
+        Origin o = origin(as, sym->line);
+        vm32_write_symbol(b, sym->name, (uint32_t)sym->value, (uint8_t)sym->kind, o.number, o.file);
     }
 
     uint32_t count = 0;
@@ -36,8 +53,8 @@ static void write_debug_info(Assembler *as, Buffer *b) {
         const LineResult *r = &as->results[i];
         if (r->section >= 0) {
             char text[1024];
-            vm32_write_line(b, r->address, (uint32_t)as->lines[i].number, trim(as->lines[i].text, text, sizeof(text)),
-                            as->lines[i].file);
+            Origin o = origin(as, &as->lines[i]);
+            vm32_write_line(b, r->address, o.number, trim(o.text, text, sizeof(text)), o.file);
         }
     }
 }
@@ -108,8 +125,9 @@ int output_object(Assembler *as, const char *path) {
         buffer_u8(&b, alias ? VMO_CONST : object_kind(sym));
         buffer_u8(&b, (uint8_t)sym->global);
         buffer_u32(&b, alias ? 0 : (uint32_t)sym->value);
-        buffer_u32(&b, sym->line ? (uint32_t)sym->line->number : 0);
-        buffer_string(&b, sym->line ? sym->line->file : NULL);
+        Origin o = origin(as, sym->line);
+        buffer_u32(&b, o.number);
+        buffer_string(&b, o.file);
     }
 
     buffer_u32(&b, (uint32_t)as->relocation_count);
@@ -131,11 +149,12 @@ int output_object(Assembler *as, const char *path) {
         const LineResult *r = &as->results[i];
         if (r->section >= 0) {
             char line_text[1024];
+            Origin o = origin(as, &as->lines[i]);
             buffer_u8(&b, r->section == SECTION_TEXT ? VMO_TEXT : VMO_DATA);
             buffer_u32(&b, r->address);
-            buffer_u32(&b, (uint32_t)as->lines[i].number);
-            buffer_string(&b, trim(as->lines[i].text, line_text, sizeof(line_text)));
-            buffer_string(&b, as->lines[i].file);
+            buffer_u32(&b, o.number);
+            buffer_string(&b, trim(o.text, line_text, sizeof(line_text)));
+            buffer_string(&b, o.file);
         }
     }
 

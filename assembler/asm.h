@@ -109,7 +109,15 @@ typedef struct {
     int condition;      // result of a conditional directive, decided in pass 1
     int64_t layout_value;   // size, alignment or address argument of a directive, fixed in pass 1
     int relocated;      // the linker supplies the instruction's immediate
+    size_t location;    // 1 + index of the .loc in effect, 0 before any
 } LineResult;
+
+// A line of another source, such as the C file a compiler read, named by .loc
+typedef struct {
+    char *file;
+    int line;
+    char *text;
+} Location;
 
 // A value in an object file that the linker fills in
 typedef struct {
@@ -168,6 +176,10 @@ typedef struct {
     size_t relocation_capacity;
     GlobalName *globals;
     size_t global_count;
+    Location *locations;
+    size_t location_count;
+    size_t location_capacity;
+    size_t location;    // 1 + index of the .loc in effect, 0 before any
     int changed;        // a layout pass moved a label, changed a constant or widened an instruction
     int64_t entry;
     const SourceLine *entry_line;   // the .entry directive, if any
