@@ -430,6 +430,9 @@ static int execute_control(VM *vm, const Instruction *instr) {
         case RET_OP:
             vm->registers[R3_PC] = cpu_stack_pop(vm);
             vm->registers[R2_SP] += instr->immediate;
+            if (vm->last_error == VM_ERROR_NONE) {
+                cpu_pop_frames(vm, 0);
+            }
             return vm->last_error;
 
         case SYSCALL_OP:
@@ -449,6 +452,9 @@ static int execute_control(VM *vm, const Instruction *instr) {
             }
             if (instr->opcode == CALL_OP) {
                 cpu_stack_push(vm, vm->registers[R3_PC]);
+                if (vm->last_error == VM_ERROR_NONE) {
+                    cpu_push_frame(vm, vm->error_pc, vm->registers[R3_PC], -1);
+                }
             }
             if (vm->last_error == VM_ERROR_NONE && branch_taken(vm, instr->opcode)) {
                 vm->registers[R3_PC] = target;

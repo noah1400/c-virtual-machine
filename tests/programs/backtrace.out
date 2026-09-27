@@ -1,0 +1,21 @@
+Debugger ready. Type 'h' for help.
+0x0000 <main>
+  tests/programs/backtrace.asm:6: CALL outer
+Next instruction: CALL outer
+> c
+Error: Division by zero
+R0  0x00000000   BP  0x00100000   SP  0x000FFFB8   PC  0x00000024
+SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
+R8  0x00001000   R9  0x00000000   R10 0x00000000   R11 0x00000000
+R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
+Flags: [------S-]
+Instructions executed: 6, last: DIV R8, R9
+Faulted at 0x0024 <divide+4>
+  tests/programs/backtrace.asm:21: DIV R8, R9
+Instruction: DIV R8, R9
+> bt
+#0 0x0024 <divide+4> tests/programs/backtrace.asm:21: DIV R8, R9
+#1 0x0018 <on_interrupt> tests/programs/backtrace.asm:16: CALL divide
+#2 0x0010 <outer+8> tests/programs/backtrace.asm:12: INT #32 (interrupt 32)
+#3 0x0000 <main> tests/programs/backtrace.asm:6: CALL outer
+> 

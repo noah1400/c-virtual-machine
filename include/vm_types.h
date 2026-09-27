@@ -37,6 +37,16 @@
 #define VM_MAX_FILES            16
 #define VM_FIRST_FILE_HANDLE    3
 
+#define VM_CALL_FRAMES          1024
+
+// A call or interrupt that has not returned yet, kept for backtraces
+typedef struct {
+    uint32_t site;          // the CALL, or the instruction the interrupt came before
+    uint32_t slot;          // stack address of the return address, or of the saved registers
+    uint32_t resume;        // where execution returns to, which the slot has to hold still
+    int32_t vector;         // the interrupt vector, or -1 for a call
+} CallFrame;
+
 // Virtual Machine state
 typedef struct {
     // CPU registers
@@ -84,6 +94,8 @@ typedef struct {
     char **args;
 
     struct DebugInfo *debug_info;  // Debug information (NULL if not loaded)
+    CallFrame call_frames[VM_CALL_FRAMES];  // shadow call stack, innermost last
+    uint32_t call_depth;
 } VM;
 
 // Error codes

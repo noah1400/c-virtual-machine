@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "cpu.h"
 #include "debug.h"
 #include "debugger.h"
 #include "disassembler.h"
@@ -114,24 +115,11 @@ static int parse_options(int argc, char **argv, Options *opts) {
 }
 
 static void report_fault(const VM *vm) {
-    uint32_t pc = vm->error_pc;
-
     fprintf(stderr, "vm: error: %s\n", vm_get_error_message(vm));
-    char where[80];
-    debug_describe(vm->debug_info, pc, where, sizeof(where));
-    fprintf(stderr, "vm: at 0x%04X%s%s", pc, where[0] ? " " : "", where);
-    const SourceLine *line = debug_line_at(vm->debug_info, pc);
-    if (line && line->address == pc) {
-        fprintf(stderr, " %s:%u", line->source_file ? line->source_file : "?", line->line_num);
-    }
-
-    Instruction instr;
-    if (pc % 4 == 0 && vm_peek_instruction(vm, pc, &instr)) {
-        char text[160];
-        disasm_format(&instr, pc, vm->debug_info, text, sizeof(text));
-        fprintf(stderr, ": %s", text);
-    }
+    fprintf(stderr, "vm: at ");
+    cpu_print_location(vm, stderr, vm->error_pc);
     fprintf(stderr, "\n");
+    cpu_print_backtrace(vm, stderr, "vm: ");
 }
 
 // Runs like vm_run, optionally printing each instruction on stderr before executing it and

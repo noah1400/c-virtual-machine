@@ -117,6 +117,16 @@ vm: error: Division by zero
 vm: at 0x0004 fault.asm:5: DIV R8, #0x0
 ```
 
+Below that, the report lists the calls and interrupts that led to the fault, innermost first, and folds repeats of the same call:
+
+```console
+vm: at 0x0014 <divide+4> fault.asm:16: DIV R8, R9
+vm: #1 0x0008 <outer> fault.asm:11: CALL divide
+vm: #2 0x0000 <main> fault.asm:7: CALL outer
+```
+
+The VM keeps a shadow stack of the calls and interrupts in flight for this. Frames that the program left without returning, for example by switching stacks, are left out.
+
 A trace shows the address, the nearest label and the instruction:
 
 ```console
@@ -799,6 +809,7 @@ These codes appear in R5 after syscalls and in `CPUID` function 4. Codes 1 to 14
 | `x`, `disas [ADDR] [N]` | Disassemble N instructions (default: 8 at PC) |
 | `m`, `memory ADDR [N]` | Dump N bytes (default 16) |
 | `stack [N]` | Show N words from the top of the stack (default 8) |
+| `bt`, `backtrace` | Show the calls and interrupts that led to the current instruction |
 | `r`, `registers` | Show registers and flags |
 | `cr` | Show control registers |
 | `h`, `help` | Show help |

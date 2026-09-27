@@ -506,6 +506,14 @@ static void cmd_stack(const Debugger *dbg, int argc, char **argv) {
     }
 }
 
+static void cmd_backtrace(const Debugger *dbg) {
+    const VM *vm = dbg->vm;
+    printf("#0 ");
+    cpu_print_location(vm, stdout, vm->last_error != VM_ERROR_NONE ? vm->error_pc : vm->registers[R3_PC]);
+    printf("\n");
+    cpu_print_backtrace(vm, stdout, "");
+}
+
 static void cmd_control_registers(const Debugger *dbg) {
     for (int i = 0; i < CR_COUNT; i++) {
         printf("%-6s 0x%08X%s", isa_control_register_name((uint32_t)i), dbg->vm->control[i],
@@ -527,6 +535,7 @@ static void cmd_help(void) {
     printf("  x, disas [ADDR] [N]      Disassemble N instructions (default: 8 at PC)\n");
     printf("  m, memory ADDR [N]       Dump N bytes of memory (default 16)\n");
     printf("  stack [N]                Show N words from the top of the stack (default 8)\n");
+    printf("  bt, backtrace            Show the calls and interrupts that led here\n");
     printf("  r, registers             Show registers and flags\n");
     printf("  cr                       Show control registers\n");
     printf("  h, help                  Show this help\n");
@@ -594,6 +603,8 @@ int debugger_run(VM *vm, FILE *commands) {
             cmd_memory(&dbg, argc, argv);
         } else if (is_command(cmd, "stack", "stack")) {
             cmd_stack(&dbg, argc, argv);
+        } else if (is_command(cmd, "bt", "backtrace")) {
+            cmd_backtrace(&dbg);
         } else if (is_command(cmd, "r", "registers")) {
             cpu_dump_registers(vm);
         } else if (is_command(cmd, "cr", "cr")) {

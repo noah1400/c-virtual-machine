@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
+#include "binfmt.h"
 #include "cpu.h"
+#include "debug.h"
 #include "disassembler.h"
 #include "memory.h"
 #include "vm.h"
@@ -18,6 +20,7 @@ void cpu_reset(VM *vm) {
     vm->registers[R3_PC] = vm->entry_point;
     vm->registers[R4_SR] = SYS_FLAG;
     vm->halted = 0;
+    vm->call_depth = 0;
 }
 
 // The stack lies between the SLO and SHI control registers
@@ -119,6 +122,33 @@ void cpu_return_from_interrupt(VM *vm) {
         }
     }
     memcpy(vm->registers, frame, sizeof(frame));
+    cpu_pop_frames(vm, 1);
+}
+
+// The shadow call stack follows calls and interrupts for backtraces. When it is full, the
+// outermost frame makes room.
+void cpu_push_frame(VM *vm, uint32_t site, uint32_t resume, int vector) {
+    if (vm->call_depth == VM_CALL_FRAMES) {
+        memmove(vm->call_frames, vm->call_frames + 1, (VM_CALL_FRAMES - 1) * sizeof(CallFrame));
+        vm->call_depth--;
+    }
+    vm->call_frames[vm->call_depth++] = (CallFrame){ site, vm->registers[R2_SP], resume, vector };
+}
+
+// A return drops the calls whose return address now lies below SP; an interrupt return also
+// drops the innermost interrupt, as it may switch to another stack
+void cpu_pop_frames(VM *vm, int interrupt_return) {
+    while (vm->call_depth > 0) {
+        const CallFrame *top = &vm->call_frames[vm->call_depth - 1];
+        if (top->vector >= 0) {
+            vm->call_depth -= interrupt_return != 0;
+            return;
+        }
+        if (!interrupt_return && top->slot >= vm->registers[R2_SP]) {
+            return;
+        }
+        vm->call_depth--;
+    }
 }
 
 // The vector table holds one 32-bit handler address per vector; 0 means there is no handler. It
@@ -136,7 +166,7 @@ static uint32_t vector_handler(VM *vm, uint8_t vector) {
 
 // Saves the execution context and runs the handler in supervisor mode with interrupts and
 // single-stepping off; an interrupt from user mode switches to the stack in KSP when it is set
-static void enter_handler(VM *vm, uint32_t handler) {
+static void enter_handler(VM *vm, uint32_t handler, uint8_t vector) {
     uint32_t frame[16];
 
     memcpy(frame, vm->registers, sizeof(frame));
@@ -146,6 +176,9 @@ static void enter_handler(VM *vm, uint32_t handler) {
     }
     for (int i = 15; i >= 0 && vm->last_error == VM_ERROR_NONE; i--) {
         cpu_stack_push(vm, frame[i]);
+    }
+    if (vm->last_error == VM_ERROR_NONE) {
+        cpu_push_frame(vm, vm->error_pc, frame[R3_PC], vector);
     }
     vm->registers[R3_PC] = handler;
     vm->entered_interrupt = 1;
@@ -160,7 +193,7 @@ void cpu_interrupt(VM *vm, uint8_t vector) {
         vm_raise(vm, VM_ERROR_UNHANDLED_INTERRUPT, "Unhandled interrupt: %d", vector);
         return;
     }
-    enter_handler(vm, handler);
+    enter_handler(vm, handler, vector);
 }
 
 // Hands the fault the VM stopped with to the handler of the vector its code names. The caller has
@@ -181,7 +214,7 @@ int cpu_exception(VM *vm) {
         return vm_raise(vm, code, "%s", message);
     }
 
-    enter_handler(vm, handler);
+    enter_handler(vm, handler, (uint8_t)code);
     if (vm->last_error != VM_ERROR_NONE) {
         char detail[sizeof(vm->error_message)];
         int second = vm->last_error;
@@ -233,6 +266,63 @@ void cpu_enable_interrupts(VM *vm) {
 
 void cpu_disable_interrupts(VM *vm) {
     vm->registers[R4_SR] &= ~(uint32_t)INT_FLAG;
+}
+
+void cpu_print_location(const VM *vm, FILE *out, uint32_t address) {
+    char text[160];
+    debug_describe(vm->debug_info, address, text, sizeof(text));
+    fprintf(out, "0x%04X%s%s", address, text[0] ? " " : "", text);
+    const SourceLine *line = debug_line_at(vm->debug_info, address);
+    if (line && line->address == address) {
+        fprintf(out, " %s:%u", line->source_file ? line->source_file : "?", line->line_num);
+    }
+    Instruction instr;
+    if (address % 4 == 0 && vm_peek_instruction(vm, address, &instr)) {
+        disasm_format(&instr, address, vm->debug_info, text, sizeof(text));
+        fprintf(out, ": %s", text);
+    }
+}
+
+static int frame_live(const VM *vm, const CallFrame *frame) {
+    uint8_t saved[4];
+    uint32_t check = frame->vector >= 0 ? frame->slot + 4 * R3_PC : frame->slot;
+    return memory_peek(vm, check, saved, sizeof(saved)) == sizeof(saved) && read_le32(saved) == frame->resume;
+}
+
+// Lists the calls and interrupts that execution is nested in, innermost first, folding repeats of
+// the same call. A frame whose return address is gone from the stack was left without returning.
+void cpu_print_backtrace(const VM *vm, FILE *out, const char *prefix) {
+    const CallFrame *shown = NULL;
+    uint32_t number = 0, repeats = 0;
+
+    for (uint32_t i = vm->call_depth; i-- > 0;) {
+        const CallFrame *frame = &vm->call_frames[i];
+        if (!frame_live(vm, frame)) {
+            continue;
+        }
+        number++;
+        if (shown && frame->site == shown->site && frame->vector == shown->vector) {
+            repeats++;
+            continue;
+        }
+        if (repeats) {
+            fprintf(out, "%s... the same %u more times\n", prefix, repeats);
+            repeats = 0;
+        }
+        fprintf(out, "%s#%u ", prefix, number);
+        cpu_print_location(vm, out, frame->site);
+        if (frame->vector >= 0) {
+            fprintf(out, " (interrupt %d)", frame->vector);
+        }
+        fprintf(out, "\n");
+        shown = frame;
+    }
+    if (repeats) {
+        fprintf(out, "%s... the same %u more times\n", prefix, repeats);
+    }
+    if (vm->call_depth == VM_CALL_FRAMES) {
+        fprintf(out, "%s... outer frames were not kept\n", prefix);
+    }
 }
 
 // Copies a NUL-terminated run of at least three printable characters found after the code

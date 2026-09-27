@@ -33,6 +33,11 @@ int cpu_deliver_interrupt(VM *vm);
 void cpu_enable_interrupts(VM *vm);
 void cpu_disable_interrupts(VM *vm);
 
+void cpu_push_frame(VM *vm, uint32_t site, uint32_t resume, int vector);
+void cpu_pop_frames(VM *vm, int interrupt_return);
+
 void cpu_dump_registers(VM *vm);
+void cpu_print_location(const VM *vm, FILE *out, uint32_t address);
+void cpu_print_backtrace(const VM *vm, FILE *out, const char *prefix);
 
 #endif // _CPU_H_
