@@ -28,6 +28,7 @@ typedef struct DebugInfo {
     uint32_t symbol_count;
     SourceLine *source_lines;
     uint32_t source_line_count;
+    const SourceLine **lines_by_address;
 } DebugInfo;
 
 // Parses the symbol table section of a VM32 binary; truncated tables yield the entries read so far
