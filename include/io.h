@@ -14,8 +14,10 @@ struct IODevice {
     uint16_t port_count;
     uint32_t (*read)(VM *vm, IODevice *device, uint16_t offset);
     void (*write)(VM *vm, IODevice *device, uint16_t offset, uint32_t value);
-    void (*tick)(VM *vm, IODevice *device);
+    void (*tick)(VM *vm, IODevice *device);     // runs after every instruction while the device ticks
+    void (*cleanup)(VM *vm, IODevice *device);
     void *state;
+    int index;
 };
 
 int io_init(VM *vm);

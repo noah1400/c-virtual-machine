@@ -30,6 +30,15 @@ static void console_write(VM *vm, IODevice *device, uint16_t offset, uint32_t va
     fflush(stream);
 }
 
+// Devices that count instructions only get ticks while they need them
+static void set_ticking(VM *vm, const IODevice *device, int ticking) {
+    if (ticking) {
+        vm->io_ticking |= 1u << device->index;
+    } else {
+        vm->io_ticking &= ~(1u << device->index);
+    }
+}
+
 // Timer: port 0 sets the interval in instructions (0 stops it), port 1 the interrupt vector,
 // port 2 counts expirations; every expiration requests an interrupt
 typedef struct {
@@ -58,7 +67,7 @@ static void timer_write(VM *vm, IODevice *device, uint16_t offset, uint32_t valu
         case 0:
             timer->interval = value;
             timer->counter = 0;
-            vm->io_ticking = value != 0;
+            set_ticking(vm, device, value != 0);
             break;
         case 1:
             if (value > 0xFF) {
@@ -86,6 +95,7 @@ static int add_device(VM *vm, IODevice device) {
     if (io->count >= MAX_IO_DEVICES) {
         return vm_raise(vm, VM_ERROR_IO_ERROR, "Too many I/O devices");
     }
+    device.index = io->count;
     io->devices[io->count++] = device;
     return VM_ERROR_NONE;
 }
@@ -115,6 +125,9 @@ void io_cleanup(VM *vm) {
         return;
     }
     for (int i = 0; i < io->count; i++) {
+        if (io->devices[i].cleanup) {
+            io->devices[i].cleanup(vm, &io->devices[i]);
+        }
         free(io->devices[i].state);
     }
     free(io);
@@ -148,7 +161,7 @@ void io_write(VM *vm, uint32_t port, uint32_t value) {
 void io_tick(VM *vm) {
     struct IODevices *io = vm->io_devices;
     for (int i = 0; io && i < io->count; i++) {
-        if (io->devices[i].tick) {
+        if ((vm->io_ticking >> i) & 1) {
             io->devices[i].tick(vm, &io->devices[i]);
         }
     }

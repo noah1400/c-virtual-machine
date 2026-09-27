@@ -58,7 +58,7 @@ typedef struct {
     char exception_message[256];
 
     struct IODevices *io_devices;
-    uint8_t io_ticking;      // a device counts executed instructions
+    uint32_t io_ticking;     // one bit for every device that counts executed instructions
 
     // Instruction cycle info for debugging
     uint32_t instruction_count; // Number of instructions executed
