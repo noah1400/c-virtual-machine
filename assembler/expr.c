@@ -22,7 +22,7 @@ static int accept(Parser *p, int punct) {
 }
 
 static int64_t fail(Parser *p, const char *format, ...) {
-    if (!p->failed) {
+    if (!p->failed && !p->quiet) {
         char message[256];
         va_list args;
         va_start(args, format);
@@ -53,7 +53,10 @@ static int64_t parse_primary(Parser *p) {
         if (!qualify_name(p->as, t->text, name, sizeof(name))) {
             return fail(p, "symbol name too long: %s", t->text);
         }
-        AsmSymbol *sym = symbols_find(&p->as->symbols, name);
+        AsmSymbol *sym = p->constants ? symbols_find(p->constants, name) : NULL;
+        if (!sym) {
+            sym = symbols_find(&p->as->symbols, name);
+        }
         if (sym && sym->defined) {
             return sym->value;
         }
@@ -64,6 +67,7 @@ static int64_t parse_primary(Parser *p) {
         return fail(p, "undefined symbol '%s'", name);
     }
     if (accept(p, '$')) {
+        p->unresolved |= p->constants != NULL;
         return p->as->statement_address;
     }
     if (accept(p, '(')) {

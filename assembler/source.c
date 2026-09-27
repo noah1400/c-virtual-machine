@@ -6,12 +6,24 @@
 
 #define MAX_EXPANSION_DEPTH 32
 #define MAX_MACRO_ARGUMENTS 16
+#define MAX_REPEATS         65536
+
+// A .rept block whose lines are being collected
+typedef struct {
+    int64_t count;
+    int depth;                  // .rept lines inside it that are still open
+    char **lines;
+    int *numbers;
+    int line_count;
+} Repeat;
 
 typedef struct {
     const char *includes[ASM_MAX_INCLUDE_DEPTH];
     int include_depth;
     Macro *defining;            // macro whose body is being collected
+    Repeat *repeating;
     int expansion_depth;
+    SymbolTable constants;      // .equ constants that can be evaluated while reading, for .rept counts
 } Loader;
 
 static int handle_line(Assembler *as, Loader *loader, const char *file, int number, char *text, int expanded);
@@ -440,6 +452,99 @@ static int expand_macro(Assembler *as, Loader *loader, Macro *macro, const char 
     return ok;
 }
 
+// Evaluates an expression from the tokens at first, knowing only earlier constants; returns 0 when
+// it cannot be evaluated yet
+static int evaluate_now(Assembler *as, Loader *loader, TokenList *tokens, int first, int quiet, int64_t *value) {
+    Parser p = { .as = as, .tokens = tokens, .pos = first, .constants = &loader->constants, .quiet = quiet };
+    *value = parse_expression(&p);
+    return !p.failed && !p.unresolved && tokens->items[p.pos].kind == TOK_END;
+}
+
+// Remembers a constant whose value is known while the file is read
+static void note_constant(Assembler *as, Loader *loader, TokenList *tokens, int first) {
+    const Token *name = &tokens->items[first + 1];
+    int64_t value;
+
+    if (name->kind != TOK_IDENT || !token_is_punct(&tokens->items[first + 2], ',') ||
+        symbols_find(&loader->constants, name->text) || !evaluate_now(as, loader, tokens, first + 3, 1, &value)) {
+        return;
+    }
+    AsmSymbol *sym = symbols_add(&loader->constants, name->text);
+    if (sym) {
+        sym->kind = SYM_CONST;
+        sym->value = value;
+        sym->defined = 1;
+    }
+}
+
+static void free_repeat(Repeat *repeat) {
+    for (int i = 0; repeat && i < repeat->line_count; i++) {
+        free(repeat->lines[i]);
+    }
+    if (repeat) {
+        free(repeat->lines);
+        free(repeat->numbers);
+        free(repeat);
+    }
+}
+
+static int start_repeat(Assembler *as, Loader *loader, TokenList *tokens, int first) {
+    int64_t count;
+
+    if (first > 0) {
+        loader_error(as, "a .rept line cannot have a label%s", "");
+        return 1;
+    }
+    int errors = as->errors;
+    as->line = &as->lines[as->line_count - 1];
+    int known = evaluate_now(as, loader, tokens, first + 1, 0, &count);
+    as->line = NULL;
+    if (!known) {
+        if (as->errors == errors) {
+            loader_error(as, "the .rept count must be a constant defined before it%s", "");
+        }
+        return 1;
+    }
+    if (count < 0 || count > MAX_REPEATS) {
+        loader_error(as, "the .rept count must be between 0 and 65536%s", "");
+        return 1;
+    }
+    loader->repeating = calloc(1, sizeof(Repeat));
+    if (!loader->repeating) {
+        return 0;
+    }
+    loader->repeating->count = count;
+    return 1;
+}
+
+static int collect_repeat_line(Repeat *repeat, const char *text, int number) {
+    char **lines = realloc(repeat->lines, (size_t)(repeat->line_count + 1) * sizeof(char *));
+    int *numbers = lines ? realloc(repeat->numbers, (size_t)(repeat->line_count + 1) * sizeof(int)) : NULL;
+    if (lines) {
+        repeat->lines = lines;
+    }
+    if (!numbers) {
+        return 0;
+    }
+    repeat->numbers = numbers;
+    repeat->numbers[repeat->line_count] = number;
+    repeat->lines[repeat->line_count] = copy_string(text, strlen(text));
+    return repeat->lines[repeat->line_count++] != NULL;
+}
+
+// Hands the lines of a finished block to handle_line count times, where inner blocks repeat again
+static int expand_repeat(Assembler *as, Loader *loader, Repeat *repeat, const char *file) {
+    int ok = 1;
+    for (int64_t n = 0; ok && n < repeat->count; n++) {
+        for (int i = 0; ok && i < repeat->line_count; i++) {
+            char *copy = copy_string(repeat->lines[i], strlen(repeat->lines[i]));
+            ok = copy && handle_line(as, loader, file, repeat->numbers[i], copy, 1);
+        }
+    }
+    free_repeat(repeat);
+    return ok;
+}
+
 // Adds a line to the program, collecting macro bodies and splicing in includes and expansions
 static int handle_line(Assembler *as, Loader *loader, const char *file, int number, char *text, int expanded) {
     TokenList tokens;
@@ -461,6 +566,20 @@ static int handle_line(Assembler *as, Loader *loader, const char *file, int numb
     const Token *keyword = &tokens.items[first];
     const char *word = keyword->kind == TOK_IDENT ? keyword->text : "";
     int ok = 1;
+
+    if (loader->repeating && !loader->defining) {
+        Repeat *repeat = loader->repeating;
+        ok = add_line(as, LINE_MACRO_DEFINITION, file, number, text, expanded);
+        if (ok && name_equals(word, ".endr") && repeat->depth == 0) {
+            loader->repeating = NULL;
+            tokens_free(&tokens);
+            return expand_repeat(as, loader, repeat, file);
+        }
+        repeat->depth += name_equals(word, ".rept") - name_equals(word, ".endr");
+        ok = ok && collect_repeat_line(repeat, text, number);
+        tokens_free(&tokens);
+        return ok;
+    }
 
     if (loader->defining) {
         Macro *macro = loader->defining;
@@ -484,6 +603,12 @@ static int handle_line(Assembler *as, Loader *loader, const char *file, int numb
     } else if (name_equals(word, ".endm")) {
         ok = add_line(as, LINE_SOURCE, file, number, text, expanded);
         loader_error(as, ".endm without .macro%s", "");
+    } else if (name_equals(word, ".rept")) {
+        ok = add_line(as, LINE_MACRO_DEFINITION, file, number, text, expanded) &&
+             start_repeat(as, loader, &tokens, first);
+    } else if (name_equals(word, ".endr")) {
+        ok = add_line(as, LINE_SOURCE, file, number, text, expanded);
+        loader_error(as, ".endr without .rept%s", "");
     } else if (name_equals(word, ".include") && tokens.items[first + 1].kind == TOK_STRING) {
         ok = add_line(as, LINE_SOURCE, file, number, text, expanded) &&
              include_file(as, loader, file, number, tokens.items[first + 1].text);
@@ -495,6 +620,9 @@ static int handle_line(Assembler *as, Loader *loader, const char *file, int numb
              expand_macro(as, loader, macro, file, number, copy);
         free(copy);
     } else {
+        if (name_equals(word, ".equ") || name_equals(word, ".set")) {
+            note_constant(as, loader, &tokens, first);
+        }
         ok = add_line(as, LINE_SOURCE, file, number, text, expanded);
     }
 
@@ -505,10 +633,17 @@ static int handle_line(Assembler *as, Loader *loader, const char *file, int numb
 int source_load(Assembler *as, const char *path) {
     Loader loader = { 0 };
     char *copy = copy_string(path, strlen(path));
+
+    symbols_init(&loader.constants);
     int ok = copy && load_file(as, &loader, copy);
 
     if (ok && loader.defining) {
         loader_error(as, "macro %s is missing .endm", loader.defining->name);
     }
+    if (ok && loader.repeating) {
+        loader_error(as, ".rept is missing .endr%s", "");
+    }
+    free_repeat(loader.repeating);
+    symbols_free(&loader.constants);
     return ok && as->errors == 0;
 }

@@ -169,6 +169,8 @@ typedef struct {
     int failed;
     int floats;         // float literals read so far
     int operators;      // operators applied so far, which floats must not take part in
+    SymbolTable *constants;     // while the source is read: the constants known so far
+    int quiet;          // leave errors to the passes
 } Parser;
 
 int64_t parse_expression(Parser *p);

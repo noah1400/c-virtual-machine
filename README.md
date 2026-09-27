@@ -691,6 +691,7 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.org offset` | Pad forward to an offset from the start of the current section |
 | `.equ NAME, expr` or `.set` | Define a constant. A constant cannot be redefined |
 | `.struct NAME` ... `.ends` | Define a [structure](#structures) |
+| `.rept count` ... `.endr` | Repeat the lines in between *count* times (see below) |
 | `.entry expr` | Start execution here instead of at 0x0000 |
 | `.error "message"` | Stop assembly with this message. Useful inside `.if` |
 | `.include "file"` | Insert a file. It is searched for next to the including file, then in `-I` directories |
@@ -700,6 +701,8 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 A value can be written signed or unsigned, but it must fit its width. For example, `.byte` accepts −128 to 255.
 
 The arguments of `.space`, `.align`, `.org` and `.if` decide the layout. They may only use symbols defined earlier, and must not depend on labels whose addresses move when instructions grow.
+
+The count of `.rept` is read along with the source, before any label exists, so it may only use numbers, `-D` constants and `.equ` constants defined earlier from those. Blocks can be nested, and a block with labels in it defines them once per repetition, which clashes; macros with `\@` avoid that.
 
 ### Structures
 
