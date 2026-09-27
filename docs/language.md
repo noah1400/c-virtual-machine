@@ -422,7 +422,7 @@ These need supervisor mode, which programs start in.
 
 ## Implementation
 
-`vmc`, written in Ore in `ore/compiler`, and `vmc0`, the bootstrap compiler written in C, read the main module and its imports and write the whole program as one assembly file with `.loc` lines, the same file from both. It includes the runtime and any assembly files given on the command line, and is then assembled with `vmasm`. `-S` stops after the assembly and `-o` names the output. Neither compiler has `f32` yet. `vmc` runs on the VM, where it keeps constants exact to 64 bits in a pair of 32-bit halves.
+`vmc`, written in Ore in `ore/compiler`, and `vmc0`, the bootstrap compiler written in C, read the main module and its imports and write the whole program as one assembly file with `.loc` lines. It includes the runtime and any assembly files given on the command line, and is then assembled with `vmasm`. The two write different code for the same program, since only `vmc` optimizes, but the code behaves the same. `-S` stops after the assembly and `-o` names the output. Neither compiler has `f32` yet. `vmc` runs on the VM, where it keeps constants exact to 64 bits in a pair of 32-bit halves.
 
 **Calling convention:**
 - **Arguments** are pushed from right to left, each taking its size rounded up to 4 bytes, and the caller removes them.

@@ -6,7 +6,7 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 - **`vmasm`** turns assembly source into VM32 binaries or object files. It supports expressions, local labels, macros, structures, conditional assembly, includes and listings.
 - **`vmld`** links object files into one program.
 - **`vmc`** compiles [Ore](docs/language.md) programs into VM32 binaries. It is written in Ore and runs on the VM.
-- **`vmc0`** is the same compiler written in C, which compiles `vmc` in the first place.
+- **`vmc0`** compiles Ore as well, without optimizing. It is written in C and compiles `vmc` in the first place.
 
 ## Contents
 
@@ -885,10 +885,10 @@ Usage: vmc [options] program.ore [file.asm...]
   -L DIR    take the runtime and the standard library from DIR
 ```
 
-Two compilers take these options and write the same assembly:
+Two compilers take these options:
 
-- **`vmc`** is written in Ore, in `ore/compiler`. `make` compiles it with `vmc0` into `vmc.bin`, and the `vmc` script runs that on the VM with 256 MB of memory and an 8 MB stack. `vmc.bin` writes the program as assembly, which the script assembles with `vmasm`. `vmc` compiles itself into the very `vmc.bin` that `vmc0` makes of it.
-- **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. It runs natively, so it compiles much faster: `vmc` takes 2.5 seconds for its own 5,000 lines, `vmc0` 0.2 seconds.
+- **`vmc`** is written in Ore, in `ore/compiler`, and optimizes. It keeps scalar locals and parameters in registers, uses variables, fields and slice lengths as operands where instructions can take them, checks a pointer for `null` once until something changes it and branches on conditions without first making values of them. Its code executes about half as many instructions as `vmc0`'s and is a third smaller. `make` builds it in two stages: `vmc0` compiles it into `vmc1.bin`, which compiles it again into `vmc.bin`, and `vmc.bin` compiles itself into the very same file. The `vmc` script runs `vmc.bin` on the VM with 256 MB of memory and an 8 MB stack and assembles the program it writes with `vmasm`.
+- **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. Its code keeps every local in the frame. It runs natively, so it compiles much faster: `vmc` takes 1.8 seconds for its own 6,000 lines, `vmc0` 0.04 seconds.
 
 - **How it compiles:** the compiler writes the whole program as one assembly file. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler.
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
@@ -1090,7 +1090,7 @@ Code and data symbols hold offsets into their section. A relocation stores the a
 - Checks that every file in `tests/errors` fails to assemble with the expected message.
 - Compiles and runs every Ore program in `ore/tests` the same way. Their comment lines start with `//` instead of `;`, and `// vmc-args:` gives `vmc0` more arguments.
 - Checks that every file in `ore/tests/errors` fails to compile with the expected message.
-- Compiles every Ore test with `vmc -S` as well, which must write the same assembly as `vmc0 -S`, apart from its first line, which names the compiler, and the same errors. The test named `vmc` checks that `vmc` compiles itself into `vmc.bin`.
+- Builds every Ore test with `vmc` as well, and that build has to meet the same expectations. Since the two compilers write different code, runtime errors are compared by message and Ore lines, and debugger scripts only run against the `vmc` build. `vmc1.bin` has to write the same assembly as `vmc.bin`, all three compilers the same compile errors, and the test named `vmc` checks that `vmc` compiles itself into `vmc.bin`.
 
 Comment lines in a test adjust the checks:
 
@@ -1128,7 +1128,7 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `linker/` | `vmld` |
 | `assembler/examples/` | Example programs |
 | `ore/compiler/` | `vmc`, the Ore compiler written in Ore: 64-bit constants, syntax trees, lexer, parser, type checker, code generator and the command line |
-| `ore/bootstrap/` | `vmc0`, the same compiler written in C |
+| `ore/bootstrap/` | `vmc0`, the bootstrap compiler written in C |
 | `vmc` | The script that runs `vmc.bin` on the VM and assembles what it writes |
 | `ore/lib/` | The runtime that compiled Ore programs start from, and the standard library in `std/` |
 | `ore/tests/` | Ore test programs, and the modules and assembly they use |
