@@ -973,18 +973,32 @@ fn gen_builtin(g: *Gen, e: *ast.Expr) {
             emit(g, "    PUSH R0\n    CALL rt.free\n    ADD SP, #4\n");
         }
         case ast.Builtin.SYSCALL {
+            gen_syscall(g, e);
             var temp = alloc_frame(g, 8);
-            for (var i = 1; i < e.args.len; i += 1) {
-                gen_expr(g, e.args[i]);
-                emit(g, "    PUSH R0\n");
-            }
-            for (var i = e.args.len - 1; i >= 1; i -= 1) {
-                emits(g, "    POP %s\n", [][]u8 { syscall_registers[i - 1] });
-            }
-            emitd(g, "    SYSCALL #%d\n    STORE R0, [BP%+d]\n    STORE R5, [BP%+d]\n    LEA R0, [BP%+d]\n",
-                []int { wide.low(e.args[0].value), temp, temp + 4, temp });
+            emitd(g, "    STORE R0, [BP%+d]\n    STORE R5, [BP%+d]\n    LEA R0, [BP%+d]\n", []int { temp, temp + 4, temp });
         }
     }
+}
+
+// Leaves the two words of the result in R0 and R5
+fn gen_syscall(g: *Gen, e: *ast.Expr) {
+    // Arguments that need no code go to their registers directly, in order
+    var direct = true;
+    for (var i = 1; i < e.args.len; i += 1) {
+        direct = direct && is_operand(e.args[i]);
+    }
+    for (var i = 1; i < e.args.len; i += 1) {
+        if (direct) {
+            set_register(g, syscall_registers[i - 1], gen_operand(g, e.args[i]));
+        } else {
+            gen_expr(g, e.args[i]);
+            emit(g, "    PUSH R0\n");
+        }
+    }
+    for (var i = e.args.len - 1; i >= 1 && !direct; i -= 1) {
+        emits(g, "    POP %s\n", [][]u8 { syscall_registers[i - 1] });
+    }
+    emitd(g, "    SYSCALL #%d\n", []int { wide.low(e.args[0].value) });
 }
 
 fn has_call(e: *ast.Expr) bool {
@@ -1726,7 +1740,11 @@ fn gen_stmt(g: *Gen, s: *ast.Stmt) {
             gen_assign(g, s);
         }
         case ast.StmtKind.EXPR {
-            gen_expr(g, s.value);
+            if (s.value.kind == ast.ExprKind.CALL && s.value.builtin == ast.Builtin.SYSCALL) {
+                gen_syscall(g, s.value);
+            } else {
+                gen_expr(g, s.value);
+            }
         }
         case ast.StmtKind.IF {
             var otherwise = label(g);
