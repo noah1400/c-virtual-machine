@@ -1,0 +1,4 @@
+// The assembly next to the main module is not part of the program; vmc0 -S writes it there
+fn main() {
+    print("the program alone\n");
+}

@@ -169,9 +169,10 @@ Module *load_module(Program *program, const char *path, const Module *importer, 
     grow((void **)&program->modules, program->module_count + 1, sizeof(Module *));
     program->modules[program->module_count++] = m;
 
-    // A module can bring assembly for its extern functions in a file of the same name
+    // An imported module can bring assembly for its extern functions in a file of the same name. The
+    // main module cannot, since that is where -S puts the program's assembly.
     size_t length = strlen(resolved);
-    if (length > 4 && strcmp(resolved + length - 4, ".ore") == 0) {
+    if (importer && length > 4 && strcmp(resolved + length - 4, ".ore") == 0) {
         char *assembly = copy_text(resolved, length);
         strcpy(assembly + length - 4, ".asm");
         if (exists(assembly)) {
