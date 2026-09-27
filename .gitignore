@@ -3,6 +3,7 @@ build/
 *.d
 *.bin
 *.lst
+*.img
 /vm
 /vmasm
 /vmld

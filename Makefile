@@ -14,8 +14,11 @@ LD_OBJ  := $(LD_SRC:%.c=$(BUILD)/%.o)
 VMC_SRC := $(wildcard ore/bootstrap/*.c)
 VMC_OBJ := $(VMC_SRC:%.c=$(BUILD)/%.o)
 ORE_SRC := $(wildcard ore/compiler/*.ore ore/lib/*.asm ore/lib/std/*)
+ORE_LIB := $(wildcard ore/lib/*.asm ore/lib/std/*)
+MINIDOS_SRC := $(wildcard ore/minidos/*.ore ore/minidos/*.asm)
+MINIDOS_PROGRAMS := $(patsubst ore/minidos/programs/%.ore,$(BUILD)/minidos/%.bin,$(wildcard ore/minidos/programs/*.ore))
 
-all: vm vmasm vmld vmc0 vmc.bin
+all: vm vmasm vmld vmc0 vmc.bin minidos.bin minidos.img
 
 vm: $(VM_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $^ -lm
@@ -39,15 +42,30 @@ vmc.bin: vmc1.bin vm vmasm
 	./vmasm -I ./ore/lib -I . $@.asm -o $@
 	rm -f $@.asm
 
+# MiniDos lives above the programs it runs, which start at 0
+minidos.bin: vmc.bin vm vmasm $(MINIDOS_SRC) $(ORE_LIB)
+	./vmc -b 0x100000 ore/minidos/main.ore -o $@
+
+$(BUILD)/minidos/%.bin: ore/minidos/programs/%.ore vmc.bin vm vmasm $(ORE_LIB)
+	@mkdir -p $(dir $@)
+	./vmc $< -o $@
+
+# A 4 MB disk with the MiniDos programs on it, which MiniDos formats and fills itself
+minidos.img: minidos.bin $(MINIDOS_PROGRAMS)
+	dd if=/dev/zero of=$@ bs=512 count=8192 2> /dev/null
+	(echo FORMAT MINIDOS; for p in $(MINIDOS_PROGRAMS); do \
+	    echo "IMPORT $$p $$(basename $$p .bin | tr a-z A-Z).EXE"; done; echo EXIT) | \
+	    ./vm -m 4096 -b $@ minidos.bin > /dev/null
+
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) -c -o $@ $<
 
-test: vm vmasm vmld vmc0 vmc.bin
+test: vm vmasm vmld vmc0 vmc.bin minidos.bin
 	sh tests/run.sh $(T)
 
 clean:
-	rm -rf $(BUILD) vm vmasm vmld vmc0 vmc1.bin vmc.bin
+	rm -rf $(BUILD) vm vmasm vmld vmc0 vmc1.bin vmc.bin minidos.bin minidos.img
 
 -include $(VM_OBJ:.o=.d) $(ASM_OBJ:.o=.d) $(LD_OBJ:.o=.d) $(VMC_OBJ:.o=.d)
 
