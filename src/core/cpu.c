@@ -121,10 +121,17 @@ void cpu_return_from_interrupt(VM *vm) {
     memcpy(vm->registers, frame, sizeof(frame));
 }
 
-// The vector table holds one 32-bit handler address per vector; 0 means there is no handler
+// The vector table holds one 32-bit handler address per vector; 0 means there is no handler. It
+// belongs to the kernel, so it is read with supervisor rights even when user code is interrupted.
 static uint32_t vector_handler(VM *vm, uint8_t vector) {
-    uint32_t table = vm->control[CR_IVTB];
-    return table ? memory_read_dword(vm, table + vector * 4u) : 0;
+    uint32_t table = vm->control[CR_IVTB], status = vm->registers[R4_SR];
+    if (!table) {
+        return 0;
+    }
+    vm->registers[R4_SR] |= SYS_FLAG;
+    uint32_t handler = memory_read_dword(vm, table + vector * 4u);
+    vm->registers[R4_SR] = status;
+    return handler;
 }
 
 // Saves the execution context and runs the handler in supervisor mode with interrupts and
