@@ -1,5 +1,5 @@
 vm: error: index 10 is out of bounds for length 10
-vm: at 0x02B0 <index_error.digit+48> ore/tests/index_error.ore:4: CALL rt.index_error
-vm: #1 0x0310 <index_error.main+68> ore/tests/index_error.ore:9: CALL index_error.digit
-vm: #2 0x0274 <main> ore/tests/index_error.ore:7: CALL index_error.main
-vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main
+vm: at 0x00EC <index_error.digit+32> ore/tests/index_error.ore:4: CALL rt.index_error
+vm: #1 0x0134 <index_error.main+52> ore/tests/index_error.ore:9: CALL index_error.digit
+vm: #2 0x00C0 <main> ore/tests/index_error.ore:7: CALL index_error.main
+vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

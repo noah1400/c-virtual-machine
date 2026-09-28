@@ -1,5 +1,5 @@
 vm: error: null pointer
-vm: at 0x0324 <null_argument.both.L4+16> ore/tests/null_argument.ore:14: CALL rt.null_error
-vm: #1 0x03AC <null_argument.main+64> ore/tests/null_argument.ore:24: CALL null_argument.both
-vm: #2 0x0274 <main> ore/tests/null_argument.ore:19: CALL null_argument.main
-vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main
+vm: at 0x0128 <null_argument.both.L4+16> ore/tests/null_argument.ore:14: CALL rt.null_error
+vm: #1 0x01B0 <null_argument.main+64> ore/tests/null_argument.ore:24: CALL null_argument.both
+vm: #2 0x0078 <main> ore/tests/null_argument.ore:19: CALL null_argument.main
+vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

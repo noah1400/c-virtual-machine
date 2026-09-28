@@ -1,5 +1,7 @@
 ; The assembly behind std/cpu. MFCR and MTCR only take a register number as an immediate, so the
 ; control register functions try each number in turn.
+    .library
+
 .macro READ_CONTROL n
     CMP R6, #\n
     JNZ .skip\@

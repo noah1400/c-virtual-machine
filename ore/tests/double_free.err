@@ -1,4 +1,4 @@
 vm: error: free of memory that new did not return or that is already free
-vm: at 0x02AC <double_free.main+44> ore/tests/double_free.ore:6: CALL rt.free
-vm: #1 0x0274 <main> ore/tests/double_free.ore:3: CALL double_free.main
-vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main
+vm: at 0x00CC <double_free.main+44> ore/tests/double_free.ore:6: CALL rt.free
+vm: #1 0x0094 <main> ore/tests/double_free.ore:3: CALL double_free.main
+vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

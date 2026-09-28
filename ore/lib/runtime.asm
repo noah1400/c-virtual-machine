@@ -1,12 +1,15 @@
 ; The runtime of Ore programs: startup, command-line arguments, memory and runtime errors. The error
 ; routines never return; they stop the program with syscall 35, which reports the Ore line that called
-; them.
+; them. As a library, it gives a program only the routines and texts that it uses; a HALT follows the
+; syscalls that do not return, so that no routine seems to run on into the next.
+    .library
     .entry rt.start
 
 .text
 rt.start:
     CALL main
     SYSCALL #30
+    HALT
 
 ; Returns the program path and its arguments as a [][]u8, the pointer in R0 and the count in R5
 rt.args:
@@ -206,6 +209,7 @@ rt.abort:
     LOAD R0, rt.message
     LOAD R5, #1
     SYSCALL #35
+    HALT
 
 .data
 rt.true:

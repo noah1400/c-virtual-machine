@@ -1,5 +1,5 @@
 vm: error: null pointer
-vm: at 0x02E8 <null_after_test.second.L5+20> ore/tests/null_after_test.ore:19: CALL rt.null_error
-vm: #1 0x03A8 <null_after_test.main+164> ore/tests/null_after_test.ore:26: CALL null_after_test.second
-vm: #2 0x0274 <main> ore/tests/null_after_test.ore:22: CALL null_after_test.main
-vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main
+vm: at 0x00EC <null_after_test.second.L5+20> ore/tests/null_after_test.ore:19: CALL rt.null_error
+vm: #1 0x01AC <null_after_test.main+164> ore/tests/null_after_test.ore:26: CALL null_after_test.second
+vm: #2 0x0078 <main> ore/tests/null_after_test.ore:22: CALL null_after_test.main
+vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

@@ -1,4 +1,4 @@
 vm: error: slice 6:12 is out of bounds for length 8
-vm: at 0x0358 <slice_error.main.L3+12> ore/tests/slice_error.ore:8: CALL rt.slice_error
-vm: #1 0x0274 <main> ore/tests/slice_error.ore:3: CALL slice_error.main
-vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main
+vm: at 0x0188 <slice_error.main.L3+12> ore/tests/slice_error.ore:8: CALL rt.slice_error
+vm: #1 0x00EC <main> ore/tests/slice_error.ore:3: CALL slice_error.main
+vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

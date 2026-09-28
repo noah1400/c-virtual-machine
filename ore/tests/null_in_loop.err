@@ -1,4 +1,4 @@
 vm: error: null pointer
-vm: at 0x02C4 <null_in_loop.main.L1+20> ore/tests/null_in_loop.ore:12: CALL rt.null_error
-vm: #1 0x0274 <main> ore/tests/null_in_loop.ore:8: CALL null_in_loop.main
-vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main
+vm: at 0x00BC <null_in_loop.main.L1+16> ore/tests/null_in_loop.ore:12: CALL rt.null_error
+vm: #1 0x0078 <main> ore/tests/null_in_loop.ore:8: CALL null_in_loop.main
+vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

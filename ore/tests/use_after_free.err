@@ -1,4 +1,4 @@
-vm: error: Memory access to unallocated heap: address 0x11CC
-vm: at 0x0348 <use_after_free.main.L2+20> ore/tests/use_after_free.ore:7: STORE R0, [R6]
-vm: #1 0x0274 <main> ore/tests/use_after_free.ore:3: CALL use_after_free.main
-vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:8: CALL main
+vm: error: Memory access to unallocated heap: address 0x118C
+vm: at 0x01B4 <use_after_free.main.L2+20> ore/tests/use_after_free.ore:7: STORE R0, [R6]
+vm: #1 0x0110 <main> ore/tests/use_after_free.ore:3: CALL use_after_free.main
+vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main
