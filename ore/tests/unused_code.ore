@@ -1,0 +1,28 @@
+// Only what main reaches is generated, directly or through the functions and globals it uses, and what
+// assembly names. Nothing defines missing, which only unreached code calls.
+import "modules/callback";
+
+extern fn missing() int;
+
+fn unreached() int {
+    return missing();
+}
+
+var unreached_handler: fn() int = unreached;
+
+struct Greeter {
+    greet: fn([]u8);
+}
+
+fn hello(name: []u8) {
+    print("hello, ", name, "\n");
+}
+
+var english = Greeter { greet: hello };
+var current: *Greeter = &english;
+
+fn main() {
+    current.greet("world");
+    callback.run();
+    callback.run();
+}

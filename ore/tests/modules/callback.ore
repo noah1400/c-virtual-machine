@@ -1,0 +1,8 @@
+// A module whose assembly calls back into Ore, by the names the compilers give a function and a global
+pub extern fn run();
+
+var runs: int;
+
+fn called(count: int) {
+    print("called from assembly, run ", count, "\n");
+}
