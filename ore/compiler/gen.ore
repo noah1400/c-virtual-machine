@@ -759,6 +759,19 @@ fn swapped(op: ast.TokenKind) ast.TokenKind {
     return op;
 }
 
+// When both operands need code, leaves the left one in R6 and the right one in R0, which suits an
+// operation that can take them either way; tells whether it did
+fn swap_operands(g: *Gen, e: *ast.Expr) bool {
+    if (is_operand(e.right) || is_left_operand(e)) {
+        return false;
+    }
+    gen_expr(g, e.left);
+    emit(g, "    PUSH R0\n");
+    gen_expr(g, e.right);
+    emit(g, "    POP R6\n");
+    return true;
+}
+
 // Leaves the left operand in R0 and puts the right one where the instruction can take it
 fn operands(g: *Gen, e: *ast.Expr) []u8 {
     if (is_operand(e.right)) {
@@ -903,6 +916,14 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
         }
         return;
     }
+    if (is_comparison(e) && swap_operands(g, e)) {
+        emits(g, "    CMP R6, R0\n    SET%s R0\n", [][]u8 { condition(e.op, left, false) });
+        return;
+    }
+    if (is_commutative(e.op) && swap_operands(g, e)) {
+        arithmetic(g, e.op, e.type, "R6");
+        return;
+    }
     var right = operands(g, e);
     if (is_comparison(e)) {
         emits(g, "    CMP R0, %s\n    SET%s R0\n", [][]u8 { right, condition(e.op, left, false) });
@@ -954,6 +975,8 @@ fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
             gen_expr(g, e.right);
             emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { operand, condition(swapped(e.op), e.left.type, !when) },
                 []int { target });
+        } else if (swap_operands(g, e)) {
+            emitf(g, "    CMP R6, R0\n    J%s .L%d\n", [][]u8 { code }, []int { target });
         } else {
             var right = operands(g, e);
             emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, code }, []int { target });
