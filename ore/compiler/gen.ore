@@ -27,6 +27,8 @@ struct Gen {
     checked: ast.List;      // locals that are not null here, since code before checked them
     bounds: [8]Bound;       // what the loops around keep indexes below
     bound_count: int;
+    returns: [256]int;      // where the body jumps to the epilogue, as far as they fit
+    return_count: int;
 }
 
 // An index that a loop keeps from 0 up to below the length of a slice, or below a limit when there is no
@@ -2135,6 +2137,10 @@ fn gen_stmt(g: *Gen, s: *ast.Stmt) {
                     emit(g, "    LOAD R0, [BP+8]\n");
                 }
             }
+            if (g.return_count < g.returns.len) {
+                g.returns[g.return_count] = g.body.len;
+                g.return_count += 1;
+            }
             emit(g, "    JMP .ret\n");
         }
     }
@@ -2297,6 +2303,7 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
 
     g.frame = 0;
     g.checked.count = 0;
+    g.return_count = 0;
     str.clear(&g.body);
     for (var i = 0; i < d.params.len; i += 1) {
         d.params[i].symbol.offset = offset;
@@ -2317,6 +2324,9 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     // A return at the end has nowhere to jump
     if (str.ends_with(str.text(&g.body), "    JMP .ret\n")) {
         g.body.len -= 13;
+        if (g.return_count > 0 && g.returns[g.return_count - 1] == g.body.len) {
+            g.return_count -= 1;
+        }
     }
     loc(g, d.body.end_line);
 
@@ -2354,12 +2364,22 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
             }
         }
     }
-    str.append(&g.text, body[start:]);
-    str.append(&g.text, ".ret:\n");
+    var epilogue = str.builder(64);
     for (var i = saved - 1; i >= 0; i -= 1) {
-        format(&g.text, "    POP %s\n", [][]u8 { register_names[8 + i] }, []int {});
+        format(&epilogue, "    POP %s\n", [][]u8 { register_names[8 + i] }, []int {});
     }
-    format(&g.text, "    LEAVE\n    %s\n", [][]u8 { ending }, []int {});
+    format(&epilogue, "    LEAVE\n    %s\n", [][]u8 { ending }, []int {});
+    // Returns before the end leave through a copy of a short epilogue instead of jumping to it
+    var rest = start;
+    for (var i = 0; i < g.return_count && saved <= 3; i += 1) {
+        str.append(&g.text, body[rest:g.returns[i]]);
+        str.append(&g.text, str.text(&epilogue));
+        rest = g.returns[i] + 13;
+    }
+    str.append(&g.text, body[rest:]);
+    str.append(&g.text, ".ret:\n");
+    str.append(&g.text, str.text(&epilogue));
+    str.release(&epilogue);
 }
 
 // Emits the initial value of data of type t
