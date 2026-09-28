@@ -496,6 +496,26 @@ fn note_not_null(g: *Gen, e: *ast.Expr, holds: bool) {
     }
 }
 
+// The local that a condition shows not to be null where it holds, as note_not_null finds it
+fn null_fact(e: *ast.Expr, holds: bool) *ast.Symbol {
+    if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.BANG) {
+        return null_fact(e.left, !holds);
+    }
+    if (e.kind == ast.ExprKind.BINARY && (e.op == ast.TokenKind.EQ || e.op == ast.TokenKind.NE) &&
+        (e.op == ast.TokenKind.NE) == holds && e.right.kind == ast.ExprKind.NULL && unshared(e.left)) {
+        return e.left.symbol;
+    }
+    return null;
+}
+
+// Whether a condition branches once, after all of its code, rather than part way as && and || do
+fn jumps_once(e: *ast.Expr) bool {
+    if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.BANG) {
+        return jumps_once(e.left);
+    }
+    return e.kind != ast.ExprKind.BINARY || e.op != ast.TokenKind.ANDAND && e.op != ast.TokenKind.OROR;
+}
+
 // Whether code can go on after a statement, as far as its last statements show
 fn falls_through(s: *ast.Stmt) bool {
     switch (s.kind) {
@@ -1956,7 +1976,19 @@ fn gen_stmt(g: *Gen, s: *ast.Stmt) {
             var end = label(g);
             var saved: Checked;
             save_checked(g, &saved);
+            var fact = null_fact(s.cond, true);
+            var known = fact != null && is_checked(g, fact);
             gen_branch(g, s.cond, otherwise);
+            // What a condition that jumps once checked holds on both of its ways
+            if (jumps_once(s.cond)) {
+                save_checked(g, &saved);
+                for (var i = 0; i < saved.count && fact != null && !known; i += 1) {
+                    if (saved.items[i] == fact as *u8) {
+                        saved.count -= 1;
+                        saved.items[i] = saved.items[saved.count];
+                    }
+                }
+            }
             gen_block(g, s.then);
             if (s.otherwise != null) {
                 emitd(g, "    JMP .L%d\n", []int { end });
