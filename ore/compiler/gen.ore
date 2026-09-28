@@ -988,6 +988,12 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
         return;
     }
 
+    var bits = tested_bits(e);
+    if (bits != null) {
+        gen_test(g, bits);
+        emits(g, "    SET%s R0\n", [][]u8 { condition(e.op, left, false) });
+        return;
+    }
     if (is_comparison(e)) {
         var register = register_of(e.left);
         if (register.ptr != null && is_operand(e.right)) {
@@ -1023,6 +1029,52 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
     arithmetic(g, e.op, e.type, right);
 }
 
+// The x & y or x % 2^k that a comparison with 0 tests, or else nothing
+fn tested_bits(e: *ast.Expr) *ast.Expr {
+    if (!is_comparison(e) || e.op != ast.TokenKind.EQ && e.op != ast.TokenKind.NE || !e.right.is_const ||
+        !wide.is_zero(e.right.value)) {
+        return null;
+    }
+    var x = e.left;
+    if (x.kind != ast.ExprKind.BINARY || x.type.kind != ast.TypeKind.INT) {
+        return null;
+    }
+    if (x.op == ast.TokenKind.AMP || x.op == ast.TokenKind.PERCENT && x.right.is_const &&
+        shift_of(wide.low(x.right.value)) > 0) {
+        return x;
+    }
+    return null;
+}
+
+// Sets the zero flag from the bits that x & y or x % 2^k keeps
+fn gen_test(g: *Gen, x: *ast.Expr) {
+    var register = register_of(x.left);
+    var operand: []u8;
+    if (x.op == ast.TokenKind.PERCENT) {
+        operand = constant_operand(wide.low(x.right.value) - 1);
+        if (register.ptr == null) {
+            gen_expr(g, x.left);
+            register = "R0";
+        }
+    } else if (register.ptr != null && is_operand(x.right)) {
+        operand = gen_operand(g, x.right);
+    } else if (register_of(x.right).ptr != null && is_operand(x.left)) {
+        register = register_of(x.right);
+        operand = gen_operand(g, x.left);
+    } else if (is_left_operand(x)) {
+        operand = gen_operand(g, x.left);
+        gen_expr(g, x.right);
+        register = "R0";
+    } else if (swap_operands(g, x)) {
+        register = "R6";
+        operand = "R0";
+    } else {
+        operand = operands(g, x);
+        register = "R0";
+    }
+    emits(g, "    TEST %s, %s\n", [][]u8 { register, operand });
+}
+
 // Jumps to target unless the condition holds
 fn gen_branch(g: *Gen, e: *ast.Expr, target: int) {
     gen_condition(g, e, target, false);
@@ -1053,6 +1105,12 @@ fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
         gen_condition(g, e.left, skip, !when);
         gen_condition(g, e.right, target, when);
         merge_label(g, skip, &saved, null, null);
+        return;
+    }
+    var bits = tested_bits(e);
+    if (bits != null) {
+        gen_test(g, bits);
+        emitf(g, "    J%s .L%d\n", [][]u8 { condition(e.op, e.left.type, !when) }, []int { target });
         return;
     }
     if (is_comparison(e) && check.is_scalar(e.left.type)) {
