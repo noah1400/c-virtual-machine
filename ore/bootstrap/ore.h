@@ -8,6 +8,7 @@ typedef enum {
     TOK_EOF,
     TOK_IDENT,
     TOK_INT,
+    TOK_FLOAT,
     TOK_STRING,
 
     TOK_AS,
@@ -82,7 +83,7 @@ typedef struct {
     int line;
     const char *text;       // where the token starts in the source
     int length;
-    int64_t value;          // integer and character literals
+    int64_t value;          // integer and character literals, and the bits of float literals
     char *bytes;            // string literals, decoded and NUL-terminated
     int size;
 } Token;
@@ -98,6 +99,7 @@ typedef enum {
     TY_VOID,
     TY_BOOL,
     TY_INT,
+    TY_FLOAT,
     TY_POINTER,
     TY_ARRAY,
     TY_SLICE,
@@ -168,6 +170,7 @@ typedef enum {
     EX_LEN,                 // the length of a slice
     EX_PTR,                 // the pointer of a slice
     EX_INT,
+    EX_FLOAT,
     EX_BOOL,
     EX_NULL,
     EX_STRING,
@@ -201,7 +204,7 @@ struct Expr {
 
     Type *type;             // set by the checker
     Type *named;            // the type written in casts, literals and new
-    int is_const;           // value holds an integer, boolean or enum known when compiling
+    int is_const;           // value holds an integer, boolean, enum or the bits of an f32 known when compiling
     Symbol *symbol;         // what a name stands for
     Field *field;
     Builtin builtin;

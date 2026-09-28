@@ -315,7 +315,12 @@ static const char *operands(Gen *g, Expr *e) {
 }
 
 static void arithmetic(Gen *g, TokenKind op, const Type *t, const char *right) {
+    static const char *const float_instructions[] = { "FADD", "FSUB", "FMUL", "FDIV" };
     const char *instruction = "ADD";
+    if (t->kind == TY_FLOAT) {
+        emit(g, "    %s R0, %s\n", float_instructions[op - TOK_PLUS], right);
+        return;
+    }
     switch (op) {
         case TOK_PLUS:
             instruction = "ADD";
@@ -354,6 +359,28 @@ static void arithmetic(Gen *g, TokenKind op, const Type *t, const char *right) {
     normalize(g, t);
 }
 
+// Leaves the left f32 of a comparison in R0 and the right one in R6
+static void float_operands(Gen *g, Expr *e) {
+    const char *right = operands(g, e);
+    if (strcmp(right, "R6") != 0) {
+        emit(g, "    LOAD R6, %s\n", right);
+    }
+}
+
+// Compares the f32s in R0 and R6 so that the unsigned condition it returns holds when the comparison does;
+// == and != need two, and get NULL. Unordered operands set Z and C, so that A and AE do not hold.
+static const char *float_compare(Gen *g, TokenKind op) {
+    if (op == TOK_LT || op == TOK_LE) {
+        emit(g, "    FCMP R6, R0\n");
+    } else {
+        emit(g, "    FCMP R0, R6\n");
+    }
+    if (op == TOK_EQ || op == TOK_NE) {
+        return NULL;
+    }
+    return op == TOK_GT || op == TOK_LT ? "A" : "AE";
+}
+
 static void gen_binary(Gen *g, Expr *e) {
     Type *left = e->left->type;
 
@@ -382,6 +409,18 @@ static void gen_binary(Gen *g, Expr *e) {
         return;
     }
 
+    if (is_comparison(e) && left->kind == TY_FLOAT) {
+        float_operands(g, e);
+        const char *code = float_compare(g, e->op);
+        if (code) {
+            emit(g, "    SET%s R0\n", code);
+        } else if (e->op == TOK_EQ) {
+            emit(g, "    SETZ R0\n    SETAE R6\n    AND R0, R6\n");
+        } else {
+            emit(g, "    SETNZ R0\n    SETB R6\n    OR R0, R6\n");
+        }
+        return;
+    }
     const char *right = operands(g, e);
     if (is_comparison(e)) {
         emit(g, "    CMP R0, %s\n    SET%s R0\n", right, condition(e->op, left, 0));
@@ -392,6 +431,19 @@ static void gen_binary(Gen *g, Expr *e) {
 
 // Jumps to target unless the condition holds
 static void gen_branch(Gen *g, Expr *e, int target) {
+    if (is_comparison(e) && e->left->type->kind == TY_FLOAT) {
+        float_operands(g, e);
+        const char *code = float_compare(g, e->op);
+        if (code) {
+            emit(g, "    J%s .L%d\n", code[1] ? "B" : "BE", target);
+        } else if (e->op == TOK_EQ) {
+            emit(g, "    JNZ .L%d\n    JB .L%d\n", target, target);
+        } else {
+            int skip = label(g);
+            emit(g, "    JNZ .L%d\n    JAE .L%d\n.L%d:\n", skip, target, skip);
+        }
+        return;
+    }
     if (is_comparison(e) && is_scalar(e->left->type)) {
         const char *right = operands(g, e);
         emit(g, "    CMP R0, %s\n    J%s .L%d\n", right, condition(e->op, e->left->type, 1), target);
@@ -472,6 +524,8 @@ static void gen_print(Gen *g, Expr *e) {
                     "    MOVE R0, R6\n    SYSCALL #2\n", done, done);
         } else if (t->kind == TY_POINTER || t->kind == TY_FN) {
             emit(g, "    SYSCALL #5\n");
+        } else if (t->kind == TY_FLOAT) {
+            emit(g, "    SYSCALL #7\n");
         } else if (t->kind == TY_INT && !t->is_signed) {
             emit(g, "    LOAD R5, #10\n    SYSCALL #6\n");
         } else {
@@ -659,6 +713,28 @@ static void gen_addr(Gen *g, Expr *e) {
     }
 }
 
+// Converts the value in R0 from one scalar type to another. ITOF and FTOI take signed integers, so
+// u32 values from 2^31 on go through a smaller value: halved with the lost bit kept for rounding, or
+// less 2^31.
+static void convert(Gen *g, const Type *from, const Type *to) {
+    if (from->kind == TY_INT && to->kind == TY_FLOAT && from->size == 4 && !from->is_signed) {
+        int big = label(g), done = label(g);
+        emit(g, "    CMP R0, #0\n    JL .L%d\n    ITOF R0, R0\n    JMP .L%d\n.L%d:\n    MOVE R6, R0\n    AND R6, #1\n"
+                "    SHR R0, #1\n    OR R0, R6\n    ITOF R0, R0\n    FADD R0, R0\n.L%d:\n", big, done, big, done);
+    } else if (from->kind == TY_INT && to->kind == TY_FLOAT) {
+        emit(g, "    ITOF R0, R0\n");
+    } else if (from->kind == TY_FLOAT && to->kind == TY_INT && to->size == 4 && !to->is_signed) {
+        int big = label(g), done = label(g);
+        emit(g, "    FCMP R0, #0x4F000000\n    JAE .L%d\n    FTOI R0, R0\n    JMP .L%d\n.L%d:\n"
+                "    FSUB R0, #0x4F000000\n    FTOI R0, R0\n    XOR R0, #0x80000000\n.L%d:\n", big, done, big, done);
+    } else if (from->kind == TY_FLOAT && to->kind == TY_INT) {
+        emit(g, "    FTOI R0, R0\n");
+        normalize(g, to);
+    } else {
+        normalize(g, to);
+    }
+}
+
 static void gen_expr(Gen *g, Expr *e) {
     Type *t = e->type;
 
@@ -686,6 +762,8 @@ static void gen_expr(Gen *g, Expr *e) {
             gen_expr(g, e->left);
             if (e->left->type->kind == TY_ARRAY) {
                 emit(g, "    LOAD R5, #%d\n", e->left->type->length);
+            } else if (t->kind == TY_FLOAT) {
+                emit(g, "    ITOF R0, R0\n");
             }
             return;
         case EX_LEN:
@@ -708,6 +786,8 @@ static void gen_expr(Gen *g, Expr *e) {
             gen_expr(g, e->left);
             if (e->op == TOK_BANG) {
                 emit(g, "    XOR R0, #1\n");
+            } else if (t->kind == TY_FLOAT) {
+                emit(g, "    FNEG R0\n");
             } else {
                 emit(g, "    %s R0\n", e->op == TOK_MINUS ? "NEG" : "NOT");
                 normalize(g, t);
@@ -733,7 +813,7 @@ static void gen_expr(Gen *g, Expr *e) {
             return;
         case EX_CAST:
             gen_expr(g, e->left);
-            normalize(g, t);
+            convert(g, e->left->type, t);
             return;
         case EX_STRUCT:
         case EX_ARRAY:

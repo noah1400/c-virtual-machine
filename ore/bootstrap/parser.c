@@ -185,7 +185,8 @@ static Expr *parse_primary(Parser *p) {
 
     switch (t->kind) {
         case TOK_INT:
-            e = new_expr(EX_INT, t->line);
+        case TOK_FLOAT:
+            e = new_expr(t->kind == TOK_INT ? EX_INT : EX_FLOAT, t->line);
             e->value = t->value;
             p->pos++;
             return e;

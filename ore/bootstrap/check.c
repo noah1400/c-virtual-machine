@@ -15,6 +15,7 @@ static Type t_i32 = { .kind = TY_INT, .size = 4, .align = 4, .is_signed = 1, .na
 static Type t_u8 = { .kind = TY_INT, .size = 1, .align = 1, .name = "u8" };
 static Type t_u16 = { .kind = TY_INT, .size = 2, .align = 2, .name = "u16" };
 static Type t_u32 = { .kind = TY_INT, .size = 4, .align = 4, .name = "u32" };
+static Type t_f32 = { .kind = TY_FLOAT, .size = 4, .align = 4, .name = "f32" };
 static Type t_null = { .kind = TY_NULL, .size = 4, .align = 4, .name = "null" };
 static Type t_untyped = { .kind = TY_UNTYPED, .size = 4, .align = 4, .name = "a number" };
 static Field syscall_fields[] = { { "value", &t_i32, 0, 0 }, { "status", &t_i32, 4, 0 } };
@@ -32,6 +33,7 @@ static Symbol universe[] = {
     { .kind = SYM_TYPE, .name = "u8", .type = &t_u8 },
     { .kind = SYM_TYPE, .name = "u16", .type = &t_u16 },
     { .kind = SYM_TYPE, .name = "u32", .type = &t_u32 },
+    { .kind = SYM_TYPE, .name = "f32", .type = &t_f32 },
     { .kind = SYM_TYPE, .name = "bool", .type = &t_bool },
     { .kind = SYM_TYPE, .name = "SyscallResult", .type = &t_syscall },
     { .kind = SYM_BUILTIN, .name = "print", .builtin = BUILTIN_PRINT },
@@ -125,8 +127,8 @@ const char *type_name(const Type *t) {
 }
 
 int is_scalar(const Type *t) {
-    return t->kind == TY_BOOL || t->kind == TY_INT || t->kind == TY_POINTER || t->kind == TY_FN ||
-           t->kind == TY_ENUM || t->kind == TY_NULL || t->kind == TY_UNTYPED;
+    return t->kind == TY_BOOL || t->kind == TY_INT || t->kind == TY_FLOAT || t->kind == TY_POINTER ||
+           t->kind == TY_FN || t->kind == TY_ENUM || t->kind == TY_NULL || t->kind == TY_UNTYPED;
 }
 
 static int is_integer(const Type *t) {
@@ -150,10 +152,44 @@ static int64_t wrap(int64_t value, const Type *t) {
 
 // Every value of from is also a value of to
 static int widens(const Type *from, const Type *to) {
+    if (from->kind == TY_INT && to->kind == TY_FLOAT) {
+        return from->size <= 2;
+    }
     if (from->kind != TY_INT || to->kind != TY_INT || to->size <= from->size) {
         return 0;
     }
     return to->is_signed || !from->is_signed;
+}
+
+// f32 constants keep their bits
+static float to_float(int64_t value) {
+    uint32_t bits = (uint32_t)value;
+    float f;
+    memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
+static int64_t float_bits(float f) {
+    uint32_t bits;
+    memcpy(&bits, &f, sizeof(bits));
+    return bits;
+}
+
+// Conversions of constants between integers and f32, as the machine code for them computes them
+static int64_t int_to_float(int64_t value) {
+    return float_bits((float)value);
+}
+
+static int32_t truncate_float(float f) {
+    return f >= -2147483648.0f && f < 2147483648.0f ? (int32_t)f : INT32_MIN;
+}
+
+static int64_t float_to_int(int64_t value, const Type *to) {
+    float f = to_float(value);
+    if (to->size == 4 && !to->is_signed && f >= 2147483648.0f) {
+        return (uint32_t)truncate_float(f - 2147483648.0f) ^ 0x80000000u;
+    }
+    return wrap(truncate_float(f), to);
 }
 
 static Expr *new_expr(ExprKind kind, int line) {
@@ -260,9 +296,6 @@ static Symbol *type_symbol(Checker *c, TypeExpr *t) {
     } else {
         s = lookup(c, t->name);
     }
-    if (!s && strcmp(t->name, "f32") == 0) {
-        error(c, t->line, "f32 is not supported yet");
-    }
     if (!s || s->kind != SYM_TYPE) {
         error(c, t->line, "%s is not a type", t->name);
     }
@@ -337,6 +370,11 @@ static void coerce(Checker *c, Expr **slot, Type *to) {
         if (wrap(e->value, to) != e->value) {
             error(c, e->line, "%lld does not fit in %s", (long long)e->value, type_name(to));
         }
+        e->type = to;
+        return;
+    }
+    if (e->is_const && is_integer(from) && to->kind == TY_FLOAT && (from->kind == TY_UNTYPED || widens(from, to))) {
+        e->value = int_to_float(e->value);
         e->type = to;
         return;
     }
@@ -475,6 +513,32 @@ static int64_t fold_binary(Checker *c, Expr *e, int64_t a, int64_t b, Type *t) {
     return wrap(result, t);
 }
 
+static int64_t fold_float(TokenKind op, int64_t left, int64_t right) {
+    float a = to_float(left), b = to_float(right);
+    switch (op) {
+        case TOK_PLUS:
+            return float_bits(a + b);
+        case TOK_MINUS:
+            return float_bits(a - b);
+        case TOK_STAR:
+            return float_bits(a * b);
+        case TOK_SLASH:
+            return float_bits(a / b);
+        case TOK_EQ:
+            return a == b;
+        case TOK_NE:
+            return a != b;
+        case TOK_LT:
+            return a < b;
+        case TOK_LE:
+            return a <= b;
+        case TOK_GT:
+            return a > b;
+        default:
+            return a >= b;
+    }
+}
+
 // Gives both operands one type: an untyped constant takes the other's type, and a smaller integer type
 // widens to a larger one that holds all of its values
 static Type *unify(Checker *c, Expr *e) {
@@ -524,11 +588,12 @@ static Type *binary_type(Checker *c, Expr *e) {
                       type_name(t));
             }
             if (e->op != TOK_EQ && e->op != TOK_NE && t->kind != TY_INT && t->kind != TY_UNTYPED &&
-                t->kind != TY_POINTER) {
+                t->kind != TY_POINTER && t->kind != TY_FLOAT) {
                 error(c, e->line, "%s values only compare with == and !=", type_name(t));
             }
             if (e->left->is_const && e->right->is_const) {
-                e->value = fold_binary(c, e, e->left->value, e->right->value, t);
+                e->value = t->kind == TY_FLOAT ? fold_float(e->op, e->left->value, e->right->value)
+                                               : fold_binary(c, e, e->left->value, e->right->value, t);
                 e->is_const = 1;
             }
             return e->type = &t_bool;
@@ -557,6 +622,13 @@ static Type *binary_type(Checker *c, Expr *e) {
             // fall through
         default:
             t = unify(c, e);
+            if (t->kind == TY_FLOAT && e->op >= TOK_PLUS && e->op <= TOK_SLASH) {
+                if (e->left->is_const && e->right->is_const) {
+                    e->value = fold_float(e->op, e->left->value, e->right->value);
+                    e->is_const = 1;
+                }
+                return e->type = t;
+            }
             if (!is_integer(t)) {
                 error(c, e->line, "%s needs integers, not %s", token_text(e->op), type_name(t));
             }
@@ -580,6 +652,11 @@ static Type *check_unary(Checker *c, Expr *e) {
     switch (e->op) {
         case TOK_MINUS:
         case TOK_TILDE:
+            if (t->kind == TY_FLOAT && e->op == TOK_MINUS) {
+                e->is_const = e->left->is_const;
+                e->value = e->left->value ^ 0x80000000u;
+                return e->type = t;
+            }
             if (!is_integer(t)) {
                 error(c, e->line, "%s needs an integer, not %s", token_text(e->op), type_name(t));
             }
@@ -829,6 +906,17 @@ static Type *check_cast(Checker *c, Expr *e) {
             e->is_const = 1;
             e->value = wrap(e->left->value, to);
         }
+    } else if (is_integer(from) && to->kind == TY_FLOAT) {
+        ok = 1;
+        e->is_const = e->left->is_const;
+        e->value = int_to_float(e->left->value);
+    } else if (from->kind == TY_FLOAT && to->kind == TY_INT) {
+        ok = 1;
+        e->is_const = e->left->is_const;
+        e->value = float_to_int(e->left->value, to);
+    } else if (from->kind == TY_FLOAT && to->kind == TY_FLOAT) {
+        e->is_const = e->left->is_const;
+        e->value = e->left->value;
     } else if ((from->kind == TY_BOOL || from->kind == TY_ENUM) && to->kind == TY_INT) {
         ok = 1;
         e->is_const = e->left->is_const;
@@ -898,6 +986,9 @@ static Type *check_expr(Checker *c, Expr *e) {
         case EX_INT:
             e->is_const = 1;
             return e->type = &t_untyped;
+        case EX_FLOAT:
+            e->is_const = 1;
+            return e->type = &t_f32;
         case EX_BOOL:
             e->is_const = 1;
             return e->type = &t_bool;

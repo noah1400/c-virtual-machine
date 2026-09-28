@@ -1,5 +1,7 @@
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "ore.h"
 
@@ -37,6 +39,7 @@ const char *token_text(TokenKind kind) {
         case TOK_IDENT:
             return "a name";
         case TOK_INT:
+        case TOK_FLOAT:
             return "a number";
         case TOK_STRING:
             return "a string";
@@ -103,11 +106,85 @@ static int escape(Lexer *lx) {
     }
 }
 
+// Digits and the underscores between them
+static const char *digit_run(const char *p) {
+    while (isdigit((unsigned char)*p) || *p == '_') {
+        p++;
+    }
+    return p;
+}
+
+static _Noreturn void invalid_number(Lexer *lx, const char *start, const char *p) {
+    while (isalnum((unsigned char)*p) || *p == '_') {
+        p++;
+    }
+    fail(lx->m, lx->line, "invalid number %.*s", (int)(p - start), start);
+}
+
+// A decimal number with a fraction, an exponent or both, rounded to the nearest f32
+static void float_number(Lexer *lx, Token *t) {
+    const char *start = lx->p, *p = digit_run(start);
+    int digits = 0;
+
+    for (const char *q = start; q < p; q++) {
+        digits += isdigit((unsigned char)*q) != 0;
+    }
+    if (p[-1] == '_') {
+        invalid_number(lx, start, p);
+    }
+    if (*p == '.' && isdigit((unsigned char)p[1])) {
+        p = digit_run(p + 1);
+        if (p[-1] == '_') {
+            invalid_number(lx, start, p);
+        }
+    }
+    if (*p == 'e' || *p == 'E') {
+        const char *q = p + 1 + (p[1] == '+' || p[1] == '-');
+        if (!isdigit((unsigned char)*q)) {
+            invalid_number(lx, start, p);
+        }
+        p = digit_run(q);
+        if (p[-1] == '_') {
+            invalid_number(lx, start, p);
+        }
+    }
+    if (isalnum((unsigned char)*p) || *p == '_') {
+        invalid_number(lx, start, p);
+    }
+    if (start[0] == '0' && digits > 1) {
+        fail(lx->m, lx->line, "decimal numbers other than 0 do not start with 0");
+    }
+    char *text = allocate((size_t)(p - start) + 1);
+    size_t length = 0;
+    for (const char *q = start; q < p; q++) {
+        if (*q != '_') {
+            text[length++] = *q;
+        }
+    }
+    float value = strtof(text, NULL);
+    free(text);
+    if (isinf(value)) {
+        fail(lx->m, lx->line, "number too large");
+    }
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    lx->p = p;
+    t->kind = TOK_FLOAT;
+    t->value = bits;
+}
+
 static void number(Lexer *lx, Token *t) {
     const char *start = lx->p;
     int base = 10, digits = 0;
     uint64_t value = 0;
 
+    if (start[0] != '0' || (start[1] != 'x' && start[1] != 'X' && start[1] != 'b' && start[1] != 'B')) {
+        const char *end = digit_run(start);
+        if ((*end == '.' && isdigit((unsigned char)end[1])) || *end == 'e' || *end == 'E') {
+            float_number(lx, t);
+            return;
+        }
+    }
     if (start[0] == '0' && (start[1] == 'x' || start[1] == 'X')) {
         base = 16;
         lx->p += 2;
@@ -128,9 +205,6 @@ static void number(Lexer *lx, Token *t) {
         }
         value = value * (uint64_t)base + (uint64_t)d;
         digits++;
-    }
-    if ((*lx->p == '.' && isdigit((unsigned char)lx->p[1])) || (base == 10 && (*lx->p == 'e' || *lx->p == 'E'))) {
-        fail(lx->m, lx->line, "floating-point numbers are not supported yet");
     }
     if (digits == 0 || lx->p[-1] == '_' || isalnum((unsigned char)*lx->p) || *lx->p == '_') {
         const char *end = lx->p;
