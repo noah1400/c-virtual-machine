@@ -317,6 +317,21 @@ static int access_range(VM *vm, uint32_t address, uint8_t *buffer, uint32_t size
     return VM_ERROR_NONE;
 }
 
+// The host address of an access that needs no translation and that the heap rules allow, or NULL when
+// memory_read or memory_write would translate or fault
+uint8_t *memory_direct(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
+    if (vm->control[CR_PTB] || (uint64_t)address + size > vm->memory_size) {
+        return NULL;
+    }
+    if (in_heap(vm, address, size)) {
+        const struct HeapNode *block = find_block(vm, address);
+        if (!block || size > block->start + block->size - address || (block->protection & access) != access) {
+            return NULL;
+        }
+    }
+    return vm->memory + address;
+}
+
 int memory_check_range(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
     return access_range(vm, address, NULL, size, access, 1);
 }

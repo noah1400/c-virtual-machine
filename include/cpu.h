@@ -5,6 +5,7 @@
 
 void cpu_reset(VM *vm);
 int cpu_execute_instruction(VM *vm, const Instruction *instr);
+uint32_t cpu_run(VM *vm, uint32_t limit);
 
 static inline uint8_t cpu_get_flag(const VM *vm, uint8_t flag) {
     return (vm->registers[R4_SR] & flag) != 0;

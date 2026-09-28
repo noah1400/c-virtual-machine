@@ -57,8 +57,31 @@ void vm_catch_signals(void) {
     sigaction(SIGHUP, &action, NULL);
 }
 
+// cpu_run stops at least this often to let vm_step notice a stop signal
+#define RUN_CHUNK (1u << 20)
+
+// How many instructions cpu_run may run before the next step, which is none while something has to happen
+// between instructions: a stop signal, device ticks, a trap, an interrupt to deliver or paging
+static uint32_t run_limit(const VM *vm) {
+    uint32_t status = vm->registers[R4_SR], limit = RUN_CHUNK;
+    if (stop_signal || vm->last_error != VM_ERROR_NONE || vm->io_ticking || vm->control[CR_PTB] ||
+        (status & TRAP_FLAG) || (vm->irq_pending && (status & INT_FLAG))) {
+        return 0;
+    }
+    if (vm->instruction_limit) {
+        uint32_t left = vm->instruction_count < vm->instruction_limit ? vm->instruction_limit - vm->instruction_count : 0;
+        limit = left < limit ? left : limit;
+    }
+    return limit;
+}
+
+// Runs the instructions that need no checks between them with cpu_run and steps through the others
 int vm_run(VM *vm) {
     while (!vm->halted) {
+        uint32_t limit = run_limit(vm);
+        if (limit) {
+            cpu_run(vm, limit);
+        }
         int result = vm_step(vm);
         if (result != VM_ERROR_NONE) {
             return result;

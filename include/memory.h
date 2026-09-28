@@ -32,6 +32,7 @@ int memory_read(VM *vm, uint32_t address, void *buffer, uint32_t size);
 int memory_write(VM *vm, uint32_t address, const void *buffer, uint32_t size);
 int memory_fetch(VM *vm, uint32_t address, uint32_t *word);
 uint32_t memory_peek(const VM *vm, uint32_t address, void *buffer, uint32_t size);
+uint8_t *memory_direct(VM *vm, uint32_t address, uint32_t size, uint8_t access);
 
 // Low-level memory operations
 uint8_t memory_read_byte(VM *vm, uint32_t address);
