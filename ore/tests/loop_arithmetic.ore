@@ -1,0 +1,60 @@
+// Loops whose arithmetic moves in front of them or steps along with their counters
+
+fn main() int {
+    var n = 7;
+    var m = 5;
+    var cells = new(int, n * m);
+
+    // A multiple of the counter of an inner loop, and a product that the inner loops do not change
+    var total = 0;
+    for (var i = 0; i < n; i += 1) {
+        for (var j = 0; j < m; j += 1) {
+            cells[i * m + j] = j * n + (n * m - i);
+            total += cells[i * m + j];
+        }
+    }
+    print(total, "\n");
+
+    // Counting down in steps of three, with a continue that skips part of the body
+    var sum: u32 = 0;
+    for (var k = 20; k > 0; k -= 3) {
+        if (k % 2 == 0) {
+            continue;
+        }
+        sum += (k * 7 + 3) as u32;
+        sum ^= (k << 4) as u32;
+    }
+    print(sum, "\n");
+
+    // A factor in a local, the counter subtracted from a value, and multiples that only a branch uses
+    var scale = 13;
+    var picked = 0;
+    for (var k = 0; k < 10; k += 2) {
+        picked += k * scale - 1;
+        picked += 100 - k * 3;
+        if (k > 4) {
+            picked += k * 11;
+        }
+    }
+    print(picked, "\n");
+
+    // Multiples that wrap around 32 bits
+    var big = 0;
+    for (var k = 0; k < 5; k += 1) {
+        big += k * 1000000007;
+    }
+    print(big, "\n");
+
+    // A while loop with a bound that it does not change, and a counter that its body changes
+    var x = 0;
+    var i = 0;
+    while (i < n * m + 1) {
+        x += i * 4;
+        i += 1;
+        if (x > 100) {
+            i += 1;
+        }
+    }
+    print(x, " ", i, "\n");
+    return 0;
+}

@@ -1,0 +1,575 @@
+// Moves arithmetic that a loop does not change in front of it, and replaces a multiple of the counter of a
+// for loop by a local that steps along with the counter. Only arithmetic that cannot fail moves: integer
+// operations other than division on constants, locals and slice lengths.
+import "ast";
+import "wide";
+
+// A value that code in a loop reads from a local instead of computing it: set in front of the loop, or set
+// after its init and stepped along with its counter by step
+struct Hoisted {
+    value: *ast.Expr;
+    symbol: *ast.Symbol;
+    step: *ast.Expr;
+}
+
+struct Loop {
+    stmt: *ast.Stmt;
+    assigned: ast.List;     // the locals that it changes, in its init, step or body
+    hoisted: ast.List;
+}
+
+// The loops around the code being rewritten, the outermost first
+var around: [16]*Loop;
+var depth: int;
+
+// The locals whose address the function takes, which code can change through a pointer
+var taken: ast.List;
+var temporaries: int;
+
+fn contains(list: *ast.List, item: *u8) bool {
+    for (var i = 0; i < list.count; i += 1) {
+        if (list.items[i] == item) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn local_of(e: *ast.Expr) *ast.Symbol {
+    if (e != null && e.kind == ast.ExprKind.NAME && e.symbol != null && e.symbol.kind == ast.SymbolKind.LOCAL) {
+        return e.symbol;
+    }
+    return null;
+}
+
+fn note_taken(e: *ast.Expr) {
+    if (e == null) {
+        return;
+    }
+    if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.AMP) {
+        var x = e.left;
+        while (x.kind == ast.ExprKind.FIELD && x.left.type.kind == ast.TypeKind.STRUCT ||
+               x.kind == ast.ExprKind.INDEX && x.left.type.kind == ast.TypeKind.ARRAY) {
+            x = x.left;
+        }
+        var s = local_of(x);
+        if (s != null) {
+            ast.add(&taken, s as *u8);
+        }
+    }
+    note_taken(e.left);
+    note_taken(e.right);
+    note_taken(e.third);
+    for (var i = 0; i < e.args.len; i += 1) {
+        note_taken(e.args[i]);
+    }
+}
+
+fn note_taken_in(s: *ast.Stmt) {
+    if (s == null) {
+        return;
+    }
+    note_taken(s.value);
+    note_taken(s.target);
+    note_taken(s.cond);
+    for (var i = 0; i < s.body.len; i += 1) {
+        note_taken_in(s.body[i]);
+    }
+    note_taken_in(s.then);
+    note_taken_in(s.otherwise);
+    note_taken_in(s.init);
+    note_taken_in(s.step);
+    for (var i = 0; i < s.cases.len; i += 1) {
+        note_taken_in(s.cases[i].body);
+    }
+    note_taken_in(s.fallback);
+}
+
+// Adds the locals that a statement declares or assigns to a list
+fn note_assigned(s: *ast.Stmt, list: *ast.List) {
+    if (s == null) {
+        return;
+    }
+    if (s.kind == ast.StmtKind.VAR && s.symbol != null) {
+        ast.add(list, s.symbol as *u8);
+    }
+    if (s.kind == ast.StmtKind.ASSIGN && local_of(s.target) != null) {
+        ast.add(list, s.target.symbol as *u8);
+    }
+    for (var i = 0; i < s.body.len; i += 1) {
+        note_assigned(s.body[i], list);
+    }
+    note_assigned(s.then, list);
+    note_assigned(s.otherwise, list);
+    note_assigned(s.init, list);
+    note_assigned(s.step, list);
+    for (var i = 0; i < s.cases.len; i += 1) {
+        note_assigned(s.cases[i].body, list);
+    }
+    note_assigned(s.fallback, list);
+}
+
+// Names of modules have no type
+fn is_int(t: *ast.Type) bool {
+    return t != null && t.kind == ast.TypeKind.INT;
+}
+
+// A local that nothing in the loop can change
+fn stays(s: *ast.Symbol, l: *Loop) bool {
+    return s.kind == ast.SymbolKind.LOCAL && !contains(&taken, s as *u8) && !contains(&l.assigned, s as *u8);
+}
+
+// Whether e is arithmetic that cannot fail on values that the loop does not change
+fn invariant(e: *ast.Expr, l: *Loop) bool {
+    if (e.is_const) {
+        return true;
+    }
+    switch (e.kind) {
+        case ast.ExprKind.NAME {
+            return is_int(e.type) && e.symbol != null && stays(e.symbol, l);
+        }
+        case ast.ExprKind.LEN {
+            return local_of(e.left) != null && stays(e.left.symbol, l);
+        }
+        case ast.ExprKind.CONVERT, ast.ExprKind.CAST {
+            return is_int(e.type) && is_int(e.left.type) && invariant(e.left, l);
+        }
+        case ast.ExprKind.UNARY {
+            return (e.op == ast.TokenKind.MINUS || e.op == ast.TokenKind.TILDE) && is_int(e.type) && invariant(e.left, l);
+        }
+        case ast.ExprKind.BINARY {
+            switch (e.op) {
+                case ast.TokenKind.PLUS, ast.TokenKind.MINUS, ast.TokenKind.STAR, ast.TokenKind.AMP, ast.TokenKind.PIPE,
+                     ast.TokenKind.CARET, ast.TokenKind.SHL, ast.TokenKind.SHR {
+                    return is_int(e.type) && invariant(e.left, l) && invariant(e.right, l);
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// The operations in e, with a multiplication counting as two
+fn cost(e: *ast.Expr) int {
+    if (e == null || e.is_const) {
+        return 0;
+    }
+    var own = 0;
+    if (e.kind == ast.ExprKind.BINARY && e.op == ast.TokenKind.STAR) {
+        own = 2;
+    } else if (e.kind == ast.ExprKind.BINARY || e.kind == ast.ExprKind.UNARY) {
+        own = 1;
+    }
+    return own + cost(e.left) + cost(e.right);
+}
+
+// A local saves more than it costs for arithmetic of at least two operations
+fn worth(e: *ast.Expr) bool {
+    return !e.is_const && is_int(e.type) && e.type.size == 4 && cost(e) >= 2;
+}
+
+fn same(a: *ast.Expr, b: *ast.Expr) bool {
+    if (a == null || b == null) {
+        return a == b;
+    }
+    if (a.kind != b.kind || a.op != b.op || a.type != b.type || a.is_const != b.is_const) {
+        return false;
+    }
+    if (a.is_const) {
+        return wide.equal(a.value, b.value);
+    }
+    if (a.kind == ast.ExprKind.NAME) {
+        return a.symbol == b.symbol;
+    }
+    return same(a.left, b.left) && same(a.right, b.right);
+}
+
+fn copy(e: *ast.Expr) *ast.Expr {
+    if (e == null) {
+        return null;
+    }
+    var c = new(ast.Expr);
+    *c = *e;
+    c.left = copy(e.left);
+    c.right = copy(e.right);
+    return c;
+}
+
+fn name_of(s: *ast.Symbol, line: int) *ast.Expr {
+    var e = new(ast.Expr);
+    e.kind = ast.ExprKind.NAME;
+    e.line = line;
+    e.name = s.name;
+    e.symbol = s;
+    e.type = s.type;
+    return e;
+}
+
+// The local that holds a value for a loop, shared by equal values
+fn hoist(l: *Loop, e: *ast.Expr, step: *ast.Expr) *ast.Expr {
+    for (var i = 0; i < l.hoisted.count; i += 1) {
+        var h = l.hoisted.items[i] as *Hoisted;
+        if ((h.step == null) == (step == null) && same(h.value, e)) {
+            return name_of(h.symbol, e.line);
+        }
+    }
+    temporaries += 1;
+    var s = new(ast.Symbol);
+    s.kind = ast.SymbolKind.LOCAL;
+    s.name = ast.cat([][]u8 { "$", ast.number(temporaries) });
+    s.type = e.type;
+    s.line = e.line;
+    var h = new(Hoisted);
+    h.value = e;
+    h.symbol = s;
+    h.step = step;
+    ast.add(&l.hoisted, h as *u8);
+    return name_of(s, e.line);
+}
+
+// A local that code inside the outermost count loops around sets, which they therefore change
+fn declared_in(s: *ast.Symbol, count: int) {
+    for (var i = 0; i < count; i += 1) {
+        if (!contains(&around[i].assigned, s as *u8)) {
+            ast.add(&around[i].assigned, s as *u8);
+        }
+    }
+}
+
+// Replaces what the loops around do not change in e by a local set in front of the outermost of them
+fn hoist_expr(e: *ast.Expr) *ast.Expr {
+    if (e == null || e.is_const) {
+        return e;
+    }
+    if (worth(e)) {
+        for (var i = 0; i < depth; i += 1) {
+            if (invariant(e, around[i])) {
+                var local = hoist(around[i], e, null);
+                declared_in(local.symbol, i);
+                return local;
+            }
+        }
+    }
+    e.left = hoist_expr(e.left);
+    e.right = hoist_expr(e.right);
+    e.third = hoist_expr(e.third);
+    for (var i = 0; i < e.args.len; i += 1) {
+        e.args[i] = hoist_expr(e.args[i]);
+    }
+    return e;
+}
+
+// The counter of a for loop that only its step changes, by a constant that goes in *step
+fn counter(s: *ast.Stmt, step: *int) *ast.Symbol {
+    var st = s.step;
+    if (s.kind != ast.StmtKind.FOR || st == null || st.kind != ast.StmtKind.ASSIGN ||
+        st.op != ast.TokenKind.ADD_ASSIGN && st.op != ast.TokenKind.SUB_ASSIGN || !st.value.is_const) {
+        return null;
+    }
+    var k = local_of(st.target);
+    if (k == null || !is_int(k.type) || k.type.size != 4 || contains(&taken, k as *u8)) {
+        return null;
+    }
+    var body = ast.List {};
+    note_assigned(s.then, &body);
+    var changed = contains(&body, k as *u8);
+    free(body.items);
+    if (changed) {
+        return null;
+    }
+    *step = wide.low(st.value.value);
+    if (st.op == ast.TokenKind.SUB_ASSIGN) {
+        *step = -*step;
+    }
+    return k;
+}
+
+// Whether e is the counter k times a factor plus a value that the loop does not change. The factor is the
+// number in *factor, times the value *scale when there is one.
+fn affine(e: *ast.Expr, k: *ast.Symbol, l: *Loop, factor: *int, scale: **ast.Expr) bool {
+    if (e.is_const || !is_int(e.type) || e.type.size != 4) {
+        return false;
+    }
+    switch (e.kind) {
+        case ast.ExprKind.NAME {
+            *factor = 1;
+            *scale = null;
+            return e.symbol == k;
+        }
+        case ast.ExprKind.CONVERT, ast.ExprKind.CAST {
+            return is_int(e.left.type) && affine(e.left, k, l, factor, scale);
+        }
+        case ast.ExprKind.UNARY {
+            if (e.op == ast.TokenKind.MINUS && affine(e.left, k, l, factor, scale) && *scale == null) {
+                *factor = -*factor;
+                return true;
+            }
+        }
+        case ast.ExprKind.BINARY {
+            switch (e.op) {
+                case ast.TokenKind.PLUS {
+                    return affine(e.left, k, l, factor, scale) && invariant(e.right, l) ||
+                        invariant(e.left, l) && affine(e.right, k, l, factor, scale);
+                }
+                case ast.TokenKind.MINUS {
+                    if (affine(e.left, k, l, factor, scale) && invariant(e.right, l)) {
+                        return true;
+                    }
+                    if (invariant(e.left, l) && affine(e.right, k, l, factor, scale) && *scale == null) {
+                        *factor = -*factor;
+                        return true;
+                    }
+                }
+                case ast.TokenKind.STAR {
+                    var by = e.right;
+                    if (!affine(e.left, k, l, factor, scale)) {
+                        by = e.left;
+                        if (!affine(e.right, k, l, factor, scale)) {
+                            return false;
+                        }
+                    }
+                    if (!invariant(by, l)) {
+                        return false;
+                    }
+                    if (by.is_const) {
+                        if (*scale != null && wide.low(by.value) != 1) {
+                            return false;
+                        }
+                        *factor = *factor * wide.low(by.value);
+                        return true;
+                    }
+                    if (*scale != null || *factor != 1) {
+                        return false;
+                    }
+                    *scale = by;
+                    return true;
+                }
+                case ast.TokenKind.SHL {
+                    if (e.right.is_const && wide.low(e.right.value) >= 0 && wide.low(e.right.value) < 32 &&
+                        affine(e.left, k, l, factor, scale) && *scale == null) {
+                        *factor = *factor << wide.low(e.right.value);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+fn constant(value: int, t: *ast.Type, line: int) *ast.Expr {
+    var e = new(ast.Expr);
+    e.kind = ast.ExprKind.INT;
+    e.line = line;
+    e.type = t;
+    e.is_const = true;
+    e.value = wide.of(value);
+    return e;
+}
+
+// Replaces the multiples of the counter k in e that step by more than one each round by a stepped local.
+// Stepping pays only for code that runs every round, which always tells.
+fn reduce_expr(e: *ast.Expr, k: *ast.Symbol, by: int, l: *Loop, always: bool) *ast.Expr {
+    if (e == null || e.is_const) {
+        return e;
+    }
+    var factor = 0;
+    var scale: *ast.Expr = null;
+    if (always && e.kind != ast.ExprKind.NAME && affine(e, k, l, &factor, &scale)) {
+        // What the local adds each round, as a constant or the scale when the counter steps by one
+        var step: *ast.Expr = null;
+        if (scale == null && factor != 1 && factor != -1) {
+            step = constant(by * factor, e.type, e.line);
+        } else if (scale != null && (by == 1 || by == -1)) {
+            step = copy(scale);
+            if (by == -1) {
+                var negated = new(ast.Expr);
+                negated.kind = ast.ExprKind.UNARY;
+                negated.op = ast.TokenKind.MINUS;
+                negated.line = e.line;
+                negated.type = e.type;
+                negated.left = step;
+                step = negated;
+            }
+        }
+        if (step != null) {
+            return hoist(l, e, step);
+        }
+    }
+    e.left = reduce_expr(e.left, k, by, l, always);
+    var rest = always && (e.kind != ast.ExprKind.BINARY || e.op != ast.TokenKind.ANDAND && e.op != ast.TokenKind.OROR);
+    e.right = reduce_expr(e.right, k, by, l, rest);
+    e.third = reduce_expr(e.third, k, by, l, rest);
+    for (var i = 0; i < e.args.len; i += 1) {
+        e.args[i] = reduce_expr(e.args[i], k, by, l, always);
+    }
+    return e;
+}
+
+fn reduce_stmt(s: *ast.Stmt, k: *ast.Symbol, by: int, l: *Loop, always: bool) {
+    if (s == null) {
+        return;
+    }
+    s.value = reduce_expr(s.value, k, by, l, always);
+    if (s.target != null && s.target.kind != ast.ExprKind.NAME) {
+        s.target = reduce_expr(s.target, k, by, l, always);
+    }
+    s.cond = reduce_expr(s.cond, k, by, l, always);
+    var branch = always && s.kind != ast.StmtKind.IF && s.kind != ast.StmtKind.SWITCH;
+    for (var i = 0; i < s.body.len; i += 1) {
+        reduce_stmt(s.body[i], k, by, l, always);
+    }
+    reduce_stmt(s.then, k, by, l, branch);
+    reduce_stmt(s.otherwise, k, by, l, branch);
+    reduce_stmt(s.init, k, by, l, always);
+    reduce_stmt(s.step, k, by, l, always);
+    for (var i = 0; i < s.cases.len; i += 1) {
+        reduce_stmt(s.cases[i].body, k, by, l, false);
+    }
+    reduce_stmt(s.fallback, k, by, l, false);
+}
+
+fn block(first: *ast.Stmt, count: int, line: int) *ast.Stmt {
+    var b = new(ast.Stmt);
+    b.kind = ast.StmtKind.BLOCK;
+    b.line = line;
+    b.end_line = line;
+    b.body = new(*ast.Stmt, count);
+    var at = 0;
+    if (first != null) {
+        b.body[0] = first;
+        at = 1;
+    }
+    b.body = b.body[:at];
+    return b;
+}
+
+fn append(b: *ast.Stmt, s: *ast.Stmt) {
+    b.body = b.body.ptr[:b.body.len + 1];
+    b.body[b.body.len - 1] = s;
+}
+
+// Sets the stepped locals after the init of a for loop, and steps them after its step
+fn step_along(s: *ast.Stmt, l: *Loop) {
+    var stepped = 0;
+    for (var i = 0; i < l.hoisted.count; i += 1) {
+        if ((l.hoisted.items[i] as *Hoisted).step != null) {
+            stepped += 1;
+        }
+    }
+    if (stepped == 0) {
+        return;
+    }
+    var init = block(s.init, stepped + 1, s.line);
+    var step = block(s.step, stepped + 1, s.line);
+    for (var i = 0; i < l.hoisted.count; i += 1) {
+        var h = l.hoisted.items[i] as *Hoisted;
+        if (h.step != null) {
+            var d = new(ast.Stmt);
+            d.kind = ast.StmtKind.VAR;
+            d.line = s.line;
+            d.name = h.symbol.name;
+            d.symbol = h.symbol;
+            d.value = h.value;
+            append(init, d);
+            var a = new(ast.Stmt);
+            a.kind = ast.StmtKind.ASSIGN;
+            a.line = s.line;
+            a.op = ast.TokenKind.ADD_ASSIGN;
+            a.target = name_of(h.symbol, s.line);
+            a.value = h.step;
+            append(step, a);
+        }
+    }
+    s.init = init;
+    s.step = step;
+}
+
+fn visit_loop(s: *ast.Stmt) *ast.Stmt {
+    var l = new(Loop);
+    l.stmt = s;
+    var by = 0;
+    var k = counter(s, &by);
+    if (k != null) {
+        note_assigned(s.init, &l.assigned);
+        note_assigned(s.step, &l.assigned);
+        note_assigned(s.then, &l.assigned);
+        s.cond = reduce_expr(s.cond, k, by, l, true);
+        reduce_stmt(s.then, k, by, l, true);
+        step_along(s, l);
+        for (var i = 0; i < l.hoisted.count; i += 1) {
+            declared_in((l.hoisted.items[i] as *Hoisted).symbol, depth);
+        }
+        l.assigned.count = 0;
+    }
+    s.init = visit(s.init);
+    note_assigned(s.init, &l.assigned);
+    note_assigned(s.step, &l.assigned);
+    note_assigned(s.then, &l.assigned);
+    var pushed = depth < around.len;
+    if (pushed) {
+        around[depth] = l;
+        depth += 1;
+    }
+    s.cond = hoist_expr(s.cond);
+    s.step = visit(s.step);
+    s.then = visit(s.then);
+    if (pushed) {
+        depth -= 1;
+    }
+    var hoisted = 0;
+    for (var i = 0; i < l.hoisted.count; i += 1) {
+        if ((l.hoisted.items[i] as *Hoisted).step == null) {
+            hoisted += 1;
+        }
+    }
+    if (hoisted == 0) {
+        return s;
+    }
+    var b = block(null, hoisted + 1, s.line);
+    for (var i = 0; i < l.hoisted.count; i += 1) {
+        var h = l.hoisted.items[i] as *Hoisted;
+        if (h.step == null) {
+            var d = new(ast.Stmt);
+            d.kind = ast.StmtKind.VAR;
+            d.line = s.line;
+            d.name = h.symbol.name;
+            d.symbol = h.symbol;
+            d.value = h.value;
+            append(b, d);
+        }
+    }
+    append(b, s);
+    return b;
+}
+
+fn visit(s: *ast.Stmt) *ast.Stmt {
+    if (s == null) {
+        return s;
+    }
+    if (s.kind == ast.StmtKind.WHILE || s.kind == ast.StmtKind.FOR) {
+        return visit_loop(s);
+    }
+    s.value = hoist_expr(s.value);
+    if (s.target != null && s.target.kind != ast.ExprKind.NAME) {
+        s.target = hoist_expr(s.target);
+    }
+    s.cond = hoist_expr(s.cond);
+    for (var i = 0; i < s.body.len; i += 1) {
+        s.body[i] = visit(s.body[i]);
+    }
+    s.then = visit(s.then);
+    s.otherwise = visit(s.otherwise);
+    for (var i = 0; i < s.cases.len; i += 1) {
+        s.cases[i].body = visit(s.cases[i].body);
+    }
+    s.fallback = visit(s.fallback);
+    return s;
+}
+
+pub fn optimize(d: *ast.Decl) {
+    taken.count = 0;
+    note_taken_in(d.body);
+    depth = 0;
+    d.body = visit(d.body);
+}

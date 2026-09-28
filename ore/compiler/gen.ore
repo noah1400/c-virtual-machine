@@ -3,6 +3,7 @@ import "std/io";
 import "std/str";
 import "ast";
 import "check";
+import "loops";
 import "wide";
 
 // Scalars end up in R0, slices in R0 (pointer) and R5 (length), structs and arrays as their address in
@@ -2611,12 +2612,20 @@ fn loop_bound(s: *ast.Stmt, bound: *Bound) bool {
     }
     var index = s.cond.left.symbol;
     var start: *ast.Expr = null;
-    if (s.init.kind == ast.StmtKind.VAR && s.init.symbol == index) {
-        start = s.init.value;
-    } else if (s.init.kind == ast.StmtKind.ASSIGN && s.init.op == ast.TokenKind.ASSIGN && local_of(s.init.target) == index) {
-        start = s.init.value;
-    }
+    // Locals that step along with the index follow its own init and step
+    var init = s.init;
     var step = s.step;
+    if (init.kind == ast.StmtKind.BLOCK && init.body.len > 0) {
+        init = init.body[0];
+    }
+    if (step.kind == ast.StmtKind.BLOCK && step.body.len > 0) {
+        step = step.body[0];
+    }
+    if (init.kind == ast.StmtKind.VAR && init.symbol == index) {
+        start = init.value;
+    } else if (init.kind == ast.StmtKind.ASSIGN && init.op == ast.TokenKind.ASSIGN && local_of(init.target) == index) {
+        start = init.value;
+    }
     if (start == null || !start.is_const || start.value.hi != 0 || wide.low(start.value) < 0 ||
         step.kind != ast.StmtKind.ASSIGN || step.op != ast.TokenKind.ADD_ASSIGN || local_of(step.target) != index ||
         !step.value.is_const || step.value.value.hi != 0 || wide.low(step.value.value) != 1 || assigns(s.then, index as *u8)) {
@@ -3115,6 +3124,7 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     if (d.is_interrupt && d.params.len == 1) {
         frame = d.params[0].symbol;
     }
+    loops.optimize(d);
     // Without locals in memory, a function needs no frame unless a temporary asks for one after all
     var in_memory = false;
     var saved = assign_registers(d, &in_memory);
