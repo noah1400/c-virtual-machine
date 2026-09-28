@@ -2369,6 +2369,12 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
         frame.offset = alloc_frame(g, 4);
         ast.add(&g.checked, frame as *u8);
     }
+    for (var i = 0; i < d.params.len; i += 1) {
+        var param = d.params[i].symbol;
+        if (param.type.kind == ast.TypeKind.POINTER && !param.maybe_null && !param.address_taken) {
+            ast.add(&g.checked, param as *u8);
+        }
+    }
     var saved = assign_registers(d);
     g.loc_module = null;
     loc(g, d.line);
@@ -2596,6 +2602,32 @@ fn reach(pending: *ast.List, s: *ast.Symbol) {
     }
 }
 
+// Where pointers go from one parameter or local to another, so that one that may be null makes the other so
+var flow_from: ast.List;
+var flow_to: ast.List;
+
+// Notes what a pointer local or parameter gets: an address or new memory is not null, the value of another
+// one only where that is not null, and anything else may be null
+fn pass_pointer(value: *ast.Expr, to: *ast.Symbol) {
+    if (to == null || to.type.kind != ast.TypeKind.POINTER || to.maybe_null) {
+        return;
+    }
+    var e = value;
+    while ((e.kind == ast.ExprKind.CAST || e.kind == ast.ExprKind.CONVERT) && e.left.type.kind == ast.TypeKind.POINTER) {
+        e = e.left;
+    }
+    if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.AMP || e.kind == ast.ExprKind.NEW && e.left == null) {
+        return;
+    }
+    var from = local_of(e);
+    if (from == null) {
+        to.maybe_null = true;
+        return;
+    }
+    ast.add(&flow_from, from as *u8);
+    ast.add(&flow_to, to as *u8);
+}
+
 // Constants need nothing at run time
 fn reach_expr(pending: *ast.List, e: *ast.Expr) {
     if (e == null || e.is_const) {
@@ -2603,8 +2635,22 @@ fn reach_expr(pending: *ast.List, e: *ast.Expr) {
     }
     if (e.symbol != null) {
         reach(pending, e.symbol);
+        // A function that is a value may be called with anything
+        if (e.symbol.kind == ast.SymbolKind.FN) {
+            e.symbol.address_taken = true;
+        }
     }
-    if (e.left != null) {
+    if (e.kind == ast.ExprKind.CALL && e.left.kind == ast.ExprKind.NAME && e.left.symbol.kind == ast.SymbolKind.FN) {
+        var params = e.left.symbol.decl.params;
+        for (var i = 0; i < e.args.len && i < params.len; i += 1) {
+            pass_pointer(e.args[i], params[i].symbol);
+        }
+        reach(pending, e.left.symbol);
+    } else if (e.left != null) {
+        if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.AMP && e.left.kind == ast.ExprKind.NAME &&
+            e.left.symbol.kind == ast.SymbolKind.LOCAL) {
+            e.left.symbol.address_taken = true;
+        }
         reach_expr(pending, e.left);
     }
     if (e.right != null) {
@@ -2624,6 +2670,13 @@ fn reach_stmt(pending: *ast.List, s: *ast.Stmt) {
     }
     for (var i = 0; i < s.body.len; i += 1) {
         reach_stmt(pending, s.body[i]);
+    }
+    if (s.kind == ast.StmtKind.ASSIGN && local_of(s.target) != null) {
+        s.target.symbol.assigned = true;
+    } else if (s.kind == ast.StmtKind.VAR && s.value == null) {
+        s.symbol.maybe_null = true;
+    } else if (s.kind == ast.StmtKind.VAR) {
+        pass_pointer(s.value, s.symbol);
     }
     reach_expr(pending, s.value);
     reach_expr(pending, s.target);
@@ -2655,7 +2708,11 @@ fn reach_assembly(program: *ast.Program, pending: *ast.List, path: []u8) {
         for (var k = 0; k < program.modules.count && dot > 0; k += 1) {
             var m = ast.module_at(program, k);
             if (ast.same(m.name, text[start:start + dot])) {
-                reach(pending, ast.get(&m.symbols, text[start + dot + 1:i]) as *ast.Symbol);
+                var named = ast.get(&m.symbols, text[start + dot + 1:i]) as *ast.Symbol;
+                if (named != null && named.kind == ast.SymbolKind.FN) {
+                    named.address_taken = true;
+                }
+                reach(pending, named);
             }
         }
         if (i == start) {
@@ -2677,6 +2734,28 @@ fn mark_used(program: *ast.Program) {
         var d = pending.items[i] as *ast.Decl;
         reach_expr(&pending, d.value);
         reach_stmt(&pending, d.body);
+    }
+    // Pointer parameters that every call passes something not null need no checks. Calls through function
+    // values, from assembly and from the machine can pass anything.
+    for (var i = 0; i < pending.count; i += 1) {
+        var d = pending.items[i] as *ast.Decl;
+        for (var k = 0; k < d.params.len && d.kind == ast.DeclKind.FN; k += 1) {
+            if (d.symbol.address_taken || d.is_interrupt || d.symbol == program.main) {
+                d.params[k].symbol.maybe_null = true;
+            }
+        }
+    }
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (var i = 0; i < flow_from.count; i += 1) {
+            var from = flow_from.items[i] as *ast.Symbol;
+            var to = flow_to.items[i] as *ast.Symbol;
+            if (!to.maybe_null && (from.maybe_null || from.assigned || from.address_taken)) {
+                to.maybe_null = true;
+                changed = true;
+            }
+        }
     }
     free(pending.items);
 }

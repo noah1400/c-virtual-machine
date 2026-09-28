@@ -70,7 +70,9 @@ pub struct Symbol {
     offset: int;            // frame offset of a local, set by the code generator
     reg: int;               // the register that holds a local instead, or 0
     gain: int;              // instructions a register would save for a local, counting loops more
-    address_taken: bool;
+    address_taken: bool;    // of a local, or of a function used as a value or named in assembly
+    assigned: bool;         // a local that an assignment changes
+    maybe_null: bool;       // a pointer local or parameter that some code may set to null
     label: []u8;            // string constants: the label of their bytes, once emitted
     asm_name: []u8;         // the name in assembly, once needed
 }
