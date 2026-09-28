@@ -1,0 +1,15 @@
+// An index checked on only one path of a branch has to be checked again after it
+// expect-exit: 1
+fn get(a: []int, i: int, first: bool) int {
+    var total = 0;
+    if (first) {
+        total = a[i];
+    }
+    return total + a[i];
+}
+
+fn main() {
+    var values = [4]int { 1, 2, 3, 4 };
+    print(get(values[:], 2, true), "\n");
+    print(get(values[:], 4, false), "\n");
+}

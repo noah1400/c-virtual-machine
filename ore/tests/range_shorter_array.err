@@ -1,0 +1,5 @@
+vm: error: index 5 is out of bounds for length 2
+vm: at 0x0124 <range_shorter_array.put.L1+36> ore/tests/range_shorter_array.ore:7: CALL rt.index_error
+vm: #1 0x0194 <range_shorter_array.main+40> ore/tests/range_shorter_array.ore:13: CALL range_shorter_array.put
+vm: #2 0x00C0 <main> ore/tests/range_shorter_array.ore:11: CALL range_shorter_array.main
+vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

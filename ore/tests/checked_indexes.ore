@@ -1,0 +1,42 @@
+// Indexes checked once are not checked again until the index or the slice changes, and a loop without
+// a break leaves the indexes that its condition checked known to be in range
+fn partition(a: []int, pivot: int) int {
+    var i = 0;
+    var j = a.len - 1;
+    while (i <= j) {
+        while (a[i] < pivot) {
+            i += 1;
+        }
+        while (a[j] > pivot) {
+            j -= 1;
+        }
+        if (i <= j) {
+            var t = a[i];
+            a[i] = a[j];
+            a[j] = t;
+            i += 1;
+            j -= 1;
+        }
+    }
+    return i;
+}
+
+fn sum_twice(a: []int, big: *[8]int, small: *[4]int, i: int) int {
+    var total = a[i] + a[i];
+    (*big)[i] = total;
+    (*small)[i] = total;
+    return total + (*big)[i] + (*small)[i];
+}
+
+fn main() {
+    var values = [9]int { 5, 1, 8, 3, 9, 2, 7, 4, 6 };
+    var split = partition(values[:], 5);
+    print(split, ":");
+    for (var k = 0; k < values.len; k += 1) {
+        print(" ", values[k]);
+    }
+    print("\n");
+    var big: [8]int;
+    var small: [4]int;
+    print(sum_twice(values[:], &big, &small, 3), " ", big[3], " ", small[3], "\n");
+}

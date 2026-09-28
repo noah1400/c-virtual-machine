@@ -1,0 +1,5 @@
+vm: error: index 4 is out of bounds for length 4
+vm: at 0x0120 <range_after_branch.get.L1+20> ore/tests/range_after_branch.ore:8: CALL rt.index_error
+vm: #1 0x01BC <range_after_branch.main+128> ore/tests/range_after_branch.ore:14: CALL range_after_branch.get
+vm: #2 0x00C0 <main> ore/tests/range_after_branch.ore:11: CALL range_after_branch.main
+vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

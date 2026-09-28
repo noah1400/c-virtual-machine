@@ -1,0 +1,14 @@
+// An index checked against an array has to be checked again against a shorter one
+// expect-exit: 1
+fn put(i: int) int {
+    var big: [8]int;
+    var small: [2]int;
+    big[i] = 1;
+    small[i] = 2;
+    return big[i] + small[i];
+}
+
+fn main() {
+    print(put(1), "\n");
+    print(put(5), "\n");
+}

@@ -1,0 +1,18 @@
+// A loop that can end with a break leaves the index its condition checked unknown
+// expect-exit: 1
+fn find(a: []int, limit: int) int {
+    var i = 0;
+    while (a[i] < limit) {
+        i += 1;
+        if (i == a.len) {
+            break;
+        }
+    }
+    return a[i];
+}
+
+fn main() {
+    var values = [3]int { 1, 2, 3 };
+    print(find(values[:], 2), "\n");
+    print(find(values[:], 10), "\n");
+}

@@ -1,0 +1,13 @@
+// An index checked against a slice has to be checked again after the slice changes
+// expect-exit: 1
+fn get(a: []int, i: int) int {
+    var total = a[i];
+    a = a[:2];
+    return total + a[i];
+}
+
+fn main() {
+    var values = [4]int { 1, 2, 3, 4 };
+    print(get(values[:], 1), "\n");
+    print(get(values[:], 3), "\n");
+}

@@ -1,0 +1,12 @@
+// A variable declared in a loop is a new index each round, which is checked again
+// expect-exit: 1
+fn main() {
+    var values = [4]int { 1, 2, 3, 4 };
+    var a: []int = values;
+    var total = 0;
+    for (var n = 0; n < 2; n += 1) {
+        var k = n * 5;
+        total += a[k] + a[k];
+        print(total, "\n");
+    }
+}

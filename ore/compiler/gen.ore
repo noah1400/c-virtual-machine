@@ -30,6 +30,8 @@ struct Gen {
     checked: ast.List;      // locals that are not null here, since code before checked them
     bounds: [8]Bound;       // what the loops around keep indexes below
     bound_count: int;
+    ranges: [16]Bound;      // what indexes are below here, since code before checked them
+    range_count: int;
     returns: [256]int;      // where the body jumps to the epilogue, as far as they fit
     return_count: int;
 }
@@ -505,10 +507,13 @@ fn is_checked(g: *Gen, s: *ast.Symbol) bool {
     return false;
 }
 
-// The locals known not to be null at the start of a statement or expression, as many as fit
+// The locals known not to be null at the start of a statement or expression, as many as fit, and the
+// indexes known to be in range
 struct Checked {
     items: [16]*u8;
     count: int;
+    ranges: [16]Bound;
+    range_count: int;
 }
 
 fn save_checked(g: *Gen, saved: *Checked) {
@@ -517,6 +522,10 @@ fn save_checked(g: *Gen, saved: *Checked) {
         saved.items[i] = g.checked.items[i];
         saved.count += 1;
     }
+    for (var i = 0; i < g.range_count; i += 1) {
+        saved.ranges[i] = g.ranges[i];
+    }
+    saved.range_count = g.range_count;
 }
 
 fn assigns(s: *ast.Stmt, local: *u8) bool {
@@ -555,12 +564,22 @@ fn assigns(s: *ast.Stmt, local: *u8) bool {
     return false;
 }
 
-// Keeps the locals of saved that the statements a and b do not assign as the ones known not to be null
+// Keeps the locals of saved that the statements a and b do not assign as the ones known not to be null,
+// and the ranges of saved whose locals they do not assign
 fn keep_checked(g: *Gen, saved: *Checked, a: *ast.Stmt, b: *ast.Stmt) {
     g.checked.count = 0;
     for (var i = 0; i < saved.count; i += 1) {
         if (!assigns(a, saved.items[i]) && !assigns(b, saved.items[i])) {
             ast.add(&g.checked, saved.items[i]);
+        }
+    }
+    g.range_count = 0;
+    for (var i = 0; i < saved.range_count; i += 1) {
+        var r = &saved.ranges[i];
+        if (!assigns(a, r.index as *u8) && !assigns(b, r.index as *u8) &&
+            (r.slice == null || !assigns(a, r.slice as *u8) && !assigns(b, r.slice as *u8))) {
+            g.ranges[g.range_count] = *r;
+            g.range_count += 1;
         }
     }
 }
@@ -634,6 +653,14 @@ fn assigned(g: *Gen, target: *ast.Expr, value: *ast.Expr) {
             g.checked.items[i] = g.checked.items[g.checked.count];
         }
     }
+    var kept = 0;
+    for (var i = 0; i < g.range_count; i += 1) {
+        if (g.ranges[i].index != target.symbol && g.ranges[i].slice != target.symbol) {
+            g.ranges[kept] = g.ranges[i];
+            kept += 1;
+        }
+    }
+    g.range_count = kept;
     if (unshared(target) && value != null && (value.kind == ast.ExprKind.NEW && value.left == null ||
         value.kind == ast.ExprKind.UNARY && value.op == ast.TokenKind.AMP)) {
         ast.add(&g.checked, target.symbol as *u8);
@@ -1535,8 +1562,25 @@ fn unshared(e: *ast.Expr) bool {
     return e.kind == ast.ExprKind.NAME && e.symbol.kind == ast.SymbolKind.LOCAL && !e.symbol.address_taken;
 }
 
-// Leaves in R0 the address of an element, minus the displacement it returns, after checking the index
-// Whether the type of the index or a loop around keeps it within what it indexes
+// The local that an index reads, when only assignments in its function change it
+fn index_local(e: *ast.Expr) *ast.Symbol {
+    var x = e;
+    if (x.kind == ast.ExprKind.CONVERT) {
+        x = x.left;
+    }
+    if (unshared(x)) {
+        return x.symbol;
+    }
+    return null;
+}
+
+// Whether a bound keeps the index local within the slice local or array that e indexes
+fn covers(b: *Bound, index: *ast.Symbol, e: *ast.Expr) bool {
+    return b.index == index && (b.slice != null && local_of(e.left) == b.slice ||
+        b.slice == null && e.left.type.kind == ast.TypeKind.ARRAY && b.limit <= e.left.type.length);
+}
+
+// Whether the type of the index, a loop around or a check before keeps it within what it indexes
 fn in_bounds(g: *Gen, e: *ast.Expr) bool {
     var index = e.right.type;
     if (e.right.kind == ast.ExprKind.CONVERT) {
@@ -1546,19 +1590,37 @@ fn in_bounds(g: *Gen, e: *ast.Expr) bool {
         index.size < 4 && e.left.type.length >= 1 << 8 * index.size) {
         return true;
     }
-    if (local_of(e.right) == null) {
-        return false;
+    var local = index_local(e.right);
+    for (var i = 0; i < g.bound_count && local != null; i += 1) {
+        if (covers(&g.bounds[i], local, e)) {
+            return true;
+        }
     }
-    for (var i = 0; i < g.bound_count; i += 1) {
-        var b = &g.bounds[i];
-        if (b.index == e.right.symbol && (b.slice != null && local_of(e.left) == b.slice ||
-            b.slice == null && e.left.type.kind == ast.TypeKind.ARRAY && b.limit <= e.left.type.length)) {
+    for (var i = 0; i < g.range_count && local != null; i += 1) {
+        if (covers(&g.ranges[i], local, e)) {
             return true;
         }
     }
     return false;
 }
 
+// Notes that the index of e passed its check, for the checks after it
+fn note_in_range(g: *Gen, e: *ast.Expr) {
+    var local = index_local(e.right);
+    if (local == null || g.range_count == g.ranges.len || e.left.type.kind == ast.TypeKind.SLICE && !unshared(e.left)) {
+        return;
+    }
+    var r = &g.ranges[g.range_count];
+    r.index = local;
+    r.slice = null;
+    r.limit = e.left.type.length;
+    if (e.left.type.kind == ast.TypeKind.SLICE) {
+        r.slice = e.left.symbol;
+    }
+    g.range_count += 1;
+}
+
+// Leaves in R0 the address of an element, minus the displacement it returns, after checking the index
 fn gen_index(g: *Gen, e: *ast.Expr) int {
     var t = e.left.type;
     var size = t.base.size;
@@ -1577,6 +1639,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
             if (!safe) {
                 emitf(g, "    CMP R0, [%s+4]\n    JB .L%d\n    PUSH [%s+4]\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
                     [][]u8 { at, at }, []int { ok, ok });
+                note_in_range(g, e);
             }
             scale(g, size, "R0");
             emits(g, "    ADD R0, [%s]\n", [][]u8 { at });
@@ -1585,6 +1648,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
         if (!e.right.is_const && !safe) {
             emitd(g, "    CMP R0, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
                 []int { t.length, ok, t.length, ok });
+            note_in_range(g, e);
         }
         scale(g, size, "R0");
         if (ast.same(base, "BP")) {
@@ -1611,9 +1675,11 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
         set_register(g, "R6", gen_operand(g, e.right));
         if (t.kind == ast.TypeKind.SLICE && !safe) {
             emitd(g, "    CMP R6, R5\n    JB .L%d\n    PUSH R5\n    PUSH R6\n    CALL rt.index_error\n.L%d:\n", []int { ok, ok });
+            note_in_range(g, e);
         } else if (t.kind == ast.TypeKind.ARRAY && !safe) {
             emitd(g, "    CMP R6, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R6\n    CALL rt.index_error\n.L%d:\n",
                 []int { t.length, ok, t.length, ok });
+            note_in_range(g, e);
         }
         scale(g, size, "R6");
         emit(g, "    ADD R0, R6\n");
@@ -1636,11 +1702,13 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
     if (t.kind == ast.TypeKind.SLICE && !safe) {
         emitd(g, "    CMP R0, R7\n    JB .L%d\n    PUSH R7\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
             []int { ok, ok });
+        note_in_range(g, e);
     } else if (t.kind != ast.TypeKind.SLICE) {
         pop(g, "R6");
         if (t.kind == ast.TypeKind.ARRAY && !e.right.is_const && !safe) {
             emitd(g, "    CMP R0, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
                 []int { t.length, ok, t.length, ok });
+            note_in_range(g, e);
         }
     }
     scale(g, size, "R0");
@@ -2466,6 +2534,45 @@ fn gen_loop(g: *Gen, s: *ast.Stmt) {
         emitd(g, "    JMP .L%d\n", []int { top });
     }
     merge_label(g, end, &saved, s.then, s.step);
+    // Without a break, the loop ends only where its condition fails, after all of it ran, so the indexes that
+    // it checked on the way into the body are in range there as well
+    if (s.cond != null && jumps_once(s.cond) && !breaks(s.then)) {
+        for (var i = 0; i < passed.range_count; i += 1) {
+            g.ranges[i] = passed.ranges[i];
+        }
+        g.range_count = passed.range_count;
+    }
+}
+
+// Whether a statement has a break that leaves the loop around it
+fn breaks(s: *ast.Stmt) bool {
+    if (s == null) {
+        return false;
+    }
+    switch (s.kind) {
+        case ast.StmtKind.BREAK {
+            return true;
+        }
+        case ast.StmtKind.BLOCK {
+            for (var i = 0; i < s.body.len; i += 1) {
+                if (breaks(s.body[i])) {
+                    return true;
+                }
+            }
+        }
+        case ast.StmtKind.IF {
+            return breaks(s.then) || breaks(s.otherwise);
+        }
+        case ast.StmtKind.SWITCH {
+            for (var i = 0; i < s.cases.len; i += 1) {
+                if (breaks(s.cases[i].body)) {
+                    return true;
+                }
+            }
+            return breaks(s.fallback);
+        }
+    }
+    return false;
 }
 
 fn gen_stmt(g: *Gen, s: *ast.Stmt) {
@@ -2732,6 +2839,7 @@ fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
 fn gen_body(g: *Gen, d: *ast.Decl, frame: *ast.Symbol) int {
     g.frame = 0;
     g.checked.count = 0;
+    g.range_count = 0;
     g.return_count = 0;
     stack.pushed = 0;
     str.clear(&g.body);
