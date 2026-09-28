@@ -933,7 +933,7 @@ vm: at 0x0040 <digits.digit+16> digits.ore:2: CALL rt.index_error
 vm: #1 0x0084 <digits.main+12> digits.ore:6: CALL digits.digit
 ```
 
-Neither compiler has `f32` yet. Their error messages name the file and line of the first problem, and compiling stops there.
+The error messages of both compilers name the file and line of the first problem, and compiling stops there.
 
 ## MiniDos
 

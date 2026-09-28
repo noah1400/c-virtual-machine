@@ -45,7 +45,7 @@ $ ./vm primes.bin
 - **Comments** run from `//` to the end of the line, or from `/*` to the next `*/`.
 - **Identifiers** start with a letter or `_` and continue with letters, digits and `_`.
 - **Integer literals** are decimal (`255`), hexadecimal (`0xFF`) or binary (`0b1111_1111`). `_` may separate digits. Decimal literals other than `0` do not start with 0.
-- **Float literals** have a fraction or an exponent: `1.5`, `2e-3`.
+- **Float literals** have a fraction or an exponent: `1.5`, `2e-3`, `1_000.25`. They round to the nearest `f32`, halfway cases to the even one, and one too large for an `f32` does not compile.
 - **Character literals** such as `'a'` are integers with the character's code.
 - **String literals** such as `"hi\n"` are byte slices.
 - **Escapes**, in both characters and strings: `\n`, `\t`, `\r`, `\0`, `\\`, `\'`, `\"` and `\xNN`.
@@ -211,7 +211,7 @@ Operators from the highest precedence to the lowest:
 
 Unlike C, `&`, `^` and `|` bind tighter than comparisons, so `flags & MASK == 0` means `(flags & MASK) == 0`.
 
-- **Arithmetic** needs two operands of the same integer type, or two `f32`s, and gives that type; `%` is only for integers. Integers wrap around on overflow. Signed `/` rounds toward zero and `%` takes the sign of the dividend.
+- **Arithmetic** needs two operands of the same integer type, or two `f32`s, and gives that type; `%` is only for integers. Integers wrap around on overflow. Signed `/` rounds toward zero and `%` takes the sign of the dividend. `f32` arithmetic is IEEE single precision: dividing by zero gives an infinity or NaN, and a comparison with NaN is false, except for `!=`.
 - **Shifts** take an integer type on the left and any integer type on the right. `>>` copies the sign bit into signed values and zeros into unsigned ones. Only the low five bits of the count are used, as the CPU does.
 - **Comparisons** need two operands of the same type. Booleans, enums and function pointers only compare with `==` and `!=`. Slices, arrays and structs do not compare; the standard library compares their contents.
 - **`&&` and `||`** take booleans and skip their right side when the left one decides.
@@ -223,7 +223,7 @@ Unlike C, `&`, `^` and `|` bind tighter than comparisons, so `flags & MASK == 0`
 
 ### Constants without a type
 
-Integer literals, character literals and constants declared without a type have no type of their own. They are computed exactly, and turn into whatever integer type the context needs, as long as their value fits: `var b: u8 = 200;` works, `var b: u8 = 300;` does not compile. Without a context they become `int`, or `f32` for float literals.
+Integer literals, character literals and constants declared without a type have no type of their own. They are computed exactly, and turn into whatever integer type the context needs, as long as their value fits: `var b: u8 = 200;` works, `var b: u8 = 300;` does not compile. Where an `f32` is needed they turn into the nearest one, so `x * 2` works for an `f32` x. Without a context they become `int`. Float literals are `f32` constants, and constants computed from them are rounded after each operation, as at run time.
 
 ### Conversions
 
@@ -241,7 +241,7 @@ Everything else takes `as`:
 | `x as T` | |
 |---|---|
 | Integer to integer | Keeps the low bits, or extends by the sign of the source |
-| Integer to `f32` and back | Rounds to the nearest float; back to an integer rounds toward zero |
+| Integer to `f32` and back | Rounds to the nearest float; back to an integer rounds toward zero, and NaN or a float outside the integer type's range gives an unspecified number |
 | Integer to pointer and back, pointer to pointer | Keeps the address |
 | Function to `u32` | The function's address |
 | `bool` to integer | 1 or 0 |
@@ -431,7 +431,7 @@ These need supervisor mode, which programs start in.
 
 ## Implementation
 
-`vmc`, written in Ore in `ore/compiler`, and `vmc0`, the bootstrap compiler written in C, read the main module and its imports and write the whole program as one assembly file with `.loc` lines. It holds only the functions and globals that `main` reaches, through calls, function values and the initial values of globals. It includes the runtime and any assembly files given on the command line, and is then assembled with `vmasm`. The two write different code for the same program, since only `vmc` optimizes, but the code behaves the same. `-S` stops after the assembly, `-o` names the output and `-g0` leaves out the debug information: the `.loc` lines, and the symbols and source lines of the binary. Neither compiler has `f32` yet. `vmc` runs on the VM, where it keeps constants exact to 64 bits in a pair of 32-bit halves.
+`vmc`, written in Ore in `ore/compiler`, and `vmc0`, the bootstrap compiler written in C, read the main module and its imports and write the whole program as one assembly file with `.loc` lines. It holds only the functions and globals that `main` reaches, through calls, function values and the initial values of globals. It includes the runtime and any assembly files given on the command line, and is then assembled with `vmasm`. The two write different code for the same program, since only `vmc` optimizes, but the code behaves the same. `-S` stops after the assembly, `-o` names the output and `-g0` leaves out the debug information: the `.loc` lines, and the symbols and source lines of the binary. `vmc` runs on the VM, where it keeps constants exact to 64 bits in a pair of 32-bit halves and rounds float literals with exact arithmetic on numbers of up to 768 bits, which gives the same `f32`s as `vmc0` gets from C's `strtof`.
 
 **Calling convention:**
 - **Arguments** are pushed from right to left, each taking its size rounded up to 4 bytes, and the caller removes them.
