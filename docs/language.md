@@ -435,7 +435,7 @@ These need supervisor mode, which programs start in.
 
 **Calling convention:**
 - **Arguments** are pushed from right to left, each taking its size rounded up to 4 bytes, and the caller removes them.
-- **Frames** use `ENTER` and `LEAVE`: arguments start at `[BP+8]` and locals lie below BP.
+- **Frames** use `ENTER` and `LEAVE`: arguments start at `[BP+8]` and locals lie below BP. `vmc` gives a function that keeps no locals in memory no frame; it reaches its arguments through SP instead.
 - **Results:** integers, booleans, enums and pointers return in R0, and slices in R0 (the pointer) and R5 (the length). For a struct or array, the caller passes the address of room for it as a hidden first argument, and the callee returns that address in R0.
 - **Registers:** R0 and R5–R7 are free for the callee to change; R8–R15 must come back unchanged.
 
