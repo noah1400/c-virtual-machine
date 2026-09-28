@@ -328,7 +328,9 @@ fn serve(frame: *cpu.Frame, number: u32) {
             write_in_base(a, b);
         }
         case 7 {
-            syscall(7, a);
+            var bits = a;
+            var text: [12]u8;
+            console.write(str.format_float(*(&bits as *f32), text));
         }
         case 8 {
             console.clear();
