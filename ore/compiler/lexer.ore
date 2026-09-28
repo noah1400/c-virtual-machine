@@ -253,102 +253,53 @@ fn string(lx: *Lexer, t: *ast.Token) {
     t.kind = ast.TokenKind.STRING;
 }
 
+// The kinds of punctuation by its first character: alone, followed by =, doubled, and doubled and followed
+// by =; 0 for none
+var single: [256]u8;
+var with_equals: [256]u8;
+var doubled: [256]u8;
+var doubled_equals: [256]u8;
+
+fn punctuation_tables() {
+    for (var i = 0; i < punctuation.len; i += 1) {
+        var p = punctuation[i];
+        var kind = (i + ast.TokenKind.LPAREN as int) as u8;
+        if (p.len == 1) {
+            single[p[0]] = kind;
+        } else if (p.len == 2 && p[1] == '=') {
+            with_equals[p[0]] = kind;
+        } else if (p.len == 2) {
+            doubled[p[0]] = kind;
+        } else {
+            doubled_equals[p[0]] = kind;
+        }
+    }
+}
+
 // The longest punctuation at the position, so that <<= wins over << and <
 fn punct(lx: *Lexer, t: *ast.Token) bool {
     var src = lx.source;
     var c = src[lx.p];
+    var kind = single[c];
+    if (kind == 0) {
+        return false;
+    }
     var next = src[lx.p + 1];
-    var kind = ast.TokenKind.EOF;
-    switch (c) {
-        case '(' {
-            kind = ast.TokenKind.LPAREN;
-        }
-        case ')' {
-            kind = ast.TokenKind.RPAREN;
-        }
-        case '{' {
-            kind = ast.TokenKind.LBRACE;
-        }
-        case '}' {
-            kind = ast.TokenKind.RBRACE;
-        }
-        case '[' {
-            kind = ast.TokenKind.LBRACKET;
-        }
-        case ']' {
-            kind = ast.TokenKind.RBRACKET;
-        }
-        case ',' {
-            kind = ast.TokenKind.COMMA;
-        }
-        case ';' {
-            kind = ast.TokenKind.SEMI;
-        }
-        case ':' {
-            kind = ast.TokenKind.COLON;
-        }
-        case '.' {
-            kind = ast.TokenKind.DOT;
-        }
-        case '~' {
-            kind = ast.TokenKind.TILDE;
-        }
-        case '+' {
-            kind = pick(next, '=', ast.TokenKind.ADD_ASSIGN, ast.TokenKind.PLUS);
-        }
-        case '-' {
-            kind = pick(next, '=', ast.TokenKind.SUB_ASSIGN, ast.TokenKind.MINUS);
-        }
-        case '*' {
-            kind = pick(next, '=', ast.TokenKind.MUL_ASSIGN, ast.TokenKind.STAR);
-        }
-        case '/' {
-            kind = pick(next, '=', ast.TokenKind.DIV_ASSIGN, ast.TokenKind.SLASH);
-        }
-        case '%' {
-            kind = pick(next, '=', ast.TokenKind.MOD_ASSIGN, ast.TokenKind.PERCENT);
-        }
-        case '^' {
-            kind = pick(next, '=', ast.TokenKind.XOR_ASSIGN, ast.TokenKind.CARET);
-        }
-        case '!' {
-            kind = pick(next, '=', ast.TokenKind.NE, ast.TokenKind.BANG);
-        }
-        case '=' {
-            kind = pick(next, '=', ast.TokenKind.EQ, ast.TokenKind.ASSIGN);
-        }
-        case '&' {
-            kind = pick(next, '=', ast.TokenKind.AND_ASSIGN, pick(next, '&', ast.TokenKind.ANDAND, ast.TokenKind.AMP));
-        }
-        case '|' {
-            kind = pick(next, '=', ast.TokenKind.OR_ASSIGN, pick(next, '|', ast.TokenKind.OROR, ast.TokenKind.PIPE));
-        }
-        case '<' {
-            kind = pick(next, '=', ast.TokenKind.LE, pick(next, '<', ast.TokenKind.SHL, ast.TokenKind.LT));
-            if (kind == ast.TokenKind.SHL && src[lx.p + 2] == '=') {
-                kind = ast.TokenKind.SHL_ASSIGN;
-            }
-        }
-        case '>' {
-            kind = pick(next, '=', ast.TokenKind.GE, pick(next, '>', ast.TokenKind.SHR, ast.TokenKind.GT));
-            if (kind == ast.TokenKind.SHR && src[lx.p + 2] == '=') {
-                kind = ast.TokenKind.SHR_ASSIGN;
-            }
-        }
-        default {
-            return false;
+    var length = 1;
+    if (next == '=' && with_equals[c] != 0) {
+        kind = with_equals[c];
+        length = 2;
+    } else if (next == c && doubled[c] != 0) {
+        kind = doubled[c];
+        length = 2;
+        if (src[lx.p + 2] == '=' && doubled_equals[c] != 0) {
+            kind = doubled_equals[c];
+            length = 3;
         }
     }
-    t.kind = kind;
-    lx.p += punctuation[kind as int - ast.TokenKind.LPAREN as int].len;
+    t.kind = (kind as int) as ast.TokenKind;
+    lx.p += length;
     return true;
-}
-
-fn pick(c: u8, wanted: u8, yes: ast.TokenKind, no: ast.TokenKind) ast.TokenKind {
-    if (c == wanted) {
-        return yes;
-    }
-    return no;
 }
 
 fn skip_space(lx: *Lexer) {
@@ -398,6 +349,7 @@ pub fn lex(m: *ast.Module) {
         }
         name_chars['_'] = true;
         name_starts['_'] = true;
+        punctuation_tables();
     }
     for (;;) {
         skip_space(&lx);
@@ -433,7 +385,7 @@ pub fn lex(m: *ast.Module) {
                     }
                 }
             }
-        } else if (is_digit(c)) {
+        } else if (c >= '0' && c <= '9') {
             number(&lx, t);
         } else if (c == '\'') {
             character(&lx, t);
