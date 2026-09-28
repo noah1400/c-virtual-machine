@@ -3,11 +3,12 @@
 #include "binfmt.h"
 #include "cpu.h"
 #include "memory.h"
+#include "syscalls.h"
 #include "vm.h"
 
 // cpu_run executes the common instructions without the decoding, copies and checks that vm_step spends
 // on every instruction. It stops before an instruction that would fault or that needs more than it
-// does, such as a syscall, a device, a privileged instruction or a write to PC or SR as a register, and
+// does, such as most syscalls, a device, a privileged instruction or a write to PC or SR as a register, and
 // leaves that one to vm_step, which does the same as it would.
 
 enum {
@@ -42,6 +43,7 @@ enum {
     RUN_LEAVE,
     RUN_MEMCPY,
     RUN_MEMSET,
+    RUN_SYSCALL,
 };
 
 static const uint8_t runs[256] = {
@@ -63,6 +65,7 @@ static const uint8_t runs[256] = {
     [JLE_OP] = RUN_JUMP,      [JG_OP] = RUN_JUMP,       [JAE_OP] = RUN_JUMP,      [CALL_OP] = RUN_CALL,
     [RET_OP] = RUN_RET,       [LOOP_OP] = RUN_LOOP,     [PUSH_OP] = RUN_PUSH,     [POP_OP] = RUN_POP,
     [ENTER_OP] = RUN_ENTER,   [LEAVE_OP] = RUN_LEAVE,   [MEMCPY_OP] = RUN_MEMCPY, [MEMSET_OP] = RUN_MEMSET,
+    [SYSCALL_OP] = RUN_SYSCALL,
 };
 
 #define EXTENDED_BIT (MODE_EXTENDED << 20)
@@ -89,7 +92,8 @@ static void prepare(void) {
     for (uint32_t key = 0; key < 4096; key++) {
         const InstructionInfo *info = isa_by_opcode((uint8_t)(key >> 4));
         uint32_t mode = MODE_BIT(key & 7), extended = key & MODE_EXTENDED;
-        if (!info || info->privileged || (info->modes && !(info->modes & mode)) ||
+        // A syscall checks the mode itself
+        if (!info || (info->privileged && runs[key >> 4] != RUN_SYSCALL) || (info->modes && !(info->modes & mode)) ||
             (extended && !(info->modes & mode & MODES_WITH_IMMEDIATE))) {
             continue;
         }
@@ -435,6 +439,15 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
                 }
                 break;
             }
+            case RUN_SYSCALL:
+                // The heap and copy syscalls of supervisor mode, which report errors in R5 instead of faulting
+                value = immediate(w, code);
+                if (!(r[R4_SR] & SYS_FLAG) || value < SYS_ALLOC || value > SYS_MEMCPY) {
+                    goto stop;
+                }
+                vm->error_pc = pc;
+                syscall_dispatch(vm, value);
+                break;
             default:
                 goto stop;
         }
