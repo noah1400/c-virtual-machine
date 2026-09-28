@@ -1,0 +1,7 @@
+// The address of an extern function that takes parameters
+import "std/math";
+
+fn main() {
+    var address = math.sqrt as u32;
+    print(address != 0, " ", math.sqrt(16.0), "\n");
+}

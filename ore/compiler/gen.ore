@@ -3138,7 +3138,7 @@ fn mark_used(program: *ast.Program) {
     // values, from assembly and from the machine can pass anything.
     for (var i = 0; i < pending.count; i += 1) {
         var d = pending.items[i] as *ast.Decl;
-        for (var k = 0; k < d.params.len && d.kind == ast.DeclKind.FN; k += 1) {
+        for (var k = 0; k < d.params.len && d.kind == ast.DeclKind.FN && !d.is_extern; k += 1) {
             if (d.symbol.address_taken || d.is_interrupt || d.symbol == program.main) {
                 d.params[k].symbol.maybe_null = true;
             }
