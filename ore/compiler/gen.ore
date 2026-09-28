@@ -795,6 +795,23 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
     }
     if (left.kind == ast.TypeKind.POINTER && !is_comparison(e)) {
         var size = left.base.size;
+        var instruction = "SUB";
+        if (e.op == ast.TokenKind.PLUS) {
+            instruction = "ADD";
+        }
+        if (e.right.type.kind != ast.TypeKind.POINTER && is_operand(e.right)) {
+            gen_expr(g, e.left);
+            if (e.right.is_const) {
+                emitf(g, "    %s R0, #%d\n", [][]u8 { instruction }, []int { wide.low(e.right.value) * size });
+            } else if (size == 1) {
+                emits(g, "    %s R0, %s\n", [][]u8 { instruction, gen_operand(g, e.right) });
+            } else {
+                set_register(g, "R6", gen_operand(g, e.right));
+                scale(g, size, "R6");
+                emits(g, "    %s R0, R6\n", [][]u8 { instruction });
+            }
+            return;
+        }
         gen_expr(g, e.left);
         emit(g, "    PUSH R0\n");
         gen_expr(g, e.right);
@@ -806,10 +823,6 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
             return;
         }
         scale(g, size, "R0");
-        var instruction = "SUB";
-        if (e.op == ast.TokenKind.PLUS) {
-            instruction = "ADD";
-        }
         emits(g, "    MOVE R6, R0\n    POP R0\n    %s R0, R6\n", [][]u8 { instruction });
         return;
     }
