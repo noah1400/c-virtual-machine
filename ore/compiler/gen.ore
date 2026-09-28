@@ -141,14 +141,22 @@ fn symbol_name(s: *ast.Symbol) []u8 {
     return s.asm_name;
 }
 
+// The bytes that vmasm would read differently in a string
+var escaped: [256]bool;
+
 // Writes text as an assembler string, escaping what vmasm would read differently
 fn quoted(out: *str.Builder, text: []u8) {
+    if (!escaped[0]) {
+        for (var i = 0; i < 256; i += 1) {
+            escaped[i] = i < 32 || i >= 127 || i == '"' || i == '\\';
+        }
+    }
     var hex = "0123456789ABCDEF";
     str.append_byte(out, '"');
     var start = 0;
     for (var i = 0; i < text.len; i += 1) {
         var c = text[i];
-        if (c < 32 || c >= 127 || c == '"' || c == '\\') {
+        if (escaped[c]) {
             str.append(out, text[start:i]);
             start = i + 1;
             if (c == '"' || c == '\\') {
