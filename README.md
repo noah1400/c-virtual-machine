@@ -896,7 +896,7 @@ Two compilers take these options:
 - **`vmc`** is written in Ore, in `ore/compiler`, and optimizes. It keeps scalar locals and parameters in registers, uses variables, fields and slice lengths as operands where instructions can take them, checks a pointer for `null` once until something changes it and branches on conditions without first making values of them. Its code executes about half as many instructions as `vmc0`'s and is a third smaller. `make` builds it in two stages: `vmc0` compiles it into `vmc1.bin`, which compiles it again into `vmc.bin`, and `vmc.bin` compiles itself into the very same file. The `vmc` script runs `vmc.bin` on the VM with 256 MB of memory and an 8 MB stack and assembles the program it writes with `vmasm`.
 - **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. Its code keeps every local in the frame. It runs natively, so it compiles much faster: `vmc` takes 1.8 seconds for its own 6,000 lines, `vmc0` 0.04 seconds.
 
-- **How it compiles:** the compiler writes the whole program as one assembly file. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler.
+- **How it compiles:** the compiler writes the whole program as one assembly file, with only the functions and globals that `main` reaches, directly or through others, and those that the program's assembly names: a program that calls `io.write` gets that function and not the rest of `std/io`. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler.
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
 - **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines. `-g0` leaves them out, which makes the assembly easier to read; the binary then names lines of the assembly instead.
 - **Runtime errors**, such as an index out of bounds, a `null` pointer or a failed `assert`, stop the program with a message, reported at the Ore line that failed. For the `digits.ore` example in the language description:
@@ -925,8 +925,8 @@ A:\>DIR /W
  Directory of A:\
 
 FIND.EXE        SORT.EXE
-        2 file(s)        287,036 bytes
-        0 dir(s)       3,873,280 bytes free
+        2 file(s)        143,211 bytes
+        0 dir(s)       4,017,152 bytes free
 ```
 
 ## Syscalls

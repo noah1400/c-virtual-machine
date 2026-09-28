@@ -431,7 +431,7 @@ These need supervisor mode, which programs start in.
 
 ## Implementation
 
-`vmc`, written in Ore in `ore/compiler`, and `vmc0`, the bootstrap compiler written in C, read the main module and its imports and write the whole program as one assembly file with `.loc` lines. It includes the runtime and any assembly files given on the command line, and is then assembled with `vmasm`. The two write different code for the same program, since only `vmc` optimizes, but the code behaves the same. `-S` stops after the assembly, `-o` names the output and `-g0` leaves out the `.loc` lines. Neither compiler has `f32` yet. `vmc` runs on the VM, where it keeps constants exact to 64 bits in a pair of 32-bit halves.
+`vmc`, written in Ore in `ore/compiler`, and `vmc0`, the bootstrap compiler written in C, read the main module and its imports and write the whole program as one assembly file with `.loc` lines. It holds only the functions and globals that `main` reaches, through calls, function values and the initial values of globals. It includes the runtime and any assembly files given on the command line, and is then assembled with `vmasm`. The two write different code for the same program, since only `vmc` optimizes, but the code behaves the same. `-S` stops after the assembly, `-o` names the output and `-g0` leaves out the `.loc` lines. Neither compiler has `f32` yet. `vmc` runs on the VM, where it keeps constants exact to 64 bits in a pair of 32-bit halves.
 
 **Calling convention:**
 - **Arguments** are pushed from right to left, each taking its size rounded up to 4 bytes, and the caller removes them.
@@ -439,6 +439,6 @@ These need supervisor mode, which programs start in.
 - **Results:** integers, booleans, enums and pointers return in R0, and slices in R0 (the pointer) and R5 (the length). For a struct or array, the caller passes the address of room for it as a hidden first argument, and the callee returns that address in R0.
 - **Registers:** R0 and R5–R7 are free for the callee to change; R8–R15 must come back unchanged.
 
-**Symbols:** functions and globals of module `m` are named `m.name` in assembly, and `main` calls the main module's `main`. `extern fn` names stay as written. An `interrupt fn` ends with `IRET` instead of `RET`.
+**Symbols:** functions and globals of module `m` are named `m.name` in assembly, and `main` calls the main module's `main`. The program's assembly files may name them too, which keeps them in the program even when no Ore code uses them. `extern fn` names stay as written. An `interrupt fn` ends with `IRET` instead of `RET`.
 
 **Runtime:** `ore/lib/runtime.asm` calls `main` and passes its result to the Exit syscall. For a runtime error it formats the message and makes syscall 35, Abort, which stops the program the way a fault does. R0 holds the message, and R5 the number of calls to leave out of the report, so that it starts at the Ore line that failed.
