@@ -4,8 +4,9 @@
 # assemble and ore/tests/errors/*.ore fail to compile, or only the tests named. Ore tests are compiled
 # with vmc, the Ore compiler written in Ore, and with vmc0, and both builds have to meet the
 # expectations; the errors of an Ore program are compared by message and Ore line. vmc1.bin, the build
-# of vmc that vmc0 made, has to write the same assembly as vmc, all three compilers the same errors, and
-# the test named vmc checks that vmc compiles itself into vmc.bin. Expectations come from NAME.out,
+# of vmc that vmc0 made, has to write the same assembly as vmc, all three compilers the same errors, the
+# test named vmc checks that vmc compiles itself into vmc.bin and no_debug that -g0 leaves the debug
+# information out of the binaries of vmc and vmc0. Expectations come from NAME.out,
 # NAME.in and "; expect-exit:", "; expect-stderr:", "; expect-error:", "; expect-warning:",
 # "; asm-args:", "; ld-args:", "; vm-args:" and "; program-args:" lines, written with // in Ore, where
 # "// vmc-args:" gives vmc0 more arguments.
@@ -41,7 +42,7 @@ wanted() {
 }
 
 for name in $names; do
-    [ "$name" = vmc ] || [ -f "$root/tests/programs/$name.asm" ] || [ -f "$root/tests/errors/$name.asm" ] ||
+    [ "$name" = vmc ] || [ "$name" = no_debug ] || [ -f "$root/tests/programs/$name.asm" ] || [ -f "$root/tests/errors/$name.asm" ] ||
         [ -f "$root/ore/tests/$name.ore" ] || [ -f "$root/ore/tests/errors/$name.ore" ] ||
         [ -f "$root/tests/minidos/${name#minidos_}.in" ] || fail "$name" "there is no such test"
 done
@@ -331,6 +332,24 @@ for src in "$root"/tests/minidos/*.in; do
         passed=$((passed + 1))
     fi
 done
+
+# A binary without debug information has no symbols in its header
+if wanted no_debug; then
+    problem=
+    for compiler in vmc vmc0; do
+        if ! (cd "$root" && "./$compiler" -g0 ore/tests/no_loc.ore -o "$tmp/no_debug.bin" 2> "$tmp/no_debug.log"); then
+            problem="$compiler -g0 does not compile: $(head -n 1 "$tmp/no_debug.log")"
+        elif [ "$(od -A n -t u4 -j 28 -N 4 "$tmp/no_debug.bin" | tr -d ' ')" != 0 ]; then
+            problem="$compiler -g0 writes debug information"
+        fi
+        [ -z "$problem" ] || break
+    done
+    if [ -n "$problem" ]; then
+        fail no_debug "$problem"
+    else
+        passed=$((passed + 1))
+    fi
+fi
 
 # vmc compiles itself into itself
 if wanted vmc; then
