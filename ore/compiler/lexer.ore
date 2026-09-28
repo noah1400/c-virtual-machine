@@ -1,6 +1,7 @@
 // Turns the source of a module into tokens
 import "std/str";
 import "ast";
+import "float";
 import "wide";
 
 var keywords = [23][]u8 {
@@ -28,7 +29,7 @@ pub fn token_text(kind: ast.TokenKind) []u8 {
         case ast.TokenKind.IDENT {
             return "a name";
         }
-        case ast.TokenKind.INT {
+        case ast.TokenKind.INT, ast.TokenKind.FLOAT {
             return "a number";
         }
         case ast.TokenKind.STRING {
@@ -165,6 +166,71 @@ fn escape(lx: *Lexer) int {
     return 0;
 }
 
+// Digits and the underscores between them
+fn digit_run(src: []u8, p: int) int {
+    while (is_digit(src[p]) || src[p] == '_') {
+        p += 1;
+    }
+    return p;
+}
+
+fn invalid_number(lx: *Lexer, start: int, p: int) {
+    var src = lx.source;
+    while (is_alnum(src[p]) || src[p] == '_') {
+        p += 1;
+    }
+    fail(lx, ast.cat([][]u8 { "invalid number ", src[start:p] }));
+}
+
+// A decimal number with a fraction, an exponent or both, rounded to the nearest f32
+fn float_number(lx: *Lexer, t: *ast.Token) {
+    var src = lx.source;
+    var start = lx.p;
+    var p = digit_run(src, start);
+    var digits = 0;
+
+    for (var q = start; q < p; q += 1) {
+        if (is_digit(src[q])) {
+            digits += 1;
+        }
+    }
+    if (src[p - 1] == '_') {
+        invalid_number(lx, start, p);
+    }
+    if (src[p] == '.' && is_digit(src[p + 1])) {
+        p = digit_run(src, p + 1);
+        if (src[p - 1] == '_') {
+            invalid_number(lx, start, p);
+        }
+    }
+    if (src[p] == 'e' || src[p] == 'E') {
+        var q = p + 1;
+        if (src[q] == '+' || src[q] == '-') {
+            q += 1;
+        }
+        if (!is_digit(src[q])) {
+            invalid_number(lx, start, p);
+        }
+        p = digit_run(src, q);
+        if (src[p - 1] == '_') {
+            invalid_number(lx, start, p);
+        }
+    }
+    if (is_alnum(src[p]) || src[p] == '_') {
+        invalid_number(lx, start, p);
+    }
+    if (src[start] == '0' && digits > 1) {
+        fail(lx, "decimal numbers other than 0 do not start with 0");
+    }
+    var bits = float.parse(src[start:p]);
+    if (bits == float.INFINITY) {
+        fail(lx, "number too large");
+    }
+    lx.p = p;
+    t.kind = ast.TokenKind.FLOAT;
+    t.value = wide.Wide { lo: bits };
+}
+
 fn number(lx: *Lexer, t: *ast.Token) {
     var src = lx.source;
     var start = lx.p;
@@ -172,6 +238,14 @@ fn number(lx: *Lexer, t: *ast.Token) {
     var digits = 0;
     var value = wide.Wide {};
 
+    var x = src[start + 1];
+    if (src[start] != '0' || x != 'x' && x != 'X' && x != 'b' && x != 'B') {
+        var end = digit_run(src, start);
+        if (src[end] == '.' && is_digit(src[end + 1]) || src[end] == 'e' || src[end] == 'E') {
+            float_number(lx, t);
+            return;
+        }
+    }
     if (src[start] == '0' && (src[start + 1] == 'x' || src[start + 1] == 'X')) {
         base = 16;
         lx.p += 2;
@@ -193,9 +267,6 @@ fn number(lx: *Lexer, t: *ast.Token) {
         digits += 1;
     }
     var c = src[lx.p];
-    if (c == '.' && is_digit(src[lx.p + 1]) || base == 10 && (c == 'e' || c == 'E')) {
-        fail(lx, "floating-point numbers are not supported yet");
-    }
     if (digits == 0 || src[lx.p - 1] == '_' || is_alnum(c) || c == '_') {
         var end = lx.p;
         while (is_alnum(src[end]) || src[end] == '_') {

@@ -1,5 +1,6 @@
 // Resolves the names of a program, checks its types and computes its constants
 import "ast";
+import "float";
 import "lexer";
 import "wide";
 
@@ -14,6 +15,7 @@ var t_i32 = ast.Type { kind: ast.TypeKind.INT, size: 4, align: 4, is_signed: tru
 var t_u8 = ast.Type { kind: ast.TypeKind.INT, size: 1, align: 1, name: "u8" };
 var t_u16 = ast.Type { kind: ast.TypeKind.INT, size: 2, align: 2, name: "u16" };
 var t_u32 = ast.Type { kind: ast.TypeKind.INT, size: 4, align: 4, name: "u32" };
+var t_f32 = ast.Type { kind: ast.TypeKind.FLOAT, size: 4, align: 4, name: "f32" };
 var t_null = ast.Type { kind: ast.TypeKind.NULL, size: 4, align: 4, name: "null" };
 var t_untyped = ast.Type { kind: ast.TypeKind.UNTYPED, size: 4, align: 4, name: "a number" };
 var syscall_fields = [2]ast.Field {
@@ -24,7 +26,7 @@ var t_syscall = ast.Type {
     kind: ast.TypeKind.STRUCT, size: 8, align: 4, name: "SyscallResult", fields: syscall_fields, state: 2,
 };
 
-var universe = [14]ast.Symbol {
+var universe = [15]ast.Symbol {
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "i8", type: &t_i8 },
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "i16", type: &t_i16 },
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "i32", type: &t_i32 },
@@ -32,6 +34,7 @@ var universe = [14]ast.Symbol {
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "u8", type: &t_u8 },
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "u16", type: &t_u16 },
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "u32", type: &t_u32 },
+    ast.Symbol { kind: ast.SymbolKind.TYPE, name: "f32", type: &t_f32 },
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "bool", type: &t_bool },
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "SyscallResult", type: &t_syscall },
     ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "print", builtin: ast.Builtin.PRINT },
@@ -134,8 +137,8 @@ fn type_name(t: *ast.Type) []u8 {
 
 pub fn is_scalar(t: *ast.Type) bool {
     var k = t.kind;
-    return k == ast.TypeKind.BOOL || k == ast.TypeKind.INT || k == ast.TypeKind.POINTER || k == ast.TypeKind.FN ||
-        k == ast.TypeKind.ENUM || k == ast.TypeKind.NULL || k == ast.TypeKind.UNTYPED;
+    return k == ast.TypeKind.BOOL || k == ast.TypeKind.INT || k == ast.TypeKind.FLOAT || k == ast.TypeKind.POINTER ||
+        k == ast.TypeKind.FN || k == ast.TypeKind.ENUM || k == ast.TypeKind.NULL || k == ast.TypeKind.UNTYPED;
 }
 
 fn is_integer(t: *ast.Type) bool {
@@ -157,10 +160,31 @@ fn wrap(value: wide.Wide, t: *ast.Type) wide.Wide {
 
 // Every value of from is also a value of to
 fn widens(from: *ast.Type, to: *ast.Type) bool {
+    if (from.kind == ast.TypeKind.INT && to.kind == ast.TypeKind.FLOAT) {
+        return from.size <= 2;
+    }
     if (from.kind != ast.TypeKind.INT || to.kind != ast.TypeKind.INT || to.size <= from.size) {
         return false;
     }
     return to.is_signed || !from.is_signed;
+}
+
+// f32 constants keep their bits
+fn float_wide(f: f32) wide.Wide {
+    return wide.Wide { lo: float.bits(f) };
+}
+
+// Conversions of constants between integers and f32, as the machine code for them computes them
+fn int_to_float(value: wide.Wide) wide.Wide {
+    return wide.Wide { lo: float.of_wide(value) };
+}
+
+fn float_to_int(value: wide.Wide, to: *ast.Type) wide.Wide {
+    var f = float.value(value.lo);
+    if (to.size == 4 && !to.is_signed) {
+        return wide.Wide { lo: f as u32 };
+    }
+    return wrap(wide.of(f as int), to);
 }
 
 fn new_expr(kind: ast.ExprKind, line: int) *ast.Expr {
@@ -283,9 +307,6 @@ fn type_symbol(c: *Checker, t: *ast.TypeExpr) *ast.Symbol {
     } else {
         s = lookup(c, t.name);
     }
-    if (s == null && ast.same(t.name, "f32")) {
-        error(c, t.line, "f32 is not supported yet");
-    }
     if (s == null || s.kind != ast.SymbolKind.TYPE) {
         error(c, t.line, ast.cat([][]u8 { t.name, " is not a type" }));
     }
@@ -365,6 +386,12 @@ fn coerce(c: *Checker, slot: **ast.Expr, to: *ast.Type) {
         if (!wide.equal(wrap(e.value, to), e.value)) {
             error(c, e.line, ast.cat([][]u8 { wide.text(e.value), " does not fit in ", type_name(to) }));
         }
+        e.type = to;
+        return;
+    }
+    if (e.is_const && is_integer(from) && to.kind == ast.TypeKind.FLOAT &&
+        (from.kind == ast.TypeKind.UNTYPED || widens(from, to))) {
+        e.value = int_to_float(e.value);
         e.type = to;
         return;
     }
@@ -519,6 +546,41 @@ fn fold_binary(c: *Checker, e: *ast.Expr, a: wide.Wide, b: wide.Wide, t: *ast.Ty
     return wrap(result, t);
 }
 
+fn fold_float(op: ast.TokenKind, left: wide.Wide, right: wide.Wide) wide.Wide {
+    var a = float.value(left.lo);
+    var b = float.value(right.lo);
+    switch (op) {
+        case ast.TokenKind.PLUS {
+            return float_wide(a + b);
+        }
+        case ast.TokenKind.MINUS {
+            return float_wide(a - b);
+        }
+        case ast.TokenKind.STAR {
+            return float_wide(a * b);
+        }
+        case ast.TokenKind.SLASH {
+            return float_wide(a / b);
+        }
+        case ast.TokenKind.EQ {
+            return wide.of_bool(a == b);
+        }
+        case ast.TokenKind.NE {
+            return wide.of_bool(a != b);
+        }
+        case ast.TokenKind.LT {
+            return wide.of_bool(a < b);
+        }
+        case ast.TokenKind.LE {
+            return wide.of_bool(a <= b);
+        }
+        case ast.TokenKind.GT {
+            return wide.of_bool(a > b);
+        }
+    }
+    return wide.of_bool(a >= b);
+}
+
 // Gives both operands one type: an untyped constant takes the other's type, and a smaller integer type
 // widens to a larger one that holds all of its values
 fn unify(c: *Checker, e: *ast.Expr) *ast.Type {
@@ -565,10 +627,13 @@ fn binary_type(c: *Checker, e: *ast.Expr) *ast.Type {
                 }));
             }
             if (e.op != ast.TokenKind.EQ && e.op != ast.TokenKind.NE && t.kind != ast.TypeKind.INT &&
-                t.kind != ast.TypeKind.UNTYPED && t.kind != ast.TypeKind.POINTER) {
+                t.kind != ast.TypeKind.UNTYPED && t.kind != ast.TypeKind.POINTER && t.kind != ast.TypeKind.FLOAT) {
                 error(c, e.line, ast.cat([][]u8 { type_name(t), " values only compare with == and !=" }));
             }
-            if (e.left.is_const && e.right.is_const) {
+            if (e.left.is_const && e.right.is_const && t.kind == ast.TypeKind.FLOAT) {
+                e.value = fold_float(e.op, e.left.value, e.right.value);
+                e.is_const = true;
+            } else if (e.left.is_const && e.right.is_const) {
                 e.value = fold_binary(c, e, e.left.value, e.right.value, t);
                 e.is_const = true;
             }
@@ -602,6 +667,15 @@ fn binary_type(c: *Checker, e: *ast.Expr) *ast.Type {
                 return e.type;
             }
             t = unify(c, e);
+            if (t.kind == ast.TypeKind.FLOAT && e.op as int >= ast.TokenKind.PLUS as int &&
+                e.op as int <= ast.TokenKind.SLASH as int) {
+                if (e.left.is_const && e.right.is_const) {
+                    e.value = fold_float(e.op, e.left.value, e.right.value);
+                    e.is_const = true;
+                }
+                e.type = t;
+                return t;
+            }
             if (!is_integer(t)) {
                 error(c, e.line, ast.cat([][]u8 { lexer.token_text(e.op), " needs integers, not ", type_name(t) }));
             }
@@ -625,6 +699,12 @@ fn check_unary(c: *Checker, e: *ast.Expr) *ast.Type {
     var t = check_expr(c, e.left);
     switch (e.op) {
         case ast.TokenKind.MINUS, ast.TokenKind.TILDE {
+            if (t.kind == ast.TypeKind.FLOAT && e.op == ast.TokenKind.MINUS) {
+                e.is_const = e.left.is_const;
+                e.value = wide.Wide { lo: e.left.value.lo ^ 0x80000000 };
+                e.type = t;
+                return t;
+            }
             if (!is_integer(t)) {
                 error(c, e.line, ast.cat([][]u8 { lexer.token_text(e.op), " needs an integer, not ", type_name(t) }));
             }
@@ -918,6 +998,21 @@ fn check_cast(c: *Checker, e: *ast.Expr) *ast.Type {
             e.is_const = true;
             e.value = wrap(e.left.value, to);
         }
+    } else if (is_integer(from) && to.kind == ast.TypeKind.FLOAT) {
+        ok = true;
+        e.is_const = e.left.is_const;
+        if (e.is_const) {
+            e.value = int_to_float(e.left.value);
+        }
+    } else if (from.kind == ast.TypeKind.FLOAT && to.kind == ast.TypeKind.INT) {
+        ok = true;
+        e.is_const = e.left.is_const;
+        if (e.is_const) {
+            e.value = float_to_int(e.left.value, to);
+        }
+    } else if (from.kind == ast.TypeKind.FLOAT && to.kind == ast.TypeKind.FLOAT) {
+        e.is_const = e.left.is_const;
+        e.value = e.left.value;
     } else if ((from.kind == ast.TypeKind.BOOL || from.kind == ast.TypeKind.ENUM) && to.kind == ast.TypeKind.INT) {
         ok = true;
         e.is_const = e.left.is_const;
@@ -1016,6 +1111,10 @@ fn check_expr(c: *Checker, e: *ast.Expr) *ast.Type {
         case ast.ExprKind.INT {
             e.is_const = true;
             e.type = &t_untyped;
+        }
+        case ast.ExprKind.FLOAT {
+            e.is_const = true;
+            e.type = &t_f32;
         }
         case ast.ExprKind.INDEX, ast.ExprKind.SLICE {
             return check_index(c, e);

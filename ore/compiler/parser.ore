@@ -199,6 +199,12 @@ fn parse_primary(p: *Parser) *ast.Expr {
             p.pos += 1;
             return e;
         }
+        case ast.TokenKind.FLOAT {
+            e = new_expr(ast.ExprKind.FLOAT, t.line);
+            e.value = t.value;
+            p.pos += 1;
+            return e;
+        }
         case ast.TokenKind.STRING {
             e = new_expr(ast.ExprKind.STRING, t.line);
             e.bytes = t.bytes;

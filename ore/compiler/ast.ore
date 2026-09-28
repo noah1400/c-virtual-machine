@@ -6,7 +6,7 @@ import "std/sys";
 import "wide";
 
 pub enum TokenKind {
-    EOF, IDENT, INT, STRING,
+    EOF, IDENT, INT, FLOAT, STRING,
 
     AS, BREAK, CASE, CONST, CONTINUE, DEFAULT, ELSE, ENUM, EXTERN, FALSE, FN, FOR, IF, IMPORT, INTERRUPT,
     NULL, PUB, RETURN, STRUCT, SWITCH, TRUE, VAR, WHILE,
@@ -21,12 +21,12 @@ pub struct Token {
     kind: TokenKind;
     line: int;
     text: []u8;             // the token in the source
-    value: wide.Wide;       // integer and character literals
+    value: wide.Wide;       // integer and character literals, and the bits of float literals
     bytes: []u8;            // string literals, decoded
 }
 
 pub enum TypeKind {
-    VOID, BOOL, INT, POINTER, ARRAY, SLICE, FN, STRUCT, ENUM,
+    VOID, BOOL, INT, FLOAT, POINTER, ARRAY, SLICE, FN, STRUCT, ENUM,
     NULL,                   // null before it meets a pointer or function type
     UNTYPED,                // an integer constant before it meets a type
 }
@@ -93,7 +93,7 @@ pub enum ExprKind {
     CONVERT,                // an implicit conversion the checker inserts
     LEN,                    // the length of a slice
     PTR,                    // the pointer of a slice
-    INT, BOOL, NULL, STRING, NAME, UNARY, BINARY, CALL, INDEX, SLICE, FIELD, CAST, STRUCT, ARRAY, SIZEOF,
+    INT, FLOAT, BOOL, NULL, STRING, NAME, UNARY, BINARY, CALL, INDEX, SLICE, FIELD, CAST, STRUCT, ARRAY, SIZEOF,
     NEW,
 }
 
@@ -113,7 +113,7 @@ pub struct Expr {
 
     type: *Type;            // set by the checker
     named: *Type;           // the type written in casts, literals and new
-    is_const: bool;         // value holds an integer, boolean or enum known when compiling
+    is_const: bool;         // value holds an integer, boolean, enum or the bits of an f32 known when compiling
     symbol: *Symbol;        // what a name stands for
     field: *Field;
     builtin: Builtin;

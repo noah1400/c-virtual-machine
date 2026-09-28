@@ -797,6 +797,11 @@ fn is_left_operand(e: *ast.Expr) bool {
     return !is_operand(e.right) && is_operand(e.left) && (is_stable(e.left) || !has_call(e.right));
 }
 
+// Operands that can be taken in either order; an f32 operation with two NaNs keeps the first one's bits
+fn swappable(e: *ast.Expr) bool {
+    return is_commutative(e.op) && e.type.kind != ast.TypeKind.FLOAT;
+}
+
 fn is_commutative(op: ast.TokenKind) bool {
     return op == ast.TokenKind.PLUS || op == ast.TokenKind.STAR || op == ast.TokenKind.AMP ||
         op == ast.TokenKind.PIPE || op == ast.TokenKind.CARET;
@@ -880,7 +885,13 @@ fn immediate(operand: []u8) int {
     return value;
 }
 
+var float_instructions = [4][]u8 { "FADD", "FSUB", "FMUL", "FDIV" };
+
 fn arithmetic_on(g: *Gen, register: []u8, op: ast.TokenKind, t: *ast.Type, right: []u8) {
+    if (t.kind == ast.TypeKind.FLOAT) {
+        emits(g, "    %s %s, %s\n", [][]u8 { float_instructions[op as int - ast.TokenKind.PLUS as int], register, right });
+        return;
+    }
     var instruction = "ADD";
     // Unsigned division and remainder by 2^k are a shift and a mask
     var shift = 0;
@@ -990,6 +1001,17 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
         return;
     }
 
+    if (is_comparison(e) && left.kind == ast.TypeKind.FLOAT) {
+        var code = float_compare(g, e);
+        if (code.ptr != null) {
+            emits(g, "    SET%s R0\n", [][]u8 { code });
+        } else if (e.op == ast.TokenKind.EQ) {
+            emit(g, "    SETZ R0\n    SETAE R6\n    AND R0, R6\n");
+        } else {
+            emit(g, "    SETNZ R0\n    SETB R6\n    OR R0, R6\n");
+        }
+        return;
+    }
     var bits = tested_bits(e);
     if (bits != null) {
         gen_test(g, bits);
@@ -1005,7 +1027,7 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
         }
     }
     // With the left operand taken last, the right one can stay in R0
-    if ((is_comparison(e) || is_commutative(e.op)) && is_left_operand(e)) {
+    if ((is_comparison(e) || swappable(e)) && is_left_operand(e)) {
         var operand = gen_operand(g, e.left);
         gen_expr(g, e.right);
         if (is_comparison(e)) {
@@ -1019,7 +1041,7 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
         emits(g, "    CMP R6, R0\n    SET%s R0\n", [][]u8 { condition(e.op, left, false) });
         return;
     }
-    if (is_commutative(e.op) && swap_operands(g, e)) {
+    if (swappable(e) && swap_operands(g, e)) {
         arithmetic(g, e.op, e.type, "R6");
         return;
     }
@@ -1029,6 +1051,47 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
         return;
     }
     arithmetic(g, e.op, e.type, right);
+}
+
+// Compares two f32s so that the unsigned condition it returns holds when the comparison does; == and !=
+// need two jumps and get none. Unordered operands set Z and C, so that A and AE do not hold.
+fn float_compare(g: *Gen, e: *ast.Expr) []u8 {
+    var left: []u8;
+    var right: []u8;
+    var register = register_of(e.left);
+    if (register.ptr != null && is_operand(e.right)) {
+        left = register;
+        right = gen_operand(g, e.right);
+    } else if (is_left_operand(e)) {
+        left = gen_operand(g, e.left);
+        gen_expr(g, e.right);
+        right = "R0";
+    } else if (swap_operands(g, e)) {
+        left = "R6";
+        right = "R0";
+    } else {
+        right = operands(g, e);
+        left = "R0";
+    }
+    var first = left;
+    var second = right;
+    if (e.op == ast.TokenKind.LT || e.op == ast.TokenKind.LE) {
+        first = right;
+        second = left;
+    }
+    if (first[0] != 'R') {
+        set_register(g, "R7", first);
+        first = "R7";
+    }
+    emits(g, "    FCMP %s, %s\n", [][]u8 { first, second });
+    var none: []u8;
+    if (e.op == ast.TokenKind.GT || e.op == ast.TokenKind.LT) {
+        return "A";
+    }
+    if (e.op == ast.TokenKind.GE || e.op == ast.TokenKind.LE) {
+        return "AE";
+    }
+    return none;
 }
 
 // The x & y or x % 2^k that a comparison with 0 tests, or else nothing
@@ -1107,6 +1170,23 @@ fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
         gen_condition(g, e.left, skip, !when);
         gen_condition(g, e.right, target, when);
         merge_label(g, skip, &saved, null, null);
+        return;
+    }
+    if (is_comparison(e) && e.left.type.kind == ast.TypeKind.FLOAT) {
+        var code = float_compare(g, e);
+        if (code.ptr != null) {
+            if (!when && ast.same(code, "A")) {
+                code = "BE";
+            } else if (!when) {
+                code = "B";
+            }
+            emitf(g, "    J%s .L%d\n", [][]u8 { code }, []int { target });
+        } else if ((e.op == ast.TokenKind.NE) == when) {
+            emitd(g, "    JNZ .L%d\n    JB .L%d\n", []int { target, target });
+        } else {
+            var skip = label(g);
+            emitd(g, "    JNZ .L%d\n    JAE .L%d\n.L%d:\n", []int { skip, target, skip });
+        }
         return;
     }
     var bits = tested_bits(e);
@@ -1344,6 +1424,8 @@ fn gen_print(g: *Gen, e: *ast.Expr) {
             emit(g, "    MOVE R0, R6\n    SYSCALL #2\n");
         } else if (t.kind == ast.TypeKind.POINTER || t.kind == ast.TypeKind.FN) {
             emit(g, "    SYSCALL #5\n");
+        } else if (t.kind == ast.TypeKind.FLOAT) {
+            emit(g, "    SYSCALL #7\n");
         } else if (t.kind == ast.TypeKind.INT && !t.is_signed) {
             emit(g, "    LOAD R5, #10\n    SYSCALL #6\n");
         } else {
@@ -1857,6 +1939,32 @@ fn gen_addr(g: *Gen, e: *ast.Expr) {
     }
 }
 
+// Converts the value in R0 from one scalar type to another. ITOF and FTOI take signed integers, so u32
+// values from 2^31 on go through a smaller value: halved with the lost bit kept for rounding, or less 2^31.
+fn convert(g: *Gen, from: *ast.Type, to: *ast.Type) {
+    var big = 0;
+    var done = 0;
+    if (from.kind == ast.TypeKind.INT && to.kind == ast.TypeKind.FLOAT && from.size == 4 && !from.is_signed) {
+        big = label(g);
+        done = label(g);
+        emitd(g, "    CMP R0, #0\n    JL .L%d\n    ITOF R0, R0\n    JMP .L%d\n", []int { big, done });
+        emitd(g, ".L%d:\n    MOVE R6, R0\n    AND R6, #1\n    SHR R0, #1\n    OR R0, R6\n    ITOF R0, R0\n    FADD R0, R0\n.L%d:\n",
+            []int { big, done });
+    } else if (from.kind == ast.TypeKind.INT && to.kind == ast.TypeKind.FLOAT) {
+        emit(g, "    ITOF R0, R0\n");
+    } else if (from.kind == ast.TypeKind.FLOAT && to.kind == ast.TypeKind.INT && to.size == 4 && !to.is_signed) {
+        big = label(g);
+        done = label(g);
+        emitd(g, "    FCMP R0, #0x4F000000\n    JAE .L%d\n    FTOI R0, R0\n    JMP .L%d\n", []int { big, done });
+        emitd(g, ".L%d:\n    FSUB R0, #0x4F000000\n    FTOI R0, R0\n    XOR R0, #0x80000000\n.L%d:\n", []int { big, done });
+    } else if (from.kind == ast.TypeKind.FLOAT && to.kind == ast.TypeKind.INT) {
+        emit(g, "    FTOI R0, R0\n");
+        normalize(g, to);
+    } else {
+        normalize(g, to);
+    }
+}
+
 fn gen_expr(g: *Gen, e: *ast.Expr) {
     var t = e.type;
 
@@ -1905,6 +2013,8 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
             gen_expr(g, e.left);
             if (e.left.type.kind == ast.TypeKind.ARRAY) {
                 emitd(g, "    LOAD R5, #%d\n", []int { e.left.type.length });
+            } else if (t.kind == ast.TypeKind.FLOAT) {
+                emit(g, "    ITOF R0, R0\n");
             }
         }
         case ast.ExprKind.LEN {
@@ -1938,6 +2048,8 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
             gen_expr(g, e.left);
             if (e.op == ast.TokenKind.BANG) {
                 emit(g, "    XOR R0, #1\n");
+            } else if (e.op == ast.TokenKind.MINUS && t.kind == ast.TypeKind.FLOAT) {
+                emit(g, "    FNEG R0\n");
             } else if (e.op == ast.TokenKind.MINUS) {
                 emit(g, "    NEG R0\n");
                 normalize(g, t);
@@ -1951,7 +2063,7 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
         }
         case ast.ExprKind.CAST {
             gen_expr(g, e.left);
-            normalize(g, t);
+            convert(g, e.left.type, t);
         }
         case ast.ExprKind.STRUCT, ast.ExprKind.ARRAY {
             gen_literal(g, e);
