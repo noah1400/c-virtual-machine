@@ -177,6 +177,7 @@ pub struct Decl {
     imported: *Module;
     symbol: *Symbol;
     state: int;             // of a constant: 0 unchecked, 1 being checked, 2 checked
+    used: bool;             // reached from main or named in assembly, so generated
 }
 
 pub struct Module {

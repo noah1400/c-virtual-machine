@@ -1,4 +1,5 @@
 // Writes a checked program as VM32 assembly, with .loc lines that point at its source lines
+import "std/io";
 import "std/str";
 import "ast";
 import "check";
@@ -2282,6 +2283,91 @@ fn gen_entry(g: *Gen) {
     str.append(&g.text, "    RET\n");
 }
 
+// A function or global joins pending the first time something uses it
+fn reach(pending: *ast.List, s: *ast.Symbol) {
+    if (s != null && s.decl != null && !s.decl.used &&
+        (s.kind == ast.SymbolKind.FN || s.kind == ast.SymbolKind.GLOBAL)) {
+        s.decl.used = true;
+        ast.add(pending, s.decl as *u8);
+    }
+}
+
+fn reach_expr(pending: *ast.List, e: *ast.Expr) {
+    if (e == null) {
+        return;
+    }
+    reach(pending, e.symbol);
+    reach_expr(pending, e.left);
+    reach_expr(pending, e.right);
+    reach_expr(pending, e.third);
+    for (var i = 0; i < e.args.len; i += 1) {
+        reach_expr(pending, e.args[i]);
+    }
+}
+
+fn reach_stmt(pending: *ast.List, s: *ast.Stmt) {
+    if (s == null) {
+        return;
+    }
+    for (var i = 0; i < s.body.len; i += 1) {
+        reach_stmt(pending, s.body[i]);
+    }
+    reach_expr(pending, s.value);
+    reach_expr(pending, s.target);
+    reach_expr(pending, s.cond);
+    reach_stmt(pending, s.then);
+    reach_stmt(pending, s.otherwise);
+    reach_stmt(pending, s.init);
+    reach_stmt(pending, s.step);
+    for (var i = 0; i < s.cases.len; i += 1) {
+        reach_stmt(pending, s.cases[i].body);
+    }
+    reach_stmt(pending, s.fallback);
+}
+
+fn is_name_byte(c: u8) bool {
+    return str.is_letter(c) || str.is_digit(c) || c == '_' || c == '.';
+}
+
+// Assembly names functions and globals as module.name
+fn reach_assembly(program: *ast.Program, pending: *ast.List, path: []u8) {
+    var text = io.read_file(path);
+    var i = 0;
+    while (i < text.len) {
+        var start = i;
+        while (i < text.len && is_name_byte(text[i])) {
+            i += 1;
+        }
+        var dot = str.find_byte(text[start:i], '.');
+        for (var k = 0; k < program.modules.count && dot > 0; k += 1) {
+            var m = ast.module_at(program, k);
+            if (ast.same(m.name, text[start:start + dot])) {
+                reach(pending, ast.get(&m.symbols, text[start + dot + 1:i]) as *ast.Symbol);
+            }
+        }
+        if (i == start) {
+            i += 1;
+        }
+    }
+    free(text);
+}
+
+// Marks what main reaches, directly or through other functions and globals, and what the program's
+// assembly names, which is all that gets generated
+fn mark_used(program: *ast.Program) {
+    var pending = ast.List {};
+    reach(&pending, program.main);
+    for (var i = 0; i < program.assembly.count; i += 1) {
+        reach_assembly(program, &pending, program.assembly.items[i]);
+    }
+    for (var i = 0; i < pending.count; i += 1) {
+        var d = pending.items[i] as *ast.Decl;
+        reach_expr(&pending, d.value);
+        reach_stmt(&pending, d.body);
+    }
+    free(pending.items);
+}
+
 pub fn generate(program: *ast.Program) []u8 {
     var g = Gen {
         program: program, text: str.builder(65536), data: str.builder(4096), pool: str.builder(4096),
@@ -2295,17 +2381,18 @@ pub fn generate(program: *ast.Program) []u8 {
         str.append(&g.text, "\n");
     }
     str.append(&g.text, "\n.text\n");
+    mark_used(program);
     gen_entry(&g);
     for (var i = 0; i < program.modules.count; i += 1) {
         g.m = ast.module_at(program, i);
         var decls = g.m.decls;
         for (var k = 0; k < decls.len; k += 1) {
-            if (decls[k].kind == ast.DeclKind.FN && decls[k].body != null) {
+            if (decls[k].kind == ast.DeclKind.FN && decls[k].body != null && decls[k].used) {
                 gen_function(&g, decls[k]);
             }
         }
         for (var k = 0; k < decls.len; k += 1) {
-            if (decls[k].kind == ast.DeclKind.VAR) {
+            if (decls[k].kind == ast.DeclKind.VAR && decls[k].used) {
                 gen_global(&g, decls[k]);
             }
         }
