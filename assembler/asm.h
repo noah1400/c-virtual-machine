@@ -110,7 +110,34 @@ typedef struct {
     int64_t layout_value;   // size, alignment or address argument of a directive, fixed in pass 1
     int relocated;      // the linker supplies the instruction's immediate
     size_t location;    // 1 + index of the .loc in effect, 0 before any
+    int unit;           // the unit of a library the line is in, 0 for none
+    int removable;      // left out with its unit, unlike directives that every program keeps
+    int dropped;        // its unit is left out
 } LineResult;
+
+// A line that refers to a symbol, or code that runs into the unit after it. from is the unit that
+// does it, 0 for code that is always kept, and to the unit it needs.
+typedef struct {
+    int from;
+    int to;
+    char *name;         // the symbol, until it is looked up
+} Use;
+
+// In a file with .library, the code or data from one label to the next is a unit, which is left out
+// unless something the program keeps refers to its labels or runs into it
+typedef struct {
+    const char **files;         // the files that declared .library
+    size_t file_count;
+    const char **units;         // the file of each unit; units count from 1
+    size_t unit_count;
+    Use *uses;
+    size_t use_count;
+    size_t use_capacity;
+    int current[SECTION_COUNT]; // the unit that lines in each section belong to, 0 for none
+    int last_code;              // unit of the last instruction or data in .text, -1 before any
+    int runs_on;                // execution can continue past it
+    int first_code;             // unit of the first code, where a program without .entry starts
+} Library;
 
 // A line of another source, such as the C file a compiler read, named by .loc
 typedef struct {
@@ -184,6 +211,8 @@ typedef struct {
     int64_t entry;
     const SourceLine *entry_line;   // the .entry directive, if any
 
+    Library library;
+
     const SourceLine *line;
     uint32_t statement_address;
     int errors;
@@ -200,6 +229,7 @@ void symbols_init(SymbolTable *table);
 void symbols_free(SymbolTable *table);
 AsmSymbol *symbols_find(SymbolTable *table, const char *name);
 AsmSymbol *symbols_add(SymbolTable *table, const char *name);
+int symbols_remove(SymbolTable *table, const unsigned char *removed);
 
 // expr.c
 typedef struct {
@@ -228,6 +258,7 @@ void asm_init(Assembler *as);
 void asm_free(Assembler *as);
 int asm_assemble(Assembler *as, const char *path);
 void asm_error(Assembler *as, const char *format, ...);
+void asm_note_use(Assembler *as, const char *name);
 
 // check.c
 int check_registers(Assembler *as);

@@ -54,6 +54,32 @@ static int rehash(SymbolTable *table, size_t bucket_count) {
     return 1;
 }
 
+// Removes the symbols that removed marks, keeping the order of the others. Constants that alias an
+// external symbol follow it to its new index.
+int symbols_remove(SymbolTable *table, const unsigned char *removed) {
+    size_t *index = malloc(table->count * sizeof(size_t) + 1);
+    if (!index) {
+        return 0;
+    }
+    size_t count = 0;
+    for (size_t i = 0; i < table->count; i++) {
+        if (removed[i]) {
+            free(table->items[i].name);
+            continue;
+        }
+        index[i] = count;
+        table->items[count++] = table->items[i];
+    }
+    table->count = count;
+    for (size_t i = 0; i < count; i++) {
+        if (table->items[i].base >= BASE_SYMBOL) {
+            table->items[i].base = BASE_SYMBOL + (int)index[table->items[i].base - BASE_SYMBOL];
+        }
+    }
+    free(index);
+    return rehash(table, table->bucket_count);
+}
+
 // Adds an undefined symbol; the caller must check that the name is not present yet
 AsmSymbol *symbols_add(SymbolTable *table, const char *name) {
     if (table->count == table->capacity) {

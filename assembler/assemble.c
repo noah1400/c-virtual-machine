@@ -78,6 +78,12 @@ void asm_free(Assembler *as) {
     }
     free(as->locations);
     free(as->relocations);
+    for (size_t i = 0; i < as->library.use_count; i++) {
+        free(as->library.uses[i].name);
+    }
+    free(as->library.uses);
+    free((void *)as->library.files);
+    free((void *)as->library.units);
     free(as->lines);
     free(as->files);
     free(as->results);
@@ -738,6 +744,59 @@ static void structure_directive(Assembler *as, Parser *p, const char *name) {
     }
 }
 
+static int is_library(const Library *lib, const char *file) {
+    for (size_t i = 0; i < lib->file_count; i++) {
+        if (lib->files[i] == file) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void directive_library(Assembler *as, Parser *p) {
+    Library *lib = &as->library;
+    if (!expect_end(p) || as->pass != PASS_DEFINE || is_library(lib, as->line->file)) {
+        return;
+    }
+    const char **files = realloc((void *)lib->files, (lib->file_count + 1) * sizeof(char *));
+    if (!files) {
+        asm_error(as, "out of memory");
+        return;
+    }
+    lib->files = files;
+    lib->files[lib->file_count++] = as->line->file;
+}
+
+static void add_use(Assembler *as, int from, int to, const char *name) {
+    Library *lib = &as->library;
+    if (lib->use_count == lib->use_capacity) {
+        size_t capacity = lib->use_capacity ? lib->use_capacity * 2 : 256;
+        Use *uses = realloc(lib->uses, capacity * sizeof(Use));
+        if (!uses) {
+            asm_error(as, "out of memory");
+            return;
+        }
+        lib->uses = uses;
+        lib->use_capacity = capacity;
+    }
+    char *copy = NULL;
+    if (name) {
+        copy = malloc(strlen(name) + 1);
+        if (!copy) {
+            asm_error(as, "out of memory");
+            return;
+        }
+        strcpy(copy, name);
+    }
+    lib->uses[lib->use_count++] = (Use){ from, to, copy };
+}
+
+// Pass 1 notes every symbol that a line refers to, for .library to know what is used
+void asm_note_use(Assembler *as, const char *name) {
+    const LineResult *result = &as->results[as->line - as->lines];
+    add_use(as, result->removable ? result->unit : 0, 0, name);
+}
+
 static void directive(Assembler *as, Parser *p) {
     const char *name = peek(p)->text;
     p->pos++;
@@ -781,6 +840,8 @@ static void directive(Assembler *as, Parser *p) {
         directive_equ(as, p);
     } else if (name_equals(name, ".entry")) {
         directive_entry(as, p);
+    } else if (name_equals(name, ".library")) {
+        directive_library(as, p);
     } else if (name_equals(name, ".incbin")) {
         directive_incbin(as, p);
     } else if (name_equals(name, ".loc")) {
@@ -1282,6 +1343,126 @@ static int conditional(Assembler *as, Parser *p, LineResult *result) {
     return 0;
 }
 
+// Instructions, data and constants belong to the unit of the label before them; other directives stay
+static int belongs_to_unit(const Token *t, int labels_only) {
+    static const char *const kept[] = { ".byte", ".word", ".dword", ".float", ".ascii", ".asciiz", ".string",
+                                        ".space", ".skip", ".incbin", ".equ", ".set" };
+    if (labels_only || t->kind == TOK_END) {
+        return 1;
+    }
+    if (t->kind != TOK_IDENT) {
+        return 0;
+    }
+    for (size_t i = 0; t->text[0] == '.' && i < sizeof(kept) / sizeof(kept[0]); i++) {
+        if (name_equals(t->text, kept[i])) {
+            return 1;
+        }
+    }
+    return t->text[0] != '.';
+}
+
+// In pass 1, a label in a library starts a unit, and the lines after it in the same file and section
+// belong to it
+static void enter_unit(Assembler *as, LineResult *result, int section, int starts_unit, int removable) {
+    Library *lib = &as->library;
+    const char *file = as->line->file;
+    if (starts_unit && is_library(lib, file)) {
+        const char **units = realloc((void *)lib->units, (lib->unit_count + 1) * sizeof(char *));
+        if (!units) {
+            asm_error(as, "out of memory");
+            return;
+        }
+        lib->units = units;
+        lib->units[lib->unit_count++] = file;
+        if (section == SECTION_TEXT && lib->runs_on && lib->last_code >= 0) {
+            add_use(as, lib->last_code, (int)lib->unit_count, NULL);
+        }
+        lib->current[section] = (int)lib->unit_count;
+    }
+    int unit = lib->current[section];
+    result->unit = unit && lib->units[unit - 1] == file ? unit : 0;
+    result->removable = removable;
+}
+
+// Code that ends with a jump, RET, IRET or HALT does not run into the unit after it
+static void follow_code(Assembler *as, const LineResult *result, int stops) {
+    Library *lib = &as->library;
+    if (result->section != SECTION_TEXT || !result->removable) {
+        return;
+    }
+    if (lib->first_code < 0) {
+        lib->first_code = result->unit;
+    }
+    lib->last_code = result->unit;
+    lib->runs_on = !stops;
+}
+
+static int unit_of(const Assembler *as, const AsmSymbol *sym) {
+    return sym && sym->line && !sym->external ? as->results[sym->line - as->lines].unit : 0;
+}
+
+// Keeps the units of libraries that the rest of the program uses, directly or through other units, and
+// leaves out the others along with their symbols
+static void leave_out_unused(Assembler *as) {
+    Library *lib = &as->library;
+    unsigned char *kept = calloc(lib->unit_count + 1, 1);
+    unsigned char *removed = calloc(as->symbols.count + 1, 1);
+    if (!kept || !removed) {
+        free(kept);
+        free(removed);
+        asm_error(as, "out of memory");
+        return;
+    }
+    kept[0] = 1;
+    size_t count = 0;
+    for (size_t i = 0; i < lib->use_count; i++) {
+        Use use = lib->uses[i];
+        if (use.name) {
+            use.to = unit_of(as, symbols_find(&as->symbols, use.name));
+            free(use.name);
+            use.name = NULL;
+        }
+        if (use.to && use.to != use.from) {
+            lib->uses[count++] = use;
+        }
+    }
+    lib->use_count = count;
+    for (size_t i = 0; i < as->global_count; i++) {
+        kept[unit_of(as, symbols_find(&as->symbols, as->globals[i].name))] = 1;
+    }
+    if (!as->entry_line && lib->first_code > 0) {
+        kept[lib->first_code] = 1;
+    }
+    for (int changed = 1; changed;) {
+        changed = 0;
+        for (size_t i = 0; i < lib->use_count; i++) {
+            const Use *use = &lib->uses[i];
+            if (kept[use->from] && !kept[use->to]) {
+                kept[use->to] = 1;
+                changed = 1;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < as->line_count; i++) {
+        LineResult *result = &as->results[i];
+        if (!kept[result->unit]) {
+            result->dropped = 1;
+            result->section = -1;
+            result->size = 0;
+        }
+    }
+    for (size_t i = 0; i < as->symbols.count; i++) {
+        const AsmSymbol *sym = &as->symbols.items[i];
+        removed[i] = !sym->external && sym->line && as->results[sym->line - as->lines].dropped;
+    }
+    if (!symbols_remove(&as->symbols, removed)) {
+        asm_error(as, "out of memory");
+    }
+    free(kept);
+    free(removed);
+}
+
 static void assemble_line(Assembler *as, size_t index, int labels_only) {
     LineResult *result = &as->results[index];
     TokenList tokens;
@@ -1294,8 +1475,10 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
 
     Parser p = { .as = as, .tokens = &tokens };
     int active = conditions_active(as);
+    int label_section = as->section, starts_unit = 0;
     while (tokens.items[p.pos].kind == TOK_IDENT && token_is_punct(&tokens.items[p.pos + 1], ':')) {
-        if (active) {
+        if (active && !result->dropped) {
+            starts_unit |= tokens.items[p.pos].text[0] != '.' && !as->structure[0];
             define_label(as, tokens.items[p.pos].text);
         }
         p.pos += 2;
@@ -1307,6 +1490,18 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
         return;
     }
 
+    Token *t = &tokens.items[p.pos];
+    int removable = belongs_to_unit(t, labels_only);
+    int stops = !labels_only && t->kind == TOK_IDENT &&
+                (name_equals(t->text, "JMP") || name_equals(t->text, "RET") || name_equals(t->text, "IRET") ||
+                 name_equals(t->text, "HALT"));
+    if (as->pass == PASS_DEFINE) {
+        enter_unit(as, result, label_section, starts_unit, removable);
+    } else if (result->dropped && removable) {
+        tokens_free(&tokens);
+        return;
+    }
+
     int section = as->section;
     uint32_t start = current(as)->pc;
     uint32_t planned = result->section == section ? result->size : 0;
@@ -1314,7 +1509,6 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
     as->statement_address = start;
     result->section = -1;
 
-    Token *t = &tokens.items[p.pos];
     if (labels_only) {
         // A macro invocation; its expansion follows as separate lines
     } else if (t->kind == TOK_IDENT && t->text[0] == '.') {
@@ -1337,6 +1531,9 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
         result->size = as->sections[section].pc - start;
     }
     result->location = as->location;
+    if (as->pass == PASS_DEFINE) {
+        follow_code(as, result, stops);
+    }
     tokens_free(&tokens);
 }
 
@@ -1353,6 +1550,10 @@ static void run_pass(Assembler *as, int pass) {
     as->scope[0] = '\0';
     as->structure[0] = '\0';
     as->location = 0;
+    memset(as->library.current, 0, sizeof(as->library.current));
+    as->library.last_code = -1;
+    as->library.runs_on = 0;
+    as->library.first_code = -1;
 
     for (size_t i = 0; i < as->line_count && as->errors < ASM_MAX_ERRORS; i++) {
         as->line = &as->lines[i];
@@ -1471,6 +1672,9 @@ int asm_assemble(Assembler *as, const char *path) {
     }
 
     run_pass(as, PASS_DEFINE);
+    if (as->errors == 0 && as->library.unit_count) {
+        leave_out_unused(as);
+    }
     if (as->errors == 0) {
         settle_layout(as);
     }

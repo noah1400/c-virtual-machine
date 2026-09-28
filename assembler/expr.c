@@ -75,6 +75,9 @@ static Value combine(Parser *p, Value a, Value b, int sign) {
 static Value parse_logical_or(Parser *p);
 
 static Value symbol_value(Parser *p, const char *name) {
+    if (p->as->pass == PASS_DEFINE && !p->constants && p->as->line) {
+        asm_note_use(p->as, name);
+    }
     AsmSymbol *sym = p->constants ? symbols_find(p->constants, name) : NULL;
     if (!sym) {
         sym = symbols_find(&p->as->symbols, name);
