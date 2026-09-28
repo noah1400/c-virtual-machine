@@ -1,4 +1,5 @@
-// expect-error: f32 is not supported yet
+// expect-error: mismatched types int and f32
 fn main() {
-    var x: f32;
+    var n = 10;
+    var half = n / 2.0;
 }

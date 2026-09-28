@@ -1,2 +1,2 @@
-// expect-error: floating-point numbers are not supported yet
-const HALF = 0.5;
+// expect-error: invalid number 2.5e
+const RATE = 2.5e;

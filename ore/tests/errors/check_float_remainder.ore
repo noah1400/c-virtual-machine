@@ -1,0 +1,5 @@
+// expect-error: '%' needs integers, not f32
+fn main() {
+    var x: f32 = 7.5;
+    var r = x % 2.0;
+}

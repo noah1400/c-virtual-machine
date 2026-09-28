@@ -1,0 +1,18 @@
+1.5 0.1 0.002 1e+10 3.40282e+38 1.4013e-45 1000.5 0
+1036831949 1 2139095039 2147483648 1051372203
+9.25 5.25 14.5 3.625 -7.25 inf -inf
+truetruefalsefalsefalsetrue lt le ne !eq 
+falsefalsetruetruefalsetrue gt ge ne !lt !eq 
+falsetruefalsetruetruefalse le ge eq !lt 
+falsefalsefalsefalsefalsetrue ne !lt !eq 
+falsefalsefalsefalsefalsetrue ne !lt !eq 
+falsefalsefalsefalsefalsetrue ne !lt !eq 
+falsefalsetruetruefalsetrue gt ge ne !lt !eq 
+falsetruefalsetruetruefalse le ge eq !lt 
+-7 4.29497e+09 4.29497e+09 2.14748e+09 200.5 -450
+1333788672 1266679808 1333788671 1266679808
+3 -3 3000000000 2500000000 3 -3 -2147483648
+-2147483648 -2147483648 -2147483648 44 4294967295
+6 -10 7 1.5
+6.25e+09 1 0.333333 true
+0.874512 4 2 2.5

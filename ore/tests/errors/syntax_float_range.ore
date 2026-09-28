@@ -1,0 +1,2 @@
+// expect-error: number too large
+const HUGE = 1e39;

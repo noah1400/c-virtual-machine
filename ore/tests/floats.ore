@@ -1,0 +1,101 @@
+struct Point {
+    x: f32;
+    y: f32;
+    tag: u8;
+}
+
+const THIRD = 1.0 / 3.0;
+const SCALE: f32 = 4;
+const BIG = 16777217 as f32;
+
+var origin = Point { x: 1.5, y: -2.25, tag: 7 };
+var table = [4]f32 { 0.5, 1e-3, 2.5e10, THIRD * 3.0 };
+var ratio: f32 = THIRD;
+
+fn bits(x: f32) u32 {
+    var copy = x;
+    return *(&copy as *u32);
+}
+
+fn mean(values: []f32) f32 {
+    var sum: f32 = 0;
+    for (var i = 0; i < values.len; i += 1) {
+        sum += values[i];
+    }
+    return sum / values.len as f32;
+}
+
+fn scale(p: *Point, by: f32) {
+    p.x *= by;
+    p.y = p.y * by - 1;
+}
+
+fn compare(a: f32, b: f32) {
+    print(a < b, a <= b, a > b, a >= b, a == b, a != b, " ");
+    if (a < b) {
+        print("lt ");
+    }
+    if (a <= b) {
+        print("le ");
+    }
+    if (a > b) {
+        print("gt ");
+    }
+    if (a >= b) {
+        print("ge ");
+    }
+    if (a == b) {
+        print("eq ");
+    }
+    if (a != b) {
+        print("ne ");
+    }
+    if (!(a < b)) {
+        print("!lt ");
+    }
+    if (!(a == b)) {
+        print("!eq ");
+    }
+    print("\n");
+}
+
+fn main() int {
+    print(1.5, " ", 0.1, " ", 2e-3, " ", 1e10, " ", 3.4028235e38, " ", 1e-45, " ", 1_000.5, " ", 0.0, "\n");
+    print(bits(0.1), " ", bits(1e-45), " ", bits(3.4028235e38), " ", bits(-0.0), " ", bits(THIRD), "\n");
+    var a: f32 = 7.25;
+    var b = 2.0;
+    print(a + b, " ", a - b, " ", a * b, " ", a / b, " ", -a, " ", a / 0.0, " ", -a / 0.0, "\n");
+    var nan = 0.0 / 0.0;
+    var inf = 1.0 / 0.0;
+    compare(1.0, 2.0);
+    compare(2.0, 1.0);
+    compare(1.5, 1.5);
+    compare(nan, 1.0);
+    compare(1.0, nan);
+    compare(nan, nan);
+    compare(inf, 1e38);
+    compare(-0.0, 0.0);
+    var i = -7;
+    var u: u32 = 4294967295;
+    var s: u8 = 200;
+    var h: i16 = -300;
+    print(i as f32, " ", u as f32, " ", (u - 128) as f32, " ", 2147483648 as u32 as f32, " ", s + 0.5, " ", h * 1.5, "\n");
+    print(bits(u as f32), " ", bits(16777217 as u32 as f32), " ", bits(4294967040 as u32 as f32), " ", bits(BIG), "\n");
+    var f = 3.99;
+    var g = -3.99;
+    var big = 3e9;
+    print(f as int, " ", g as int, " ", big as u32, " ", 2.5e9 as u32, " ", f as u8, " ", g as i8, " ", 1e20 as int, "\n");
+    print(nan as int, " ", inf as int, " ", -inf as int, " ", 300.7 as u8, " ", -1.5 as u32, "\n");
+    var p = origin;
+    scale(&p, SCALE);
+    print(p.x, " ", p.y, " ", p.tag, " ", origin.x, "\n");
+    print(mean(table[:]), " ", table[3], " ", ratio, " ", THIRD * 3.0 == 1.0, "\n");
+    var x: f32 = 1;
+    for (var k = 0; k < 10; k += 1) {
+        x = x * 0.5 + 1;
+    }
+    x -= 0.25;
+    x /= 2;
+    print(x, " ", SCALE, " ", 10 / 4 * 1.0, " ", 1.0 * 10 / 4, "\n");
+    return 0;
+}
