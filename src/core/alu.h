@@ -53,7 +53,7 @@ static inline uint32_t alu_logic(uint32_t *sr, uint32_t result) {
 
 // Shifts and rotations set C to the last bit that went out when the count is not zero
 static inline uint32_t alu_shift(uint32_t *sr, uint32_t result, uint32_t count, uint32_t carry) {
-    set_flags(sr, (count ? CARRY_FLAG : 0) | ZERO_FLAG | NEG_FLAG, (carry ? CARRY_FLAG : 0) | zero_negative(result));
+    set_flags(sr, (count ? CARRY_FLAG : 0) | ZERO_FLAG | NEG_FLAG, (count && carry ? CARRY_FLAG : 0) | zero_negative(result));
     return result;
 }
 

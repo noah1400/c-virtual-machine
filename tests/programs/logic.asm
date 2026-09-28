@@ -41,6 +41,16 @@
     CALL print_hex
     CALL print_flags
 
+    ; Rotating by zero leaves the carry alone
+    LOAD R8, #1
+    CMP R8, #0
+    ROL R8, #0
+    CALL print_flags
+    LOAD R8, #1
+    SHL R8, #31
+    ROR R8, #0
+    CALL print_flags
+
     LOAD R8, #0x10
     TEST R8, #1
     CALL print_flags
