@@ -128,7 +128,8 @@ INLINE int writes_special(uint32_t reg) {
 // The host address of size bytes at address if accessing them needs no fault; cpu_run runs without paging
 INLINE uint8_t *reach(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
     uint64_t end = (uint64_t)address + size;
-    if (end <= vm->memory_size && (end <= vm->control[CR_HEAPLO] || address >= vm->control[CR_HEAPHI])) {
+    if (end <= vm->memory_size && (end <= vm->control[CR_HEAPLO] || address >= vm->control[CR_HEAPHI] ||
+                                   memory_heap_allows(vm, address, size, access))) {
         return vm->memory + address;
     }
     return memory_direct(vm, address, size, access);

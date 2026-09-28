@@ -10,11 +10,10 @@
 // blocks, each with the room that first fit sees after it and the most room anywhere below it, so the
 // lowest gap that fits is found without visiting every block. The other keeps freed blocks until their
 // space is reused, so that a second free can be told apart from a bad pointer. A guard gap that no
-// access may touch precedes every block. Blocks and gaps come in units of 8 bytes, whose rights are
-// also kept in a byte each, so that accesses can be checked without searching.
-#define HEAP_GUARD      8u
-#define HEAP_ALIGNMENT  8u
-#define HEAP_UNIT_USED  0x80u
+// access may touch precedes every block. Blocks and gaps come in units of HEAP_UNIT bytes, whose rights
+// are also kept in a byte each, so that accesses can be checked without searching.
+#define HEAP_GUARD      HEAP_UNIT
+#define HEAP_ALIGNMENT  HEAP_UNIT
 
 struct HeapNode {
     uint32_t start;
@@ -339,16 +338,6 @@ static int access_range(VM *vm, uint32_t address, uint8_t *buffer, uint32_t size
     return VM_ERROR_NONE;
 }
 
-// Whether an access of up to 8 bytes lies in one block that allows it: its first and last units have
-// the rights, and no two units of different blocks are next to each other
-static int heap_allows(const VM *vm, uint32_t address, uint32_t size, uint8_t access) {
-    uint32_t first = (address - vm->heap_rights_base) / HEAP_ALIGNMENT;
-    uint32_t last = (address + size - 1 - vm->heap_rights_base) / HEAP_ALIGNMENT;
-    uint8_t needed = (uint8_t)(HEAP_UNIT_USED | access);
-    return address >= vm->heap_rights_base && last < vm->heap_rights_count &&
-           (vm->heap_rights[first] & vm->heap_rights[last] & needed) == needed;
-}
-
 // The host address of an access that needs no translation and that the heap rules allow, or NULL when
 // memory_read or memory_write would translate or fault
 uint8_t *memory_direct(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
@@ -356,8 +345,8 @@ uint8_t *memory_direct(VM *vm, uint32_t address, uint32_t size, uint8_t access) 
         return NULL;
     }
     if (in_heap(vm, address, size)) {
-        if (vm->heap_rights && size <= HEAP_ALIGNMENT) {
-            return heap_allows(vm, address, size, access) ? vm->memory + address : NULL;
+        if (vm->heap_rights && size <= HEAP_UNIT) {
+            return memory_heap_allows(vm, address, size, access) ? vm->memory + address : NULL;
         }
         const struct HeapNode *block = find_block(vm, address);
         if (!block || size > block->start + block->size - address || (block->protection & access) != access) {

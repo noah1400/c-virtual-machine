@@ -1,6 +1,7 @@
 #ifndef _CPU_H_
 #define _CPU_H_
 
+#include <string.h>
 #include "vm_types.h"
 
 void cpu_reset(VM *vm);
@@ -34,8 +35,31 @@ int cpu_deliver_interrupt(VM *vm);
 void cpu_enable_interrupts(VM *vm);
 void cpu_disable_interrupts(VM *vm);
 
-void cpu_push_frame(VM *vm, uint32_t site, uint32_t resume, int vector);
-void cpu_pop_frames(VM *vm, int interrupt_return);
+// The shadow call stack follows calls and interrupts for backtraces. When it is full, the
+// outermost frame makes room.
+static inline void cpu_push_frame(VM *vm, uint32_t site, uint32_t resume, int vector) {
+    if (vm->call_depth == VM_CALL_FRAMES) {
+        memmove(vm->call_frames, vm->call_frames + 1, (VM_CALL_FRAMES - 1) * sizeof(CallFrame));
+        vm->call_depth--;
+    }
+    vm->call_frames[vm->call_depth++] = (CallFrame){ site, vm->registers[R2_SP], resume, vector };
+}
+
+// A return drops the calls whose return address now lies below SP; an interrupt return also
+// drops the innermost interrupt, as it may switch to another stack
+static inline void cpu_pop_frames(VM *vm, int interrupt_return) {
+    while (vm->call_depth > 0) {
+        const CallFrame *top = &vm->call_frames[vm->call_depth - 1];
+        if (top->vector >= 0) {
+            vm->call_depth -= interrupt_return != 0;
+            return;
+        }
+        if (!interrupt_return && top->slot >= vm->registers[R2_SP]) {
+            return;
+        }
+        vm->call_depth--;
+    }
+}
 uint32_t cpu_unwind_calls(VM *vm, uint32_t count, uint32_t pc);
 
 void cpu_dump_registers(VM *vm);

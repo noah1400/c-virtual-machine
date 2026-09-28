@@ -46,6 +46,20 @@ void memory_write_dword(VM *vm, uint32_t address, uint32_t value);
 int memory_copy(VM *vm, uint32_t dest, uint32_t src, uint32_t size);
 int memory_set(VM *vm, uint32_t address, uint8_t value, uint32_t size);
 
+// Heap blocks and the gaps between them come in units of this many bytes
+#define HEAP_UNIT       8u
+#define HEAP_UNIT_USED  0x80u
+
+// Whether an access of up to HEAP_UNIT bytes inside memory lies in one heap block that allows it: its
+// first and last units have the rights, and no two units of different blocks are next to each other
+static inline int memory_heap_allows(const VM *vm, uint32_t address, uint32_t size, uint8_t access) {
+    uint32_t first = (address - vm->heap_rights_base) / HEAP_UNIT;
+    uint32_t last = (address + size - 1 - vm->heap_rights_base) / HEAP_UNIT;
+    uint8_t needed = (uint8_t)(HEAP_UNIT_USED | access);
+    return address >= vm->heap_rights_base && last < vm->heap_rights_count &&
+           (vm->heap_rights[first] & vm->heap_rights[last] & needed) == needed;
+}
+
 // Heap memory management
 void memory_heap_reset(VM *vm);
 uint32_t memory_allocate(VM *vm, uint32_t size);
