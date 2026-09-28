@@ -16,6 +16,8 @@ struct Gen {
     data: str.Builder;      // global variables
     pool: str.Builder;      // strings and the arrays of slice literals
     body: str.Builder;      // the function being generated, which needs its frame size first
+    tables: str.Builder;    // the jump tables of that function
+    scope: []u8;            // its label, which vmasm puts in front of the labels in it
     labels: int;
     strings: int;
     frame: int;             // bytes of locals and temporaries below BP
@@ -2175,6 +2177,59 @@ fn gen_declared(g: *Gen, s: *ast.Stmt) {
     store_to(g, sym.type, local_place(sym.offset));
 }
 
+// The case of a switch with a value, or else -1
+fn case_of(s: *ast.Stmt, value: int) int {
+    for (var i = 0; i < s.cases.len; i += 1) {
+        var values = s.cases[i].values;
+        for (var v = 0; v < values.len; v += 1) {
+            if (wide.low(values[v].value) == value) {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+// Jumps through a table to the case of the value in R0, whose labels count up from first, or else to otherwise,
+// when the switch has enough values close together; tells whether it did
+fn gen_table(g: *Gen, s: *ast.Stmt, first: int, otherwise: int) bool {
+    var count = 0;
+    var low = 0;
+    var high = 0;
+    for (var i = 0; i < s.cases.len; i += 1) {
+        var values = s.cases[i].values;
+        for (var v = 0; v < values.len; v += 1) {
+            var value = wide.low(values[v].value);
+            if (count == 0 || value < low) {
+                low = value;
+            }
+            if (count == 0 || value > high) {
+                high = value;
+            }
+            count += 1;
+        }
+    }
+    if (count < 4 || (high - low) as u32 >= (4 * count) as u32) {
+        return false;
+    }
+    var table = label(g);
+    if (low != 0) {
+        emitd(g, "    SUB R0, #%d\n", []int { low });
+    }
+    emitd(g, "    CMP R0, #%d\n    JAE .L%d\n    SHL R0, #2\n", []int { high - low + 1, otherwise });
+    emitf(g, "    JMP [R0+%s.L%d]\n", [][]u8 { g.scope }, []int { table });
+    format(&g.tables, "    .align 4\n%s.L%d:\n", [][]u8 { g.scope }, []int { table });
+    for (var k = 0; k <= high - low; k += 1) {
+        var target = otherwise;
+        var i = case_of(s, low + k);
+        if (i >= 0) {
+            target = first + i;
+        }
+        format(&g.tables, "    .dword %s.L%d\n", [][]u8 { g.scope }, []int { target });
+    }
+    return true;
+}
+
 fn gen_switch(g: *Gen, s: *ast.Stmt) {
     var end = label(g);
     var fallback = label(g);
@@ -2184,16 +2239,18 @@ fn gen_switch(g: *Gen, s: *ast.Stmt) {
     gen_expr(g, s.cond);
     var saved: Checked;
     save_checked(g, &saved);
-    for (var i = 0; i < s.cases.len; i += 1) {
-        var values = s.cases[i].values;
-        for (var v = 0; v < values.len; v += 1) {
-            emitd(g, "    CMP R0, #%d\n    JZ .L%d\n", []int { wide.low(values[v].value), first + i });
-        }
-    }
+    var otherwise = end;
     if (s.fallback != null) {
-        emitd(g, "    JMP .L%d\n", []int { fallback });
-    } else {
-        emitd(g, "    JMP .L%d\n", []int { end });
+        otherwise = fallback;
+    }
+    if (!gen_table(g, s, first, otherwise)) {
+        for (var i = 0; i < s.cases.len; i += 1) {
+            var values = s.cases[i].values;
+            for (var v = 0; v < values.len; v += 1) {
+                emitd(g, "    CMP R0, #%d\n    JZ .L%d\n", []int { wide.low(values[v].value), first + i });
+            }
+        }
+        emitd(g, "    JMP .L%d\n", []int { otherwise });
     }
     for (var i = 0; i < s.cases.len; i += 1) {
         merge_label(g, first + i, &saved, null, null);
@@ -2558,6 +2615,7 @@ fn gen_body(g: *Gen, d: *ast.Decl, frame: *ast.Symbol) int {
     g.return_count = 0;
     stack.pushed = 0;
     str.clear(&g.body);
+    str.clear(&g.tables);
     if (frame != null) {
         frame.offset = alloc_frame(g, 4);
         ast.add(&g.checked, frame as *u8);
@@ -2602,6 +2660,7 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     var in_memory = false;
     var saved = assign_registers(d, &in_memory);
     stack = Stack { frameless: !d.is_interrupt && !in_memory, saved: saved };
+    g.scope = symbol_name(d.symbol);
     var start = gen_body(g, d, frame);
     if (stack.frameless && g.frame > 0) {
         stack.frameless = false;
@@ -2664,6 +2723,7 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     str.append(&g.text, ".ret:\n");
     str.append(&g.text, str.text(&epilogue));
     str.release(&epilogue);
+    str.append(&g.data, str.text(&g.tables));
     stack.frameless = false;
 }
 
@@ -2989,7 +3049,7 @@ fn mark_used(program: *ast.Program) {
 pub fn generate(program: *ast.Program) []u8 {
     var g = Gen {
         program: program, text: str.builder(65536), data: str.builder(4096), pool: str.builder(4096),
-        body: str.builder(4096),
+        body: str.builder(4096), tables: str.builder(1024),
     };
 
     str.append(&g.text, "; Generated by vmc\n    .include \"runtime.asm\"\n");
