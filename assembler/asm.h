@@ -146,6 +146,14 @@ typedef struct {
     char *text;
 } Location;
 
+// A file that .loc names without the text of the line, read for its lines
+typedef struct {
+    char *path;
+    char *text;         // with a NUL where each line ends, NULL when the file cannot be read
+    char **lines;
+    int line_count;
+} LocatedFile;
+
 // A value in an object file that the linker fills in
 typedef struct {
     int section;
@@ -206,6 +214,8 @@ typedef struct {
     Location *locations;
     size_t location_count;
     size_t location_capacity;
+    LocatedFile *located_files;
+    size_t located_file_count;
     size_t location;    // 1 + index of the .loc in effect, 0 before any
     int changed;        // a layout pass moved a label, changed a constant or widened an instruction
     int64_t entry;
@@ -250,6 +260,7 @@ int64_t parse_expression(Parser *p);
 int qualify_name(Assembler *as, const char *name, char *out, size_t size);
 
 // source.c
+char *read_text(const char *path);
 int source_load(Assembler *as, const char *path);
 char *source_find(Assembler *as, const char *includer, const char *name);
 

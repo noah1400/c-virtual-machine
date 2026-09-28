@@ -77,6 +77,12 @@ void asm_free(Assembler *as) {
         free(as->locations[i].text);
     }
     free(as->locations);
+    for (size_t i = 0; i < as->located_file_count; i++) {
+        free(as->located_files[i].path);
+        free(as->located_files[i].text);
+        free(as->located_files[i].lines);
+    }
+    free(as->located_files);
     free(as->relocations);
     for (size_t i = 0; i < as->library.use_count; i++) {
         free(as->library.uses[i].name);
@@ -618,10 +624,64 @@ static size_t add_location(Assembler *as, const char *file, int line, const char
 }
 
 // Debug information attributes the code and labels that follow to a line of another source file
+// Reads a file that .loc names and splits it into lines without their line ends
+static void read_lines(LocatedFile *f) {
+    f->text = read_text(f->path);
+    if (!f->text) {
+        return;
+    }
+    int count = 1;
+    for (const char *c = f->text; *c; c++) {
+        count += *c == '\n';
+    }
+    f->lines = malloc((size_t)count * sizeof(char *));
+    if (!f->lines) {
+        return;
+    }
+    for (char *start = f->text; *start || f->line_count == 0;) {
+        char *end = strchr(start, '\n');
+        char *stop = end ? end : start + strlen(start);
+        f->lines[f->line_count++] = start;
+        if (stop > start && stop[-1] == '\r') {
+            stop[-1] = '\0';
+        }
+        if (!end) {
+            break;
+        }
+        *end = '\0';
+        start = end + 1;
+    }
+}
+
+// The text of a line that .loc names without it, from the file when vmasm can read it
+static const char *located_text(Assembler *as, const char *path, int line) {
+    LocatedFile *f = NULL;
+    for (size_t i = 0; i < as->located_file_count && !f; i++) {
+        if (strcmp(as->located_files[i].path, path) == 0) {
+            f = &as->located_files[i];
+        }
+    }
+    if (!f) {
+        LocatedFile *files = realloc(as->located_files, (as->located_file_count + 1) * sizeof(LocatedFile));
+        char *copy = files ? malloc(strlen(path) + 1) : NULL;
+        if (!copy) {
+            if (files) {
+                as->located_files = files;
+            }
+            return "";
+        }
+        as->located_files = files;
+        f = &files[as->located_file_count++];
+        *f = (LocatedFile){ strcpy(copy, path), NULL, NULL, 0 };
+        read_lines(f);
+    }
+    return f->lines && line <= f->line_count ? f->lines[line - 1] : "";
+}
+
 static void directive_loc(Assembler *as, Parser *p) {
     LineResult *result = &as->results[as->line - as->lines];
     Token *file = peek(p);
-    const char *text = "";
+    const char *text = NULL;
     int64_t line;
 
     if (file->kind != TOK_STRING || file->length == 0) {
@@ -652,7 +712,7 @@ static void directive_loc(Assembler *as, Parser *p) {
         return;
     }
     if (as->pass == PASS_DEFINE) {
-        result->location = add_location(as, file->text, (int)line, text);
+        result->location = add_location(as, file->text, (int)line, text ? text : located_text(as, file->text, (int)line));
     }
     as->location = result->location;
 }

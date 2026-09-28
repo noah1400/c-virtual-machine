@@ -37,7 +37,7 @@ static char *copy_string(const char *text, size_t length) {
     return copy;
 }
 
-static char *read_text(const char *path) {
+char *read_text(const char *path) {
     FILE *file = fopen(path, "rb");
     if (!file) {
         return NULL;
