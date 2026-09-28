@@ -300,13 +300,20 @@ fn store_to(g: *Gen, t: *ast.Type, place: []u8) {
             }
             emitd(g, "    MEMCPY R6, R0, #%d\n", []int { t.size });
         }
-    } else if (t.size == 1) {
-        emits(g, "    STOREB R0, [%s]\n", [][]u8 { place });
-    } else if (t.size == 2) {
-        emits(g, "    STOREW R0, [%s]\n", [][]u8 { place });
     } else {
-        emits(g, "    STORE R0, [%s]\n", [][]u8 { place });
+        store_from(g, t, "R0", place);
     }
+}
+
+// Stores a scalar from a register
+fn store_from(g: *Gen, t: *ast.Type, register: []u8, place: []u8) {
+    var store = "STORE";
+    if (t.size == 1) {
+        store = "STOREB";
+    } else if (t.size == 2) {
+        store = "STOREW";
+    }
+    emits(g, "    %s %s, [%s]\n", [][]u8 { store, register, place });
 }
 
 // Operands are made once for the frame offsets and constants that are common
@@ -1853,8 +1860,10 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
         return;
     }
 
-    // x op= y with a y that needs no code works on x directly, as scaled for a pointer
+    // x op= y with a y that needs no code works on x directly, as scaled for a pointer, and x = y with a
+    // scalar y that needs no code stores y from a register
     var simple = s.op != ast.TokenKind.ASSIGN && is_operand(s.value) && (t.kind != ast.TypeKind.POINTER || s.value.is_const);
+    var direct = s.op == ast.TokenKind.ASSIGN && check.is_scalar(t) && is_operand(s.value);
 
     // An address computed in R0 moves to R6, or to the stack while code computes the value
     var target = place(s.target);
@@ -1862,7 +1871,7 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
     if (target.ptr == null) {
         var base: []u8;
         var offset = gen_address(g, s.target, &base);
-        if (ast.same(base, "R0")) {
+        if (ast.same(base, "R0") && !direct) {
             base = "R6";
             if (simple) {
                 emit(g, "    MOVE R6, R0\n");
@@ -1872,6 +1881,15 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
             }
         }
         target = relative(base, offset);
+    }
+    if (direct) {
+        var value = gen_operand(g, s.value);
+        if (value[0] != 'R') {
+            set_register(g, "R7", value);
+            value = "R7";
+        }
+        store_from(g, t, value, target);
+        return;
     }
     if (simple) {
         var operand = gen_operand(g, s.value);
