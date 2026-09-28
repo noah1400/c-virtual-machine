@@ -164,6 +164,426 @@ pub fn format_hex(value: u32, buffer: []u8) []u8 {
     }
 }
 
+// Floats go through exact numbers of 48 limbs of 16 bits, lowest first, which hold every f32 and every
+// decimal number that rounds to one
+struct Big {
+    limbs: [48]u32;
+}
+
+// a = a * factor + add, for factors below 65536
+fn big_multiply(a: *Big, factor: u32, add: u32) {
+    var carry = add;
+    for (var i = 0; i < a.limbs.len; i += 1) {
+        var x = a.limbs[i] * factor + carry;
+        a.limbs[i] = x & 0xFFFF;
+        carry = x >> 16;
+    }
+}
+
+// a = a / divisor, for divisors below 65536; returns the remainder
+fn big_divide(a: *Big, divisor: u32) u32 {
+    var rest: u32 = 0;
+    for (var i = a.limbs.len - 1; i >= 0; i -= 1) {
+        var x = rest << 16 | a.limbs[i];
+        a.limbs[i] = x / divisor;
+        rest = x % divisor;
+    }
+    return rest;
+}
+
+fn big_shifted(a: *Big, count: int, out: *Big) {
+    var words = count / 16;
+    var rest = count % 16;
+    for (var i = a.limbs.len - 1; i >= 0; i -= 1) {
+        var x: u32 = 0;
+        if (i >= words) {
+            x = a.limbs[i - words] << rest;
+            if (rest > 0 && i > words) {
+                x |= a.limbs[i - words - 1] >> 16 - rest;
+            }
+        }
+        out.limbs[i] = x & 0xFFFF;
+    }
+}
+
+fn big_compare(a: *Big, b: *Big) int {
+    for (var i = a.limbs.len - 1; i >= 0; i -= 1) {
+        if (a.limbs[i] != b.limbs[i]) {
+            if (a.limbs[i] < b.limbs[i]) {
+                return -1;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// a -= b, which is at most a
+fn big_subtract(a: *Big, b: *Big) {
+    var borrow: u32 = 0;
+    for (var i = 0; i < a.limbs.len; i += 1) {
+        var x = a.limbs[i] - b.limbs[i] - borrow;
+        a.limbs[i] = x & 0xFFFF;
+        borrow = x >> 16 & 1;
+    }
+}
+
+fn big_bits(a: *Big) int {
+    for (var i = a.limbs.len - 1; i >= 0; i -= 1) {
+        if (a.limbs[i] != 0) {
+            var length = 16;
+            while (a.limbs[i] >> length - 1 == 0) {
+                length -= 1;
+            }
+            return i * 16 + length;
+        }
+    }
+    return 0;
+}
+
+fn float_of(bits: u32) f32 {
+    var copy = bits;
+    return *(&copy as *f32);
+}
+
+fn bits_of(value: f32) u32 {
+    var copy = value;
+    return *(&copy as *u32);
+}
+
+const INFINITY: u32 = 0x7F800000;
+
+// Digits a decimal number keeps. The halfway points between f32s have at most 114 significant digits, so
+// once a number has more, a 1 after the digits kept stands for the rest without changing how it rounds.
+const KEPT = 120;
+
+// The bits of the f32 nearest to digits * 10^exponent, for a number of count significant digits followed by
+// more that are not all zero when sticky; INFINITY for one too large
+fn decimal_bits(digits: *Big, count: int, exponent: int, sticky: bool) u32 {
+    if (count == 0) {
+        return 0;
+    }
+    var n = *digits;
+    if (sticky) {
+        big_multiply(&n, 10, 1);
+        count += 1;
+        exponent -= 1;
+    }
+    // The number lies below 10^(count + exponent) and at or above a tenth of that
+    if (count + exponent > 39) {
+        return INFINITY;
+    }
+    if (count + exponent < -45) {
+        return 0;
+    }
+
+    // It is n / m, from 2^e2 up to below 2^(e2 + 1)
+    var m = Big {};
+    m.limbs[0] = 1;
+    for (var k = 0; k < exponent; k += 1) {
+        big_multiply(&n, 10, 0);
+    }
+    for (var k = 0; k < -exponent; k += 1) {
+        big_multiply(&m, 10, 0);
+    }
+    var e2 = big_bits(&n) - big_bits(&m);
+    var scaled = Big {};
+    if (e2 >= 0) {
+        big_shifted(&m, e2, &scaled);
+        if (big_compare(&n, &scaled) < 0) {
+            e2 -= 1;
+        }
+    } else {
+        big_shifted(&n, -e2, &scaled);
+        if (big_compare(&scaled, &m) < 0) {
+            e2 -= 1;
+        }
+    }
+
+    // Its multiples of the unit of the last place, which is 2^-149 for subnormal numbers
+    var unit = e2 - 23;
+    if (unit < -149) {
+        unit = -149;
+    }
+    var rest = Big {};
+    var divisor = Big {};
+    if (unit >= 0) {
+        rest = n;
+        big_shifted(&m, unit, &divisor);
+    } else {
+        big_shifted(&n, -unit, &rest);
+        divisor = m;
+    }
+    var q: u32 = 0;
+    var part = Big {};
+    for (var bit = 24; bit >= 0; bit -= 1) {
+        big_shifted(&divisor, bit, &part);
+        if (big_compare(&rest, &part) >= 0) {
+            big_subtract(&rest, &part);
+            q |= (1 as u32) << bit;
+        }
+    }
+    big_shifted(&rest, 1, &part);
+    var half = big_compare(&part, &divisor);
+    if (half > 0 || half == 0 && (q & 1) != 0) {
+        q += 1;
+    }
+    if (q == 1 << 24) {
+        q = 1 << 23;
+        unit += 1;
+    }
+    if (q < 1 << 23) {
+        return q;
+    }
+    if (unit + 150 >= 255) {
+        return INFINITY;
+    }
+    return (unit + 150) as u32 << 23 | q - (1 << 23);
+}
+
+pub struct Float {
+    value: f32;
+    ok: bool;
+}
+
+// A decimal number with an optional minus, a fraction and an exponent, as in 12.5, -0.25, .5, 1e10 or
+// 6.02E23, or inf or nan, rounded to the nearest f32 and halfway cases to the even one; not ok for other text
+// and for a number too large for an f32
+pub fn parse_float(text: []u8) Float {
+    var result = Float {};
+    var negative = starts_with(text, "-");
+    if (negative) {
+        text = text[1:];
+    }
+    var bits: u32 = 0;
+    if (equal(text, "inf")) {
+        bits = INFINITY;
+    } else if (equal(text, "nan")) {
+        bits = 0x7FC00000;
+    } else {
+        var digits = Big {};
+        var count = 0;
+        var exponent = 0;
+        var sticky = false;
+        var seen = false;
+        var point = false;
+        var i = 0;
+        for (; i < text.len && text[i] != 'e' && text[i] != 'E'; i += 1) {
+            var c = text[i];
+            if (c == '.' && !point) {
+                point = true;
+            } else if (!is_digit(c)) {
+                return result;
+            } else {
+                seen = true;
+                var d = (c - '0') as u32;
+                if (count == 0 && d == 0) {
+                    if (point) {
+                        exponent -= 1;
+                    }
+                } else if (count < KEPT) {
+                    big_multiply(&digits, 10, d);
+                    count += 1;
+                    if (point) {
+                        exponent -= 1;
+                    }
+                } else {
+                    sticky = sticky || d != 0;
+                    if (!point) {
+                        exponent += 1;
+                    }
+                }
+            }
+        }
+        if (!seen) {
+            return result;
+        }
+        if (i < text.len) {
+            i += 1;
+            var minus = i < text.len && text[i] == '-';
+            if (i < text.len && (text[i] == '+' || text[i] == '-')) {
+                i += 1;
+            }
+            if (i == text.len) {
+                return result;
+            }
+            var e = 0;
+            for (; i < text.len; i += 1) {
+                if (!is_digit(text[i])) {
+                    return result;
+                }
+                if (e < 100000) {
+                    e = e * 10 + (text[i] - '0') as int;
+                }
+            }
+            if (minus) {
+                e = -e;
+            }
+            exponent += e;
+        }
+        bits = decimal_bits(&digits, count, exponent, sticky);
+        if (bits == INFINITY) {
+            return result;
+        }
+    }
+    if (negative) {
+        bits |= 0x80000000;
+    }
+    result.value = float_of(bits);
+    result.ok = true;
+    return result;
+}
+
+// Writes value as print shows it, with up to six significant digits and an exponent for large and small
+// values, as in 3.14159, 1e+10 or -2.5e-07, at the start of buffer and returns that part; 12 bytes always
+// suffice. It rounds the exact value, halfway cases to the even digit.
+pub fn format_float(value: f32, buffer: []u8) []u8 {
+    var bits = bits_of(value);
+    var n = 0;
+    if (bits >> 31 != 0) {
+        buffer[0] = '-';
+        n = 1;
+    }
+    var biased = (bits >> 23 & 255) as int;
+    var fraction = bits & 0x7FFFFF;
+    if (biased == 255) {
+        var name = "inf";
+        if (fraction != 0) {
+            name = "nan";
+        }
+        mem.copy(buffer[n:], name);
+        return buffer[:n + 3];
+    }
+    if (biased == 0 && fraction == 0) {
+        buffer[n] = '0';
+        return buffer[:n + 1];
+    }
+
+    // The value is m * 2^e, whose decimal digits are those of m * 2^e, or of m * 5^-e over 10^-e
+    var m = fraction | 0x800000;
+    var e = biased - 150;
+    if (biased == 0) {
+        m = fraction;
+        e = -149;
+    }
+    var big = Big {};
+    big.limbs[0] = m & 0xFFFF;
+    big.limbs[1] = m >> 16;
+    var point = 0;
+    if (e >= 0) {
+        var shifted = Big {};
+        big_shifted(&big, e, &shifted);
+        big = shifted;
+    } else {
+        for (var k = -e; k > 0; k -= 6) {
+            var factor: u32 = 15625;
+            if (k < 6) {
+                factor = 1;
+                for (var j = 0; j < k; j += 1) {
+                    factor *= 5;
+                }
+            }
+            big_multiply(&big, factor, 0);
+        }
+        point = e;
+    }
+    var digits: [120]u8;
+    var count = 0;
+    var at = digits.len;
+    while (big_bits(&big) > 0) {
+        var group = big_divide(&big, 10000);
+        for (var k = 0; k < 4; k += 1) {
+            at -= 1;
+            digits[at] = (group % 10) as u8;
+            group /= 10;
+        }
+    }
+    while (digits[at] == 0) {
+        at += 1;
+    }
+    count = digits.len - at;
+    var x = count + point - 1;
+
+    // Six significant digits, rounded
+    var kept: [6]u8;
+    for (var k = 0; k < 6 && k < count; k += 1) {
+        kept[k] = digits[at + k];
+    }
+    if (count > 6) {
+        var next = digits[at + 6];
+        var more = false;
+        for (var k = at + 7; k < digits.len; k += 1) {
+            more = more || digits[k] != 0;
+        }
+        if (next > 5 || next == 5 && (more || kept[5] % 2 == 1)) {
+            var k = 5;
+            while (k >= 0 && kept[k] == 9) {
+                kept[k] = 0;
+                k -= 1;
+            }
+            if (k < 0) {
+                kept[0] = 1;
+                x += 1;
+            } else {
+                kept[k] += 1;
+            }
+        }
+    }
+    var used = 6;
+    while (used > 1 && kept[used - 1] == 0) {
+        used -= 1;
+    }
+
+    if (x < -4 || x >= 6) {
+        buffer[n] = '0' + kept[0];
+        n += 1;
+        if (used > 1) {
+            buffer[n] = '.';
+            n += 1;
+            for (var k = 1; k < used; k += 1) {
+                buffer[n] = '0' + kept[k];
+                n += 1;
+            }
+        }
+        buffer[n] = 'e';
+        buffer[n + 1] = '+';
+        if (x < 0) {
+            buffer[n + 1] = '-';
+            x = -x;
+        }
+        buffer[n + 2] = '0' + (x / 10) as u8;
+        buffer[n + 3] = '0' + (x % 10) as u8;
+        return buffer[:n + 4];
+    }
+    if (x < 0) {
+        buffer[n] = '0';
+        buffer[n + 1] = '.';
+        n += 2;
+        for (var k = 0; k < -x - 1; k += 1) {
+            buffer[n] = '0';
+            n += 1;
+        }
+        for (var k = 0; k < used; k += 1) {
+            buffer[n] = '0' + kept[k];
+            n += 1;
+        }
+        return buffer[:n];
+    }
+    for (var k = 0; k <= x; k += 1) {
+        buffer[n] = '0' + kept[k];
+        n += 1;
+    }
+    if (used > x + 1) {
+        buffer[n] = '.';
+        n += 1;
+        for (var k = x + 1; k < used; k += 1) {
+            buffer[n] = '0' + kept[k];
+            n += 1;
+        }
+    }
+    return buffer[:n];
+}
+
 // Text that grows as pieces are appended. It lives on the heap until release.
 pub struct Builder {
     bytes: []u8;
@@ -218,6 +638,11 @@ pub fn append_int(b: *Builder, value: int) {
 pub fn append_hex(b: *Builder, value: u32) {
     var digits: [8]u8;
     append(b, format_hex(value, digits));
+}
+
+pub fn append_float(b: *Builder, value: f32) {
+    var text: [12]u8;
+    append(b, format_float(value, text));
 }
 
 // What was built so far; it moves when the builder grows

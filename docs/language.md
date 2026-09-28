@@ -374,13 +374,15 @@ The standard library lives in `ore/lib/std` and is imported as `std/io`, `std/st
 | `clone(text) []u8` | A copy on the heap |
 | `parse_int(text) Number` | A decimal number, or a hexadecimal one after `0x`, with an optional `-`. `Number` has `value` and `ok`, which is false for anything else or a value that does not fit in an `int` |
 | `format_int(value: int, buffer: []u8) []u8`, `format_hex(value: u32, buffer: []u8) []u8` | Write the digits at the end of buffer and return them; 11 bytes are always enough |
+| `parse_float(text) Float` | A decimal number with an optional `-`, fraction and exponent, as in `12.5`, `.5`, `-2e-3` or `6.02E23`, or `inf` or `nan`, rounded to the nearest `f32`. `Float` has `value` and `ok`, which is false for anything else or a number too large for an `f32` |
+| `format_float(value: f32, buffer: []u8) []u8` | Writes value as `print` shows it at the start of buffer and returns that part; 12 bytes are always enough. Both round exactly, halfway cases to the even digit |
 
 A `Builder` collects text on the heap:
 
 | Function | |
 |---|---|
 | `builder(capacity: int) Builder` | An empty builder |
-| `append(b: *Builder, text: []u8)`, `append_byte`, `append_int`, `append_hex` | Add to the end |
+| `append(b: *Builder, text: []u8)`, `append_byte`, `append_int`, `append_hex`, `append_float` | Add to the end |
 | `reserve(b: *Builder, count: int)` | Makes room for count more bytes |
 | `text(b: *Builder) []u8` | What was built so far; it moves when the builder grows |
 | `clear(b: *Builder)`, `release(b: *Builder)` | Empty it, or give its memory back |

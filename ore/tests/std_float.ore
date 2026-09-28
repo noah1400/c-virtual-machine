@@ -1,0 +1,67 @@
+// std/str with floats: format_float writes what print shows, and parse_float reads decimal numbers
+import "std/io";
+import "std/str";
+
+fn bits(x: f32) u32 {
+    var copy = x;
+    return *(&copy as *u32);
+}
+
+fn from_bits(bits: u32) f32 {
+    var copy = bits;
+    return *(&copy as *f32);
+}
+
+// Prints x twice, as print shows it and as format_float writes it
+fn both(x: f32) {
+    var buffer: [12]u8;
+    print(x, " ");
+    io.write(io.STDOUT, str.format_float(x, buffer));
+    io.write(io.STDOUT, "\n");
+}
+
+fn show_float(text: []u8) {
+    var n = str.parse_float(text);
+    if (n.ok) {
+        print("'", text, "' is ", n.value, ", bits ", bits(n.value), "\n");
+    } else {
+        print("'", text, "' is not a float\n");
+    }
+}
+
+fn main() {
+    // Halfway cases round to the even digit, and rounding up can change the notation
+    var values = [16]f32 { 0.0, -0.0, 0.5, 1234565.0, 1234575.0, 123456.5, 999999.5, 100000.0, 1000000.0, 0.0001,
+        0.00001, 1e-45, 3.4028235e38, 1.0 / 0.0, -1.0 / 0.0, 0.0 / 0.0 };
+    for (var i = 0; i < values.len; i += 1) {
+        both(values[i]);
+    }
+    both(from_bits(0x7FC00000));
+    both(-1.17549435e-38);
+
+    show_float("12.5");
+    show_float("-0.25");
+    show_float(".5");
+    show_float("5.");
+    show_float("6.02E23");
+    show_float("-0");
+    show_float("1e-50");
+    show_float("7.1e-46");
+    show_float("3.4028235e38");
+    show_float("3.4028236e38");
+    show_float("-inf");
+    show_float("nan");
+    show_float("");
+    show_float(".");
+    show_float("1e");
+    show_float("+1");
+    show_float(" 1");
+    show_float("1_000");
+
+    var b = str.builder(8);
+    str.append_float(&b, 2.5);
+    str.append(&b, " ");
+    str.append_float(&b, -1e20);
+    print(str.text(&b), "\n");
+    str.release(&b);
+}
