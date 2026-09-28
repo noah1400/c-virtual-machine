@@ -1,0 +1,27 @@
+// Primes below a limit with a sieve, and the sum of their digits: array writes and division
+fn digits(n: int) int {
+    var sum = 0;
+    while (n > 0) {
+        sum += n % 10;
+        n /= 10;
+    }
+    return sum;
+}
+
+fn main() int {
+    var limit = 12000000;
+    var composite = new(bool, limit);
+    var count = 0;
+    var total = 0;
+    for (var n = 2; n < limit; n += 1) {
+        if (!composite[n]) {
+            count += 1;
+            total += digits(n);
+            for (var m = n * 2; m < limit; m += n) {
+                composite[m] = true;
+            }
+        }
+    }
+    print(count, " ", total, "\n");
+    return 0;
+}

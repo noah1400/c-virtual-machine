@@ -1,0 +1,29 @@
+// Multiplies two integer matrices: nested loops, indexing and multiplication
+const N = 240;
+
+fn main() int {
+    var a = new(int, N * N);
+    var b = new(int, N * N);
+    var c = new(int, N * N);
+    for (var i = 0; i < N * N; i += 1) {
+        a[i] = i % 17 - 8;
+        b[i] = i % 13 - 6;
+    }
+    for (var round = 0; round < 2; round += 1) {
+        for (var i = 0; i < N; i += 1) {
+            for (var j = 0; j < N; j += 1) {
+                var sum = 0;
+                for (var k = 0; k < N; k += 1) {
+                    sum += a[i * N + k] * b[k * N + j];
+                }
+                c[i * N + j] = sum + round;
+            }
+        }
+    }
+    var total = 0;
+    for (var i = 0; i < N * N; i += 1) {
+        total += c[i];
+    }
+    print(total, "\n");
+    return 0;
+}

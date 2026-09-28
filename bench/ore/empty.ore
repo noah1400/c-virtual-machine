@@ -1,0 +1,4 @@
+// Does nothing: the cost of starting a program
+fn main() int {
+    return 0;
+}

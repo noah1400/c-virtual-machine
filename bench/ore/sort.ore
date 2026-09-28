@@ -1,0 +1,56 @@
+// Sorts pseudo-random numbers with quicksort and checks the order: array accesses and recursion
+var state: u32 = 12345;
+
+fn next() int {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return (state >> 1) as int;
+}
+
+fn sort(a: []int, low: int, high: int) {
+    while (low < high) {
+        var pivot = a[(low + high) / 2];
+        var i = low;
+        var j = high;
+        while (i <= j) {
+            while (a[i] < pivot) {
+                i += 1;
+            }
+            while (a[j] > pivot) {
+                j -= 1;
+            }
+            if (i <= j) {
+                var t = a[i];
+                a[i] = a[j];
+                a[j] = t;
+                i += 1;
+                j -= 1;
+            }
+        }
+        if (j - low < high - i) {
+            sort(a, low, j);
+            low = i;
+        } else {
+            sort(a, i, high);
+            high = j;
+        }
+    }
+}
+
+fn main() int {
+    var n = 1000000;
+    var a = new(int, n);
+    for (var i = 0; i < n; i += 1) {
+        a[i] = next() % 1000000;
+    }
+    sort(a, 0, n - 1);
+    var ok = true;
+    for (var i = 1; i < n; i += 1) {
+        if (a[i - 1] > a[i]) {
+            ok = false;
+        }
+    }
+    print(ok, " ", a[0], " ", a[n / 2], " ", a[n - 1], "\n");
+    return 0;
+}

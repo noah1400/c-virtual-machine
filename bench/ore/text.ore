@@ -1,0 +1,52 @@
+// Scans generated text for words and numbers as a lexer does: byte loads and branches
+var state: u32 = 2463534242;
+
+fn next() u32 {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
+}
+
+fn main() int {
+    var alphabet = "etaoinshrdlucmfwypvbg    0123456";
+    var n = 6000000;
+    var text = new(u8, n);
+    for (var i = 0; i < n; i += 1) {
+        text[i] = alphabet[((next() >> 11) & 31) as int];
+    }
+    var words = 0;
+    var numbers = 0;
+    var letters = 0;
+    var longest = 0;
+    var sum: u32 = 0;
+    var i = 0;
+    while (i < n) {
+        var c = text[i];
+        if (c >= 'a' && c <= 'z') {
+            var start = i;
+            while (i < n && text[i] >= 'a' && text[i] <= 'z') {
+                i += 1;
+            }
+            var length = i - start;
+            words += 1;
+            letters += length;
+            if (length > longest) {
+                longest = length;
+            }
+            sum = sum * 31 + length as u32;
+        } else if (c >= '0' && c <= '9') {
+            var value = 0;
+            while (i < n && text[i] >= '0' && text[i] <= '9') {
+                value = (value * 10 + (text[i] - '0') as int) & 16777215;
+                i += 1;
+            }
+            numbers += 1;
+            sum ^= value as u32;
+        } else {
+            i += 1;
+        }
+    }
+    print(words, " ", numbers, " ", letters, " ", longest, " ", sum, "\n");
+    return 0;
+}

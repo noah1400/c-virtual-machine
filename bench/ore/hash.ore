@@ -1,0 +1,48 @@
+// Counts keys in a chained hash table: allocation, hashing and pointer chasing
+struct Entry {
+    key: int;
+    count: int;
+    next: *Entry;
+}
+
+const BUCKETS = 65521;
+
+// FNV-1a over the four bytes of the key
+fn hash(key: int) u32 {
+    var h: u32 = 2166136261;
+    var k = key as u32;
+    for (var i = 0; i < 4; i += 1) {
+        h ^= k & 255;
+        h *= 16777619;
+        k >>= 8;
+    }
+    return h;
+}
+
+fn find(table: []*Entry, key: int) *Entry {
+    var e = table[(hash(key) % BUCKETS) as int];
+    while (e != null && e.key != key) {
+        e = e.next;
+    }
+    return e;
+}
+
+fn main() int {
+    var table = new(*Entry, BUCKETS);
+    var distinct = 0;
+    for (var i = 0; i < 4000000; i += 1) {
+        var key = i % 100003 * 7919 % 100003;
+        var e = find(table, key);
+        if (e == null) {
+            var bucket = (hash(key) % BUCKETS) as int;
+            e = new(Entry);
+            e.key = key;
+            e.next = table[bucket];
+            table[bucket] = e;
+            distinct += 1;
+        }
+        e.count += 1;
+    }
+    print(distinct, " ", find(table, 12345).count, " ", find(table, 99999).count, "\n");
+    return 0;
+}
