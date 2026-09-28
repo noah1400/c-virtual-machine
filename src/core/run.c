@@ -1,3 +1,4 @@
+#include <string.h>
 #include "alu.h"
 #include "binfmt.h"
 #include "cpu.h"
@@ -39,6 +40,8 @@ enum {
     RUN_POP,
     RUN_ENTER,
     RUN_LEAVE,
+    RUN_MEMCPY,
+    RUN_MEMSET,
 };
 
 static const uint8_t runs[256] = {
@@ -59,7 +62,7 @@ static const uint8_t runs[256] = {
     [JBE_OP] = RUN_JUMP,      [JA_OP] = RUN_JUMP,       [JL_OP] = RUN_JUMP,       [JGE_OP] = RUN_JUMP,
     [JLE_OP] = RUN_JUMP,      [JG_OP] = RUN_JUMP,       [JAE_OP] = RUN_JUMP,      [CALL_OP] = RUN_CALL,
     [RET_OP] = RUN_RET,       [LOOP_OP] = RUN_LOOP,     [PUSH_OP] = RUN_PUSH,     [POP_OP] = RUN_POP,
-    [ENTER_OP] = RUN_ENTER,   [LEAVE_OP] = RUN_LEAVE,
+    [ENTER_OP] = RUN_ENTER,   [LEAVE_OP] = RUN_LEAVE,   [MEMCPY_OP] = RUN_MEMCPY, [MEMSET_OP] = RUN_MEMSET,
 };
 
 #define EXTENDED_BIT (MODE_EXTENDED << 20)
@@ -129,7 +132,7 @@ INLINE int writes_special(uint32_t reg) {
 INLINE uint8_t *reach(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
     uint64_t end = (uint64_t)address + size;
     if (end <= vm->memory_size && (end <= vm->control[CR_HEAPLO] || address >= vm->control[CR_HEAPHI] ||
-                                   memory_heap_allows(vm, address, size, access))) {
+                                   (size <= HEAP_UNIT && memory_heap_allows(vm, address, size, access)))) {
         return vm->memory + address;
     }
     return memory_direct(vm, address, size, access);
@@ -174,6 +177,14 @@ INLINE int jump_target(VM *vm, uint32_t w, const uint8_t *code, uint32_t next, i
         return 1;
     }
     return read_operand(vm, w, code, field, 4, target);
+}
+
+// MEMCPY and MEMSET take their size from the immediate or from the register it names
+INLINE uint32_t block_size(const uint32_t *r, uint32_t w, const uint8_t *code) {
+    if (((w >> 20) & 7) == REG_MODE) {
+        return r[w & 0x0F];
+    }
+    return w & EXTENDED_BIT ? extension(code) : w & 0x0FFF;
 }
 
 // The stack lies between SLO and SHI
@@ -406,6 +417,24 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
                 r[R2_SP] = r[R1_BP] + 4;
                 r[R1_BP] = read_le32(slot);
                 break;
+            case RUN_MEMCPY:
+            case RUN_MEMSET: {
+                uint32_t size = block_size(r, w, code), from = r[(w >> REG2) & 0x0F];
+                const uint8_t *source = NULL;
+                if (size == 0) {
+                    break;
+                }
+                if (!(slot = reach(vm, r[reg1(w)], size, PROT_WRITE)) ||
+                    (kinds[w >> 20] == RUN_MEMCPY && !(source = reach(vm, from, size, PROT_READ)))) {
+                    goto stop;
+                }
+                if (source) {
+                    memmove(slot, source, size);
+                } else {
+                    memset(slot, (uint8_t)from, size);
+                }
+                break;
+            }
             default:
                 goto stop;
         }
