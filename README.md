@@ -918,8 +918,8 @@ Usage: vmc [options] program.ore [file.asm...]
 
 Two compilers take these options:
 
-- **`vmc`** is written in Ore, in `ore/compiler`, and optimizes. It keeps scalar locals and parameters in registers, uses variables, fields and slice lengths as operands where instructions can take them, checks a pointer for `null` once until something changes it, leaves out the bounds checks of indexes that a counting loop or their type keeps in range and branches on conditions without first making values of them. Its code executes about half as many instructions as `vmc0`'s and is two fifths smaller. `make` builds it in two stages: `vmc0` compiles it into `vmc1.bin`, which compiles it again into `vmc.bin`, and `vmc.bin` compiles itself into the very same file. The `vmc` script runs `vmc.bin` on the VM with 256 MB of memory and an 8 MB stack and assembles the program it writes with `vmasm`.
-- **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. Its code keeps every local in the frame. It runs natively, so it compiles much faster: `vmc` takes 1.8 seconds for its own 6,300 lines, `vmc0` 0.04 seconds.
+- **`vmc`** is written in Ore, in `ore/compiler`, and optimizes. It keeps scalar locals and parameters in registers, uses variables, fields and slice lengths as operands where instructions can take them, checks a pointer for `null` once until something changes it, and not at all for a pointer parameter that every call passes an address, new memory or another such pointer. It leaves out the bounds checks of indexes that a counting loop or their type keeps in range, branches on conditions without first making values of them, tests the condition of a loop after each round instead of jumping back to it, and gives a function that keeps no locals in memory no frame. Its code executes less than half as many instructions as `vmc0`'s and is two fifths smaller. `make` builds it in two stages: `vmc0` compiles it into `vmc1.bin`, which compiles it again into `vmc.bin`, and `vmc.bin` compiles itself into the very same file. The `vmc` script runs `vmc.bin` on the VM with 256 MB of memory and an 8 MB stack and assembles the program it writes with `vmasm`.
+- **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. Its code keeps every local in the frame. It runs natively, so it compiles much faster: `vmc` takes 0.4 seconds for its own 6,600 lines, `vmc0` 0.03 seconds.
 
 - **How it compiles:** the compiler writes the whole program as one assembly file, with only the functions and globals that `main` reaches, directly or through others, and those that the program's assembly names: a program that calls `io.write` gets that function and not the rest of `std/io`. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler, which leaves out the routines of the runtime and `std/cpu` that the program does not use, since they are [libraries](#libraries).
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
@@ -1173,9 +1173,9 @@ Programs run inside a temporary directory, so any files they create are discarde
 |---|---|
 | `src/main.c` | The `vm` command line and fault reports |
 | `src/monitor.c` | Tracing and profiling while a program runs |
-| `src/vm.c` | Machine setup, program loading and the fetch-execute step |
+| `src/vm.c` | Machine setup, program loading, the fetch-execute step and the loop that runs a program |
 | `src/debugger.c` | The interactive debugger |
-| `src/core/` | CPU helpers, instruction execution, memory and heap, syscalls, disassembler, debug info |
+| `src/core/` | CPU helpers, instruction execution, the fast loop for the common instructions, memory and heap, syscalls, disassembler, debug info |
 | `src/io/` | The I/O devices: console, timer, display, keyboard and disk |
 | `src/common/` | Instruction table, encoding, byte buffers and the binary format, shared by all three tools |
 | `assembler/` | `vmasm`: lexer, expressions, symbols, includes and macros, the two passes, output and the register check |
