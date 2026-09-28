@@ -342,7 +342,7 @@ A program is the module given to the compiler and every module it imports. Its `
 
 ## Standard library
 
-The standard library lives in `ore/lib/std` and is imported as `std/io`, `std/str` and so on. It is written in Ore, apart from `std/cpu`, which is assembly.
+The standard library lives in `ore/lib/std` and is imported as `std/io`, `std/str` and so on. It is written in Ore, apart from `std/cpu` and `std/math`, which are assembly.
 
 ### std/io
 
@@ -406,6 +406,15 @@ A `Builder` collects text on the heap:
 | `sleep(milliseconds: int)` | |
 | `random(limit: u32) u32`, `seed(value: u32)` | A number below limit, or any 32-bit value for 0. The sequence repeats unless seeded |
 | `memory_size() int` | The size of the VM's memory in bytes |
+
+### std/math
+
+| Function | |
+|---|---|
+| `sqrt(x: f32) f32` | The square root, NaN for a negative x |
+| `abs(x: f32) f32` | x without its sign |
+
+Each is one instruction, `FSQRT` or `FABS`, behind a call.
 
 ### std/cpu
 

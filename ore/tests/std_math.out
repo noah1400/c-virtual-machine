@@ -1,0 +1,11 @@
+2: sqrt 1.41421, abs 2, abs of the negative 2
+0: sqrt 0, abs 0, abs of the negative 0
+-0: sqrt -0, abs 0, abs of the negative 0
+-1: sqrt -nan, abs 1, abs of the negative 1
+inf: sqrt inf, abs inf, abs of the negative inf
+1.4013e-45: sqrt 3.74339e-23, abs 1.4013e-45, abs of the negative 1.4013e-45
+1.67772e+07: sqrt 4096, abs 1.67772e+07, abs of the negative 1.67772e+07
+0.25: sqrt 0.5, abs 0.25, abs of the negative 0.25
+3.40282e+38: sqrt 1.84467e+19, abs 3.40282e+38, abs of the negative 3.40282e+38
+-nan nan -nan
+3.16228

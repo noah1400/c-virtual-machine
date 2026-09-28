@@ -1,0 +1,8 @@
+// Functions of f32s that the machine computes with one instruction each. They are written in assembly, in
+// math.asm next to this file, which comes along with any program that imports it.
+
+// The square root of x, NaN for negative x
+pub extern fn sqrt(x: f32) f32;
+
+// x without its sign
+pub extern fn abs(x: f32) f32;

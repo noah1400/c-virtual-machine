@@ -1,0 +1,14 @@
+// std/math: sqrt and abs, and floats as syscall arguments
+import "std/math";
+
+fn main() {
+    var values = [9]f32 { 2.0, 0.0, -0.0, -1.0, 1.0 / 0.0, 1e-45, 16777216.0, 0.25, 3.4028235e38 };
+    for (var i = 0; i < values.len; i += 1) {
+        print(values[i], ": sqrt ", math.sqrt(values[i]), ", abs ", math.abs(values[i]), ", abs of the negative ",
+              math.abs(-values[i]), "\n");
+    }
+    var nan = 0.0 / 0.0;
+    print(nan, " ", math.abs(nan), " ", math.sqrt(nan), "\n");
+    syscall(7, math.sqrt(10.0));
+    print("\n");
+}
