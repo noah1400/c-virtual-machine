@@ -222,13 +222,22 @@ fn float_number(lx: *Lexer, t: *ast.Token) {
     if (src[start] == '0' && digits > 1) {
         fail(lx, "decimal numbers other than 0 do not start with 0");
     }
-    var bits = float.parse(src[start:p]);
-    if (bits == float.INFINITY) {
+    var text = new(u8, p - start);
+    var length = 0;
+    for (var q = start; q < p; q += 1) {
+        if (src[q] != '_') {
+            text[length] = src[q];
+            length += 1;
+        }
+    }
+    var number = str.parse_float(text[:length]);
+    free(text);
+    if (!number.ok) {
         fail(lx, "number too large");
     }
     lx.p = p;
     t.kind = ast.TokenKind.FLOAT;
-    t.value = wide.Wide { lo: bits };
+    t.value = wide.Wide { lo: float.bits(number.value) };
 }
 
 fn number(lx: *Lexer, t: *ast.Token) {
