@@ -1,6 +1,5 @@
-#include <math.h>
 #include <stdio.h>
-#include <string.h>
+#include "alu.h"
 #include "cpu.h"
 #include "io.h"
 #include "memory.h"
@@ -68,118 +67,34 @@ static uint32_t read_operand(VM *vm, const Instruction *instr, uint8_t reg, int 
     return width == 4 ? value : value & ((1u << (8 * width)) - 1);
 }
 
-static void set_zero_negative(VM *vm, uint32_t result) {
-    cpu_set_flag(vm, ZERO_FLAG, result == 0);
-    cpu_set_flag(vm, NEG_FLAG, result >> 31);
-}
-
-static uint32_t add_with_flags(VM *vm, uint32_t a, uint32_t b, uint32_t carry_in) {
-    uint64_t wide = (uint64_t)a + b + carry_in;
-    uint32_t result = (uint32_t)wide;
-
-    cpu_set_flag(vm, CARRY_FLAG, (uint8_t)(wide >> 32));
-    cpu_set_flag(vm, OVER_FLAG, ((a ^ result) & (b ^ result)) >> 31);
-    set_zero_negative(vm, result);
-    return result;
-}
-
-static uint32_t sub_with_flags(VM *vm, uint32_t a, uint32_t b, uint32_t borrow_in) {
-    uint32_t result = a - b - borrow_in;
-
-    cpu_set_flag(vm, CARRY_FLAG, (uint64_t)a < (uint64_t)b + borrow_in);
-    cpu_set_flag(vm, OVER_FLAG, ((a ^ b) & (a ^ result)) >> 31);
-    set_zero_negative(vm, result);
-    return result;
-}
-
-static int execute_arithmetic(VM *vm, const Instruction *instr) {
+// Instructions of a register and an operand, which CMP and TEST leave unchanged
+static int execute_binary(VM *vm, const Instruction *instr) {
     uint32_t *dest = &vm->registers[instr->reg1];
-    uint32_t a = *dest;
     uint32_t b = read_operand(vm, instr, instr->reg2, 4);
-    uint32_t result;
+    uint8_t opcode = instr->opcode;
 
     if (vm->last_error != VM_ERROR_NONE) {
         return vm->last_error;
     }
-
-    switch (instr->opcode) {
-        case ADD_OP:
-            *dest = add_with_flags(vm, a, b, 0);
-            break;
-        case ADDC_OP:
-            *dest = add_with_flags(vm, a, b, cpu_get_flag(vm, CARRY_FLAG));
-            break;
-        case SUB_OP:
-            *dest = sub_with_flags(vm, a, b, 0);
-            break;
-        case SUBC_OP:
-            *dest = sub_with_flags(vm, a, b, cpu_get_flag(vm, CARRY_FLAG));
-            break;
-        case CMP_OP:
-            sub_with_flags(vm, a, b, 0);
-            break;
-        case MUL_OP:
-            result = a * b;
-            cpu_set_flag(vm, OVER_FLAG, ((uint64_t)a * b) >> 32 != 0);
-            set_zero_negative(vm, result);
-            *dest = result;
-            break;
-        case DIV_OP:
-        case MOD_OP:
-            if (b == 0) {
-                return vm_raise(vm, VM_ERROR_DIVISION_BY_ZERO,
-                                instr->opcode == DIV_OP ? "Division by zero" : "Modulo by zero");
-            }
-            result = instr->opcode == DIV_OP ? a / b : a % b;
-            set_zero_negative(vm, result);
-            *dest = result;
-            break;
-        case MULH_OP:
-            result = (uint32_t)(((int64_t)(int32_t)a * (int32_t)b) >> 32);
-            set_zero_negative(vm, result);
-            *dest = result;
-            break;
-        case UMULH_OP:
-            result = (uint32_t)(((uint64_t)a * b) >> 32);
-            set_zero_negative(vm, result);
-            *dest = result;
-            break;
-        case IDIV_OP:
-        case IMOD_OP: {
-            int32_t x = (int32_t)a, y = (int32_t)b;
-            if (y == 0) {
-                return vm_raise(vm, VM_ERROR_DIVISION_BY_ZERO,
-                                instr->opcode == IDIV_OP ? "Division by zero" : "Modulo by zero");
-            }
-            if (x == INT32_MIN && y == -1) {
-                return vm_raise(vm, VM_ERROR_DIVISION_BY_ZERO, "Signed division overflow");
-            }
-            result = (uint32_t)(instr->opcode == IDIV_OP ? x / y : x % y);
-            set_zero_negative(vm, result);
-            *dest = result;
-            break;
+    if (opcode == DIV_OP || opcode == MOD_OP || opcode == IDIV_OP || opcode == IMOD_OP) {
+        if (b == 0) {
+            return vm_raise(vm, VM_ERROR_DIVISION_BY_ZERO,
+                            opcode == DIV_OP || opcode == IDIV_OP ? "Division by zero" : "Modulo by zero");
         }
+        if (!alu_divides(opcode, *dest, b)) {
+            return vm_raise(vm, VM_ERROR_DIVISION_BY_ZERO, "Signed division overflow");
+        }
+    }
+
+    uint32_t result = alu_binary(opcode, &vm->registers[R4_SR], *dest, b);
+    if (opcode != CMP_OP && opcode != TEST_OP) {
+        *dest = result;
     }
     return VM_ERROR_NONE;
 }
 
-static float to_float(uint32_t bits) {
-    float value;
-    memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-
-static uint32_t from_float(float value) {
-    uint32_t bits;
-    memcpy(&bits, &value, sizeof(bits));
-    return bits;
-}
-
-// Floating-point values are IEEE single-precision bit patterns in the general registers
 static int execute_float(VM *vm, const Instruction *instr) {
-    uint32_t *dest = &vm->registers[instr->reg1];
     uint32_t operand = 0;
-    float a = to_float(*dest), result;
 
     if (instr->opcode != FNEG_OP && instr->opcode != FABS_OP) {
         operand = read_operand(vm, instr, instr->reg2, 4);
@@ -187,83 +102,8 @@ static int execute_float(VM *vm, const Instruction *instr) {
             return vm->last_error;
         }
     }
-    float b = to_float(operand);
-
-    switch (instr->opcode) {
-        case FADD_OP:
-            result = a + b;
-            break;
-        case FSUB_OP:
-            result = a - b;
-            break;
-        case FMUL_OP:
-            result = a * b;
-            break;
-        case FDIV_OP:
-            result = a / b;
-            break;
-        case FSQRT_OP:
-            result = sqrtf(b);
-            break;
-        case FNEG_OP:
-            result = -a;
-            break;
-        case FABS_OP:
-            result = fabsf(a);
-            break;
-        case ITOF_OP:
-            result = (float)(int32_t)operand;
-            break;
-        case FCMP_OP: {
-            // Unsigned conditions apply; unordered operands also set O
-            int unordered = isnan(a) || isnan(b);
-            cpu_set_flag(vm, ZERO_FLAG, unordered || a == b);
-            cpu_set_flag(vm, CARRY_FLAG, unordered || a < b);
-            cpu_set_flag(vm, OVER_FLAG, unordered);
-            cpu_set_flag(vm, NEG_FLAG, 0);
-            return VM_ERROR_NONE;
-        }
-        default: {
-            // NaN and values outside the int32 range give INT32_MIN and set O
-            int valid = b >= -2147483648.0f && b < 2147483648.0f;
-            *dest = valid ? (uint32_t)(int32_t)b : 0x80000000u;
-            set_zero_negative(vm, *dest);
-            cpu_set_flag(vm, CARRY_FLAG, 0);
-            cpu_set_flag(vm, OVER_FLAG, !valid);
-            return VM_ERROR_NONE;
-        }
-    }
-
-    *dest = from_float(result);
-    cpu_set_flag(vm, ZERO_FLAG, result == 0.0f);
-    cpu_set_flag(vm, NEG_FLAG, signbit(result) && !isnan(result));
-    cpu_set_flag(vm, CARRY_FLAG, 0);
-    cpu_set_flag(vm, OVER_FLAG, 0);
+    alu_float(instr->opcode, &vm->registers[R4_SR], &vm->registers[instr->reg1], operand);
     return VM_ERROR_NONE;
-}
-
-static uint32_t count_bits(uint32_t value) {
-    uint32_t count = 0;
-    for (; value; value &= value - 1) {
-        count++;
-    }
-    return count;
-}
-
-static uint32_t leading_zeros(uint32_t value) {
-    uint32_t count = 0;
-    for (uint32_t bit = 0x80000000u; bit && !(value & bit); bit >>= 1) {
-        count++;
-    }
-    return count;
-}
-
-static uint32_t trailing_zeros(uint32_t value) {
-    uint32_t count = 0;
-    for (uint32_t bit = 1; bit && !(value & bit); bit <<= 1) {
-        count++;
-    }
-    return count;
 }
 
 static int execute_bit_count(VM *vm, const Instruction *instr) {
@@ -271,151 +111,14 @@ static int execute_bit_count(VM *vm, const Instruction *instr) {
     if (vm->last_error != VM_ERROR_NONE) {
         return vm->last_error;
     }
-
-    uint32_t result = instr->opcode == POPCNT_OP ? count_bits(value)
-                      : instr->opcode == CLZ_OP  ? leading_zeros(value)
-                                                 : trailing_zeros(value);
-    set_zero_negative(vm, result);
-    cpu_set_flag(vm, CARRY_FLAG, 0);
-    cpu_set_flag(vm, OVER_FLAG, 0);
-    vm->registers[instr->reg1] = result;
+    vm->registers[instr->reg1] = alu_count(instr->opcode, &vm->registers[R4_SR], value);
     return VM_ERROR_NONE;
 }
 
 static int execute_unary(VM *vm, const Instruction *instr) {
     uint32_t *dest = &vm->registers[instr->reg1];
-    uint32_t a = *dest;
-    uint32_t result;
-
-    switch (instr->opcode) {
-        case BSWAP_OP:
-            result = (a >> 24) | ((a >> 8) & 0xFF00) | ((a << 8) & 0xFF0000) | (a << 24);
-            break;
-        case INC_OP:
-            result = a + 1;
-            cpu_set_flag(vm, OVER_FLAG, a == 0x7FFFFFFF);
-            break;
-        case DEC_OP:
-            result = a - 1;
-            cpu_set_flag(vm, OVER_FLAG, a == 0x80000000);
-            break;
-        case NEG_OP:
-            result = 0u - a;
-            cpu_set_flag(vm, OVER_FLAG, a == 0x80000000);
-            break;
-        default:
-            result = ~a;
-            break;
-    }
-
-    set_zero_negative(vm, result);
-    *dest = result;
+    *dest = alu_unary(instr->opcode, &vm->registers[R4_SR], *dest);
     return VM_ERROR_NONE;
-}
-
-static int execute_logical(VM *vm, const Instruction *instr) {
-    uint32_t *dest = &vm->registers[instr->reg1];
-    uint32_t a = *dest;
-    uint32_t b = read_operand(vm, instr, instr->reg2, 4);
-    uint32_t count = b & 0x1F;
-    uint32_t result;
-
-    if (vm->last_error != VM_ERROR_NONE) {
-        return vm->last_error;
-    }
-
-    // Bitwise operations leave no carry or overflow behind
-    if (instr->opcode <= XOR_OP || instr->opcode == TEST_OP) {
-        cpu_set_flag(vm, CARRY_FLAG, 0);
-        cpu_set_flag(vm, OVER_FLAG, 0);
-    }
-
-    switch (instr->opcode) {
-        case AND_OP:
-        case TEST_OP:
-            result = a & b;
-            break;
-        case OR_OP:
-            result = a | b;
-            break;
-        case XOR_OP:
-            result = a ^ b;
-            break;
-        case SHL_OP:
-            if (count) {
-                cpu_set_flag(vm, CARRY_FLAG, (a >> (32 - count)) & 1);
-            }
-            result = a << count;
-            break;
-        case SHR_OP:
-            if (count) {
-                cpu_set_flag(vm, CARRY_FLAG, (a >> (count - 1)) & 1);
-            }
-            result = a >> count;
-            break;
-        case SAR_OP:
-            if (count) {
-                cpu_set_flag(vm, CARRY_FLAG, (a >> (count - 1)) & 1);
-            }
-            result = (a & 0x80000000) && count ? (a >> count) | (0xFFFFFFFFu << (32 - count)) : a >> count;
-            break;
-        case ROL_OP:
-            result = count ? (a << count) | (a >> (32 - count)) : a;
-            if (count) {
-                cpu_set_flag(vm, CARRY_FLAG, result & 1);
-            }
-            break;
-        default:
-            result = count ? (a >> count) | (a << (32 - count)) : a;
-            if (count) {
-                cpu_set_flag(vm, CARRY_FLAG, result >> 31);
-            }
-            break;
-    }
-
-    set_zero_negative(vm, result);
-    if (instr->opcode != TEST_OP) {
-        *dest = result;
-    }
-    return VM_ERROR_NONE;
-}
-
-static int branch_taken(VM *vm, uint8_t opcode) {
-    int zero = cpu_get_flag(vm, ZERO_FLAG);
-    int negative = cpu_get_flag(vm, NEG_FLAG);
-    int carry = cpu_get_flag(vm, CARRY_FLAG);
-    int less = negative != cpu_get_flag(vm, OVER_FLAG);
-
-    switch (opcode) {
-        case JZ_OP:
-            return zero;
-        case JNZ_OP:
-            return !zero;
-        case JN_OP:
-            return negative;
-        case JP_OP:
-            return !negative && !zero;
-        case JO_OP:
-            return cpu_get_flag(vm, OVER_FLAG);
-        case JC_OP:
-            return carry;
-        case JBE_OP:
-            return carry || zero;
-        case JA_OP:
-            return !carry && !zero;
-        case JAE_OP:
-            return !carry;
-        case JL_OP:
-            return less;
-        case JGE_OP:
-            return !less;
-        case JLE_OP:
-            return less || zero;
-        case JG_OP:
-            return !less && !zero;
-        default:
-            return 1;
-    }
 }
 
 // Immediate targets are relative to the next instruction, which PC already points at
@@ -456,7 +159,7 @@ static int execute_control(VM *vm, const Instruction *instr) {
                     cpu_push_frame(vm, vm->error_pc, vm->registers[R3_PC], -1);
                 }
             }
-            if (vm->last_error == VM_ERROR_NONE && branch_taken(vm, instr->opcode)) {
+            if (vm->last_error == VM_ERROR_NONE && alu_condition(vm->registers[R4_SR], instr->opcode)) {
                 vm->registers[R3_PC] = target;
             }
             return vm->last_error;
@@ -720,7 +423,7 @@ int cpu_execute_instruction(VM *vm, const Instruction *instr) {
             if (!isa_is_conditional_jump((uint8_t)instr->immediate) || instr->immediate > 0xFF) {
                 return vm_raise(vm, VM_ERROR_INVALID_INSTRUCTION, "Invalid SET condition 0x%X", instr->immediate);
             }
-            vm->registers[instr->reg1] = (uint32_t)branch_taken(vm, (uint8_t)instr->immediate);
+            vm->registers[instr->reg1] = (uint32_t)alu_condition(vm->registers[R4_SR], (uint8_t)instr->immediate);
             return VM_ERROR_NONE;
 
         default:
@@ -733,9 +436,8 @@ int cpu_execute_instruction(VM *vm, const Instruction *instr) {
     // The top three opcode bits select the instruction group
     switch (instr->opcode >> 5) {
         case 1:
-            return execute_arithmetic(vm, instr);
         case 2:
-            return execute_logical(vm, instr);
+            return execute_binary(vm, instr);
         case 3:
             return execute_control(vm, instr);
         case 4:
