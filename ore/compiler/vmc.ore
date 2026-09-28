@@ -154,7 +154,7 @@ fn usage(handle: int) {
     io.write(handle, "assembly files that define its extern functions.\n");
     io.write(handle, "  -o FILE   write the binary to FILE (default: the program with .bin)\n");
     io.write(handle, "  -S        write the assembly instead, to FILE or the program with .asm\n");
-    io.write(handle, "  -g0       leave out the .loc lines that tie the code to Ore source lines\n");
+    io.write(handle, "  -g0       leave out the .loc lines and the binary's debug information\n");
     io.write(handle, "  -b ADDR   put the program at ADDR instead of 0, as vmasm -b does\n");
     io.write(handle, "  -I DIR    look for imported modules in DIR as well\n");
     io.write(handle, "  -L DIR    take the runtime and the standard library from DIR\n");

@@ -3,7 +3,7 @@
 # vmc.bin runs on the VM and writes the program as assembly, which vmasm then assembles unless -S is given.
 here=$(dirname "$0")
 library=$here/ore/lib
-source= output= stop= next= base=0
+source= output= stop= next= base=0 strip=
 
 # vmc.bin checks the arguments; this only finds out what to assemble
 for arg; do
@@ -15,7 +15,7 @@ for arg; do
     esac
     case $arg in
         -h | -S) stop=1 ;;
-        -g0) ;;
+        -g0) strip=-S ;;
         -o | -L | -I | -b) next=${arg#-} ;;
         -*) break ;;
         ?????*.asm) ;;
@@ -31,7 +31,7 @@ if [ -z "$output" ]; then
         *) output=$source.bin ;;
     esac
 fi
-if ! "$here/vmasm" -I "$library" -I . "$output.asm" -o "$output" -b "$base"; then
+if ! "$here/vmasm" -I "$library" -I . "$output.asm" -o "$output" -b "$base" $strip; then
     echo "vmc: error: vmasm could not assemble $output.asm" >&2
     exit 1
 fi

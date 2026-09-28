@@ -190,7 +190,7 @@ static void usage(FILE *out) {
                  "assembly files that define its extern functions.\n"
                  "  -o FILE   write the binary to FILE (default: the program with .bin)\n"
                  "  -S        write the assembly instead, to FILE or the program with .asm\n"
-                 "  -g0       leave out the .loc lines that tie the code to Ore source lines\n"
+                 "  -g0       leave out the .loc lines and the binary's debug information\n"
                  "  -b ADDR   put the program at ADDR instead of 0, as vmasm -b does\n"
                  "  -I DIR    look for imported modules in DIR as well\n"
                  "  -L DIR    take the runtime and the standard library from DIR\n"
@@ -224,11 +224,14 @@ static int write_file(const char *path, const char *text, size_t size) {
 // Runs vmasm from the directory vmc0 lives in, or else from the PATH. Assembly files given with
 // relative paths are found from the current directory.
 static int assemble(const char *self, const char *library, const char *base, const char *source,
-                    const char *output) {
+                    const char *output, int no_debug) {
     const char *slash = strrchr(self, '/');
     char *vmasm = slash ? join(self, (size_t)(slash - self), "vmasm", "") : copy_text("vmasm", 5);
-    char *args[] = { vmasm, "-I", (char *)library, "-I", ".", (char *)source, "-o", (char *)output, "-b",
-                     (char *)base, NULL };
+    char *args[12] = { vmasm, "-I", (char *)library, "-I", ".", (char *)source, "-o", (char *)output, "-b",
+                       (char *)base };
+    if (no_debug) {
+        args[10] = "-S";
+    }
 
     fflush(stdout);
     pid_t child = fork();
@@ -305,7 +308,7 @@ int main(int argc, char **argv) {
     if (assembly_only) {
         return 0;
     }
-    if (!assemble(argv[0], program.library, base, path, output)) {
+    if (!assemble(argv[0], program.library, base, path, output, program.no_loc)) {
         fprintf(stderr, "vmc0: error: vmasm could not assemble %s\n", path);
         return 1;
     }
