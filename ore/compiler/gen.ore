@@ -7,9 +7,9 @@ import "loops";
 import "wide";
 
 // Scalars end up in R0, slices in R0 (pointer) and R5 (length), structs and arrays as their address in
-// R0. R6 and R7 are scratch. R8 to R14 hold the scalar locals and parameters, and the values kept while
-// others are computed, that gain the most from a register; other variables live in the frame, and a function
-// without one reaches its parameters through SP.
+// R0. R6 and R7 are scratch. R8 to R15 hold the scalar locals and parameters, the pointer and length of
+// slices in two registers, and the values kept while others are computed, that gain the most from a
+// register; other variables live in the frame, and a function without one reaches its parameters through SP.
 
 struct Gen {
     program: *ast.Program;
@@ -244,13 +244,35 @@ var register_names = [16][]u8 {
     "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15",
 };
 
-// The register that holds a local variable, or nothing
+// The register that holds a scalar local, or nothing
 fn register_of(e: *ast.Expr) []u8 {
     var none: []u8;
-    if (e.kind == ast.ExprKind.NAME && e.symbol != null && e.symbol.kind == ast.SymbolKind.LOCAL && e.symbol.reg != 0) {
+    if (e.kind == ast.ExprKind.NAME && e.symbol != null && e.symbol.kind == ast.SymbolKind.LOCAL && e.symbol.reg != 0 &&
+        e.symbol.type.kind != ast.TypeKind.SLICE) {
         return register_names[e.symbol.reg];
     }
     return none;
+}
+
+// The register that holds the pointer of a slice local, whose length is in the next one, or 0
+fn slice_register(e: *ast.Expr) int {
+    if (e.kind == ast.ExprKind.NAME && e.symbol != null && e.symbol.kind == ast.SymbolKind.LOCAL &&
+        e.type.kind == ast.TypeKind.SLICE) {
+        return e.symbol.reg;
+    }
+    return 0;
+}
+
+// The register that holds the length or pointer of a slice local, or nothing
+fn field_register(e: *ast.Expr) []u8 {
+    var none: []u8;
+    if (e.kind != ast.ExprKind.LEN && e.kind != ast.ExprKind.PTR || slice_register(e.left) == 0) {
+        return none;
+    }
+    if (e.kind == ast.ExprKind.LEN) {
+        return register_names[slice_register(e.left) + 1];
+    }
+    return register_names[slice_register(e.left)];
 }
 
 // Loads the value of type t from the address place into R0 (and R5); place is a register, a place in the
@@ -855,6 +877,9 @@ fn simple_operand(e: *ast.Expr) []u8 {
         return "#0";
     }
     var register = register_of(e);
+    if (register.ptr == null) {
+        register = field_register(e);
+    }
     if (register.ptr != null) {
         return register;
     }
@@ -1433,6 +1458,14 @@ fn push_argument(g: *Gen, arg: *ast.Expr, emitting: bool) bool {
         return true;
     }
     if (arg.type.kind == ast.TypeKind.SLICE) {
+        var held = slice_register(arg);
+        if (held != 0) {
+            if (emitting) {
+                push(g, register_names[held + 1]);
+                push(g, register_names[held]);
+            }
+            return true;
+        }
         if (!in_register(arg) && place(arg).ptr == null) {
             return false;
         }
@@ -1772,6 +1805,20 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
     var ok = label(g);
     var safe = in_bounds(g, e);
 
+    // A slice in registers keeps them across the code of the index
+    var held = slice_register(e.left);
+    if (held != 0) {
+        gen_expr(g, e.right);
+        if (!safe) {
+            emitf(g, "    CMP R0, %s\n    JB .L%d\n    PUSH %s\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
+                [][]u8 { register_names[held + 1], register_names[held + 1] }, []int { ok, ok });
+            note_in_range(g, e);
+        }
+        scale(g, size, "R0");
+        emits(g, "    ADD R0, %s\n", [][]u8 { register_names[held] });
+        return 0;
+    }
+
     // An array or slice at a fixed place lets the index come first, where that cannot change the variable,
     // and then serves as a memory operand
     var base: []u8;
@@ -1871,15 +1918,22 @@ fn gen_slice(g: *Gen, e: *ast.Expr) {
     var failed = label(g);
     var ok = label(g);
 
-    // An array or slice at a fixed place with bounds that need no code takes them as operands
+    // An array or slice at a fixed place or in registers with bounds that need no code takes them as operands
     var at: []u8;
+    var held = slice_register(e.left);
     if (t.kind != ast.TypeKind.POINTER && is_bound(e.right) && is_bound(e.third)) {
-        at = fixed_place(g, e.left);
+        if (held != 0) {
+            at = register_names[held];
+        } else {
+            at = fixed_place(g, e.left);
+        }
     }
     if (at.ptr != null) {
         var length = ast.cat([][]u8 { "[", at, "+4]" });
         if (t.kind == ast.TypeKind.ARRAY) {
             length = ast.cat([][]u8 { "#", ast.number(t.length) });
+        } else if (held != 0) {
+            length = register_names[held + 1];
         }
         var low = "#0";
         if (e.right != null) {
@@ -1914,6 +1968,8 @@ fn gen_slice(g: *Gen, e: *ast.Expr) {
         }
         if (t.kind == ast.TypeKind.ARRAY) {
             load_from(g, t, at);
+        } else if (held != 0) {
+            emits(g, "    MOVE R0, %s\n", [][]u8 { at });
         } else {
             emits(g, "    LOAD R0, [%s]\n", [][]u8 { at });
         }
@@ -2195,7 +2251,10 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
     }
     switch (e.kind) {
         case ast.ExprKind.NAME {
-            if (e.symbol.reg != 0) {
+            if (e.symbol.reg != 0 && t.kind == ast.TypeKind.SLICE) {
+                emits(g, "    MOVE R0, %s\n    MOVE R5, %s\n",
+                    [][]u8 { register_names[e.symbol.reg], register_names[e.symbol.reg + 1] });
+            } else if (e.symbol.reg != 0) {
                 emits(g, "    MOVE R0, %s\n", [][]u8 { register_names[e.symbol.reg] });
             } else if (e.symbol.kind == ast.SymbolKind.CONST) {
                 gen_string(g, e);
@@ -2239,6 +2298,10 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
             }
         }
         case ast.ExprKind.LEN {
+            if (field_register(e).ptr != null) {
+                emits(g, "    MOVE R0, %s\n", [][]u8 { field_register(e) });
+                return;
+            }
             var at = fixed_place(g, e);
             if (at.ptr != null) {
                 emits(g, "    LOAD R0, [%s]\n", [][]u8 { at });
@@ -2248,6 +2311,10 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
             emit(g, "    MOVE R0, R5\n");
         }
         case ast.ExprKind.PTR {
+            if (field_register(e).ptr != null) {
+                emits(g, "    MOVE R0, %s\n", [][]u8 { field_register(e) });
+                return;
+            }
             var at = fixed_place(g, e);
             if (at.ptr != null) {
                 emits(g, "    LOAD R0, [%s]\n", [][]u8 { at });
@@ -2402,6 +2469,12 @@ fn gen_assign(g: *Gen, s: *ast.Stmt) {
 
 fn gen_store(g: *Gen, s: *ast.Stmt) {
     var t = s.target.type;
+    var pair = slice_register(s.target);
+    if (pair != 0) {
+        gen_expr(g, s.value);
+        emits(g, "    MOVE %s, R0\n    MOVE %s, R5\n", [][]u8 { register_names[pair], register_names[pair + 1] });
+        return;
+    }
     var register = register_of(s.target);
     if (register.ptr != null) {
         gen_register_assign(g, s, register);
@@ -2485,6 +2558,17 @@ fn gen_variable(g: *Gen, s: *ast.Stmt) {
 
 fn gen_declared(g: *Gen, s: *ast.Stmt) {
     var sym = s.symbol;
+    if (sym.reg != 0 && sym.type.kind == ast.TypeKind.SLICE) {
+        var pointer = register_names[sym.reg];
+        var length = register_names[sym.reg + 1];
+        if (s.value == null) {
+            emits(g, "    LOAD %s, #0\n    LOAD %s, #0\n", [][]u8 { pointer, length });
+        } else {
+            gen_expr(g, s.value);
+            emits(g, "    MOVE %s, R0\n    MOVE %s, R5\n", [][]u8 { pointer, length });
+        }
+        return;
+    }
     if (sym.reg != 0) {
         var register = register_names[sym.reg];
         if (s.value == null) {
@@ -2926,6 +3010,13 @@ fn count_expr(e: *ast.Expr, weight: int) {
     if (e.kind == ast.ExprKind.INDEX && e.left.type.kind != ast.TypeKind.POINTER && is_through_local(e.left)) {
         e.left.left.symbol.gain += 3 * weight;
     }
+    // A slice local in registers spares indexing two memory operands, and its length or pointer one, which
+    // count as a quarter of an instruction each
+    if (e.kind == ast.ExprKind.INDEX && e.left.type.kind == ast.TypeKind.SLICE && local_of(e.left) != null) {
+        e.left.symbol.gain += weight / 2;
+    } else if ((e.kind == ast.ExprKind.LEN || e.kind == ast.ExprKind.PTR) && local_of(e.left) != null) {
+        e.left.symbol.gain += weight / 4;
+    }
     if (e.left != null) {
         count_expr(e.left, weight);
     }
@@ -3021,10 +3112,11 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
     }
 }
 
-// Scalar locals and parameters whose address is not taken can live in R8 to R14, which calls keep, and so
+// Scalar locals and parameters whose address is not taken can live in R8 to R15, which calls keep, and so
 // can the values kept at each depth while others are computed. A local or a depth gets one when it saves
-// more than saving and restoring the register costs, and a parameter more than loading it as well. Returns
-// how many registers from R8 on the function uses, and tells whether a local is left in memory.
+// more than saving and restoring the register costs, and a parameter more than loading it as well. A slice
+// takes two, which count half its gain each.
+// Returns how many registers from R8 on the function uses, and tells whether a local is left in memory.
 fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
     var locals = ast.List {};
     makes_temporary = false;
@@ -3035,18 +3127,31 @@ fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
     temp_depth = 0;
     for (var i = 0; i < d.params.len; i += 1) {
         d.params[i].symbol.gain = -1;
+        if (d.params[i].symbol.type.kind == ast.TypeKind.SLICE) {
+            d.params[i].symbol.gain = -2;
+        }
         ast.add(&locals, d.params[i].symbol as *u8);
     }
     count_stmt(d.body, 1, &locals);
     var temps = temp_gains[0] > 2 || temp_gains[1] > 2 || temp_gains[2] > 2 || temp_gains[3] > 2;
     var count = 0;
-    for (; count < 7; count += 1) {
+    while (count < 8) {
         var best: *ast.Symbol = null;
+        var priority = 0;
         for (var i = 0; i < locals.count; i += 1) {
             var s = locals.items[i] as *ast.Symbol;
-            if (s.reg == 0 && !s.address_taken && s.gain > 2 && check.is_scalar(s.type) &&
-                (best == null || s.gain > best.gain)) {
+            var p = 0;
+            if (s.reg != 0 || s.address_taken) {
+                continue;
+            }
+            if (check.is_scalar(s.type) && s.gain > 2) {
+                p = s.gain;
+            } else if (s.type.kind == ast.TypeKind.SLICE && s.gain > 4 && count < 7) {
+                p = s.gain / 2;
+            }
+            if (p > 0 && (best == null || p > priority)) {
                 best = s;
+                priority = p;
             }
         }
         var depth = -1;
@@ -3055,13 +3160,17 @@ fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
                 depth = i;
             }
         }
-        if (depth >= 0 && (best == null || temp_gains[depth] > best.gain)) {
+        if (depth >= 0 && (best == null || temp_gains[depth] > priority)) {
             temp_registers[depth] = 8 + count;
         } else if (best != null) {
             best.reg = 8 + count;
+            if (best.type.kind == ast.TypeKind.SLICE) {
+                count += 1;
+            }
         } else {
             break;
         }
+        count += 1;
     }
     *in_memory = makes_temporary;
     for (var i = d.params.len; i < locals.count; i += 1) {
@@ -3154,7 +3263,10 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     }
     for (var i = 0; i < d.params.len && frame == null; i += 1) {
         var s = d.params[i].symbol;
-        if (s.reg != 0) {
+        if (s.reg != 0 && s.type.kind == ast.TypeKind.SLICE) {
+            format(&g.text, "    LOAD %s, [%s]\n    LOAD %s, [%s]\n", [][]u8 { register_names[s.reg], local_place(s.offset),
+                register_names[s.reg + 1], local_place(s.offset + 4) }, []int {});
+        } else if (s.reg != 0) {
             var load = "LOAD";
             if (s.type.size == 1) {
                 load = "LOADB";
