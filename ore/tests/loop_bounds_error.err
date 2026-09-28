@@ -1,0 +1,4 @@
+vm: error: index 3 is out of bounds for length 3
+vm: at 0x0188 <loop_bounds_error.main.L1+48> ore/tests/loop_bounds_error.ore:10: CALL rt.index_error
+vm: #1 0x00C0 <main> ore/tests/loop_bounds_error.ore:3: CALL loop_bounds_error.main
+vm: #2 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

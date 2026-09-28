@@ -1,0 +1,13 @@
+// A loop bounded by one slice still checks the index of another
+// expect-exit: 1
+fn main() {
+    var long = [5]int { 1, 2, 3, 4, 5 };
+    var short = [3]int { 10, 20, 30 };
+    var a: []int = long;
+    var b: []int = short;
+    var total = 0;
+    for (var i = 0; i < a.len; i += 1) {
+        total += a[i] + b[i];
+        print(total, "\n");
+    }
+}

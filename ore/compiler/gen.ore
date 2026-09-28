@@ -25,6 +25,16 @@ struct Gen {
     loc_line: int;
     loc_path: []u8;         // the quoted path of loc_module
     checked: ast.List;      // locals that are not null here, since code before checked them
+    bounds: [8]Bound;       // what the loops around keep indexes below
+    bound_count: int;
+}
+
+// An index that a loop keeps from 0 up to below the length of a slice, or below a limit when there is no
+// slice
+struct Bound {
+    index: *ast.Symbol;
+    slice: *ast.Symbol;
+    limit: int;
 }
 
 struct Pooled {
@@ -1229,10 +1239,26 @@ fn unshared(e: *ast.Expr) bool {
 }
 
 // Leaves in R0 the address of an element, minus the displacement it returns, after checking the index
+// Whether a loop around keeps the index within what it indexes
+fn in_bounds(g: *Gen, e: *ast.Expr) bool {
+    if (local_of(e.right) == null) {
+        return false;
+    }
+    for (var i = 0; i < g.bound_count; i += 1) {
+        var b = &g.bounds[i];
+        if (b.index == e.right.symbol && (b.slice != null && local_of(e.left) == b.slice ||
+            b.slice == null && e.left.type.kind == ast.TypeKind.ARRAY && b.limit <= e.left.type.length)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn gen_index(g: *Gen, e: *ast.Expr) int {
     var t = e.left.type;
     var size = t.base.size;
     var ok = label(g);
+    var safe = in_bounds(g, e);
 
     // An array or slice at a fixed place lets the index come first, where that cannot change the variable,
     // and then serves as a memory operand
@@ -1243,13 +1269,15 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
         var at = relative(base, offset);
         gen_expr(g, e.right);
         if (t.kind == ast.TypeKind.SLICE) {
-            emitf(g, "    CMP R0, [%s+4]\n    JB .L%d\n    PUSH [%s+4]\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
-                [][]u8 { at, at }, []int { ok, ok });
+            if (!safe) {
+                emitf(g, "    CMP R0, [%s+4]\n    JB .L%d\n    PUSH [%s+4]\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
+                    [][]u8 { at, at }, []int { ok, ok });
+            }
             scale(g, size, "R0");
             emits(g, "    ADD R0, [%s]\n", [][]u8 { at });
             return 0;
         }
-        if (!e.right.is_const) {
+        if (!e.right.is_const && !safe) {
             emitd(g, "    CMP R0, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
                 []int { t.length, ok, t.length, ok });
         }
@@ -1272,9 +1300,9 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
             return wide.low(e.right.value) * size;
         }
         set_register(g, "R6", gen_operand(g, e.right));
-        if (t.kind == ast.TypeKind.SLICE) {
+        if (t.kind == ast.TypeKind.SLICE && !safe) {
             emitd(g, "    CMP R6, R5\n    JB .L%d\n    PUSH R5\n    PUSH R6\n    CALL rt.index_error\n.L%d:\n", []int { ok, ok });
-        } else if (t.kind == ast.TypeKind.ARRAY) {
+        } else if (t.kind == ast.TypeKind.ARRAY && !safe) {
             emitd(g, "    CMP R6, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R6\n    CALL rt.index_error\n.L%d:\n",
                 []int { t.length, ok, t.length, ok });
         }
@@ -1292,12 +1320,14 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
         emit(g, "    PUSH R5\n");
     }
     gen_expr(g, e.right);
-    if (t.kind == ast.TypeKind.SLICE) {
+    if (t.kind == ast.TypeKind.SLICE && safe) {
+        emit(g, "    POP R7\n    POP R6\n");
+    } else if (t.kind == ast.TypeKind.SLICE) {
         emitd(g, "    POP R7\n    POP R6\n    CMP R0, R7\n    JB .L%d\n    PUSH R7\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
             []int { ok, ok });
     } else {
         emit(g, "    POP R6\n");
-        if (t.kind == ast.TypeKind.ARRAY && !e.right.is_const) {
+        if (t.kind == ast.TypeKind.ARRAY && !e.right.is_const && !safe) {
             emitd(g, "    CMP R0, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
                 []int { t.length, ok, t.length, ok });
         }
@@ -1918,6 +1948,42 @@ fn gen_switch(g: *Gen, s: *ast.Stmt) {
     merge_label(g, end, &saved, s, null);
 }
 
+// A for loop that counts an int local up by one from a constant of at least 0, while it is below the length
+// of a slice local or below a constant, keeps it within those in its body, as long as the body does not
+// assign either
+fn loop_bound(s: *ast.Stmt, bound: *Bound) bool {
+    if (s.kind != ast.StmtKind.FOR || s.init == null || s.step == null || s.cond == null ||
+        s.cond.kind != ast.ExprKind.BINARY || s.cond.op != ast.TokenKind.LT || !unshared(s.cond.left) ||
+        s.cond.left.type.kind != ast.TypeKind.INT || s.cond.left.type.size != 4 || !s.cond.left.type.is_signed) {
+        return false;
+    }
+    var index = s.cond.left.symbol;
+    var start: *ast.Expr = null;
+    if (s.init.kind == ast.StmtKind.VAR && s.init.symbol == index) {
+        start = s.init.value;
+    } else if (s.init.kind == ast.StmtKind.ASSIGN && s.init.op == ast.TokenKind.ASSIGN && local_of(s.init.target) == index) {
+        start = s.init.value;
+    }
+    var step = s.step;
+    if (start == null || !start.is_const || start.value.hi != 0 || wide.low(start.value) < 0 ||
+        step.kind != ast.StmtKind.ASSIGN || step.op != ast.TokenKind.ADD_ASSIGN || local_of(step.target) != index ||
+        !step.value.is_const || step.value.value.hi != 0 || wide.low(step.value.value) != 1 || assigns(s.then, index as *u8)) {
+        return false;
+    }
+    var limit = s.cond.right;
+    bound.index = index;
+    if (limit.kind == ast.ExprKind.LEN && unshared(limit.left) && !assigns(s.then, limit.left.symbol as *u8)) {
+        bound.slice = limit.left.symbol;
+        return true;
+    }
+    if (limit.is_const && limit.value.hi == 0 && wide.low(limit.value) >= 0) {
+        bound.slice = null;
+        bound.limit = wide.low(limit.value);
+        return true;
+    }
+    return false;
+}
+
 fn gen_loop(g: *Gen, s: *ast.Stmt) {
     var top = label(g);
     var next = label(g);
@@ -1939,7 +2005,14 @@ fn gen_loop(g: *Gen, s: *ast.Stmt) {
     save_checked(g, &passed);
     g.break_label = end;
     g.continue_label = next;
+    var bounded = g.bound_count < g.bounds.len && loop_bound(s, &g.bounds[g.bound_count]);
+    if (bounded) {
+        g.bound_count += 1;
+    }
     gen_block(g, s.then);
+    if (bounded) {
+        g.bound_count -= 1;
+    }
     g.break_label = saved_break;
     g.continue_label = saved_continue;
     merge_label(g, next, &passed, s.then, s.step);
