@@ -123,10 +123,12 @@ fn alloc_frame(g: *Gen, size: int) int {
 }
 
 fn symbol_name(s: *ast.Symbol) []u8 {
-    if (s.decl != null && s.decl.is_extern) {
-        return s.name;
+    if (s.asm_name.ptr == null && s.decl != null && s.decl.is_extern) {
+        s.asm_name = s.name;
+    } else if (s.asm_name.ptr == null) {
+        s.asm_name = ast.cat([][]u8 { s.module.name, ".", s.name });
     }
-    return ast.cat([][]u8 { s.module.name, ".", s.name });
+    return s.asm_name;
 }
 
 // Writes text as an assembler string, escaping what vmasm would read differently
@@ -282,13 +284,52 @@ fn store_to(g: *Gen, t: *ast.Type, place: []u8) {
     }
 }
 
+// Operands are made once for the frame offsets and constants that are common
+const CACHED = 1024;
+var local_places: [2 * CACHED][]u8;
+var local_operands: [2 * CACHED][]u8;
+var constant_operands: [2 * CACHED][]u8;
+
 fn local_place(offset: int) []u8 {
+    var cached = offset >= -CACHED && offset < CACHED;
+    if (cached && local_places[offset + CACHED].ptr != null) {
+        return local_places[offset + CACHED];
+    }
     var digits: [11]u8;
     var sign = "+";
     if (offset < 0) {
         sign = "";
     }
-    return ast.cat([][]u8 { "BP", sign, str.format_int(offset, digits) });
+    var text = ast.cat([][]u8 { "BP", sign, str.format_int(offset, digits) });
+    if (cached) {
+        local_places[offset + CACHED] = text;
+    }
+    return text;
+}
+
+// A local in memory as an instruction operand
+fn local_operand(offset: int) []u8 {
+    var cached = offset >= -CACHED && offset < CACHED;
+    if (cached && local_operands[offset + CACHED].ptr != null) {
+        return local_operands[offset + CACHED];
+    }
+    var text = ast.cat([][]u8 { "[", local_place(offset), "]" });
+    if (cached) {
+        local_operands[offset + CACHED] = text;
+    }
+    return text;
+}
+
+fn constant_operand(value: int) []u8 {
+    var cached = value >= -CACHED && value < CACHED;
+    if (cached && constant_operands[value + CACHED].ptr != null) {
+        return constant_operands[value + CACHED];
+    }
+    var text = ast.cat([][]u8 { "#", ast.number(value) });
+    if (cached) {
+        constant_operands[value + CACHED] = text;
+    }
+    return text;
 }
 
 // A place that is a register or a label, with an offset added
@@ -609,7 +650,7 @@ fn is_comparison(e: *ast.Expr) bool {
 fn simple_operand(e: *ast.Expr) []u8 {
     var none: []u8;
     if (e.is_const && check.is_scalar(e.type)) {
-        return ast.cat([][]u8 { "#", ast.number(wide.low(e.value)) });
+        return constant_operand(wide.low(e.value));
     }
     if (e.kind == ast.ExprKind.NULL) {
         return "#0";
@@ -618,11 +659,18 @@ fn simple_operand(e: *ast.Expr) []u8 {
     if (register.ptr != null) {
         return register;
     }
-    var at = place(e);
-    if (at.ptr != null && check.is_scalar(e.type) && e.type.size == 4) {
-        return ast.cat([][]u8 { "[", at, "]" });
+    if (!check.is_scalar(e.type) || e.type.size != 4) {
+        return none;
     }
-    return none;
+    var base: []u8;
+    var offset = 0;
+    if (!find_place(e, &base, &offset)) {
+        return none;
+    }
+    if (ast.same(base, "BP")) {
+        return local_operand(offset);
+    }
+    return ast.cat([][]u8 { "[", relative(base, offset), "]" });
 }
 
 // A left operand that instructions can still take after the code for the right one
