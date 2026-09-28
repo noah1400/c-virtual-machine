@@ -230,7 +230,7 @@ fn layout(c: *Checker, t: *ast.Type, line: int) {
 fn find_local(c: *Checker, from: int, name: []u8) *ast.Symbol {
     for (var i = c.locals.count - 1; i >= from; i -= 1) {
         var s = c.locals.items[i] as *ast.Symbol;
-        if (ast.same(s.name, name)) {
+        if (s.name.len == name.len && ast.same(s.name, name)) {
             return s;
         }
     }
@@ -243,7 +243,7 @@ fn find(m: *ast.Module, name: []u8) *ast.Symbol {
 
 fn find_universe(name: []u8) *ast.Symbol {
     for (var i = 0; i < universe.len; i += 1) {
-        if (ast.same(universe[i].name, name)) {
+        if (universe[i].name.len == name.len && ast.same(universe[i].name, name)) {
             return &universe[i];
         }
     }
@@ -721,7 +721,7 @@ fn check_field(c: *Checker, e: *ast.Expr) *ast.Type {
         }
         var members = enum_type.decl.members;
         for (var i = 0; i < members.len; i += 1) {
-            if (ast.same(members[i].name, e.name)) {
+            if (members[i].name.len == e.name.len && ast.same(members[i].name, e.name)) {
                 e.is_const = true;
                 e.value = members[i].number;
                 e.type = enum_type;
@@ -738,7 +738,7 @@ fn check_field(c: *Checker, e: *ast.Expr) *ast.Type {
     if (t.kind == ast.TypeKind.STRUCT) {
         layout(c, t, e.line);
         for (var i = 0; i < t.fields.len; i += 1) {
-            if (ast.same(t.fields[i].name, e.name)) {
+            if (t.fields[i].name.len == e.name.len && ast.same(t.fields[i].name, e.name)) {
                 e.field = &t.fields[i];
                 e.type = e.field.type;
                 return e.type;

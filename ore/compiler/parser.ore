@@ -74,7 +74,7 @@ fn name(p: *Parser, what: []u8) []u8 {
 }
 
 fn is_named(t: *ast.Token, text: []u8) bool {
-    return t.kind == ast.TokenKind.IDENT && ast.same(t.text, text);
+    return t.kind == ast.TokenKind.IDENT && t.text.len == text.len && ast.same(t.text, text);
 }
 
 fn new_type(p: *Parser, kind: ast.TypeExprKind) *ast.TypeExpr {

@@ -396,7 +396,7 @@ pub fn get(map: *Map, key: []u8) *u8 {
     }
     var mask = map.keys.len - 1;
     for (var i = hash(key) & mask; map.values[i] != null; i = (i + 1) & mask) {
-        if (same(map.keys[i], key)) {
+        if (map.keys[i].len == key.len && same(map.keys[i], key)) {
             return map.values[i];
         }
     }
