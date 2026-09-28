@@ -492,15 +492,20 @@ fn assigns(s: *ast.Stmt, local: *u8) bool {
     return false;
 }
 
-// Code reaches a label from more than one place. The locals that were not null where the statement or
-// expression began are still not null there, unless the statements a and b between assign them.
-fn merge_label(g: *Gen, n: int, saved: *Checked, a: *ast.Stmt, b: *ast.Stmt) {
+// Keeps the locals of saved that the statements a and b do not assign as the ones known not to be null
+fn keep_checked(g: *Gen, saved: *Checked, a: *ast.Stmt, b: *ast.Stmt) {
     g.checked.count = 0;
     for (var i = 0; i < saved.count; i += 1) {
         if (!assigns(a, saved.items[i]) && !assigns(b, saved.items[i])) {
             ast.add(&g.checked, saved.items[i]);
         }
     }
+}
+
+// Code reaches a label from more than one place. The locals that were not null where the statement or
+// expression began are still not null there, unless the statements a and b between assign them.
+fn merge_label(g: *Gen, n: int, saved: *Checked, a: *ast.Stmt, b: *ast.Stmt) {
+    keep_checked(g, saved, a, b);
     emitd(g, ".L%d:\n", []int { n });
 }
 
@@ -2005,6 +2010,7 @@ fn loop_bound(s: *ast.Stmt, bound: *Bound) bool {
     return false;
 }
 
+// The condition comes before the loop and again after each round, which jumps back while it holds
 fn gen_loop(g: *Gen, s: *ast.Stmt) {
     var top = label(g);
     var next = label(g);
@@ -2017,11 +2023,14 @@ fn gen_loop(g: *Gen, s: *ast.Stmt) {
     }
     var saved: Checked;
     save_checked(g, &saved);
-    merge_label(g, top, &saved, s.then, s.step);
+    // The condition before the loop knows only what holds again after each round, so what it finds on the
+    // way into the body, the condition after each round finds as well
+    keep_checked(g, &saved, s.then, s.step);
     if (s.cond != null) {
         loc(g, s.line);
         gen_branch(g, s.cond, end);
     }
+    emitd(g, ".L%d:\n", []int { top });
     var passed: Checked;
     save_checked(g, &passed);
     g.break_label = end;
@@ -2040,7 +2049,12 @@ fn gen_loop(g: *Gen, s: *ast.Stmt) {
     if (s.step != null) {
         gen_stmt(g, s.step);
     }
-    emitd(g, "    JMP .L%d\n", []int { top });
+    if (s.cond != null) {
+        loc(g, s.line);
+        gen_condition(g, s.cond, top, true);
+    } else {
+        emitd(g, "    JMP .L%d\n", []int { top });
+    }
     merge_label(g, end, &saved, s.then, s.step);
 }
 
