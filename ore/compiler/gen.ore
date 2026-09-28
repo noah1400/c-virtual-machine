@@ -189,12 +189,17 @@ fn loc(g: *Gen, line: int) {
     }
     g.loc_module = g.m;
     g.loc_line = line;
+    emit(g, "    .loc ");
+    emit(g, g.loc_path);
+    // vmasm takes the text of the line from the file when it is left out
+    if (!g.program.loc_texts) {
+        emitd(g, ", %d\n", []int { line });
+        return;
+    }
     var text = "";
     if (line >= 1 && line <= g.m.lines.len) {
         text = g.m.lines[line - 1];
     }
-    emit(g, "    .loc ");
-    emit(g, g.loc_path);
     emitd(g, ", %d, ", []int { line });
     quoted(&g.body, text);
     emit(g, "\n");

@@ -213,6 +213,7 @@ fn main(args: [][]u8) int {
         }
     }
     program.include_dirs = ast.texts(dirs);
+    program.loc_texts = assembly_only;
     if (source.ptr == null) {
         usage(io.STDERR);
         return 1;

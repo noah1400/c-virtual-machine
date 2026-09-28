@@ -198,6 +198,7 @@ pub struct Program {
     assembly: Texts;        // files of assembly for extern functions
     main: *Symbol;
     no_loc: bool;
+    loc_texts: bool;        // .loc lines carry the text of their line, for assembly that people read
 }
 
 pub fn copy(to: *u8, from: *u8, size: int) {
