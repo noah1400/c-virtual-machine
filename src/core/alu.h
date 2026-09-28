@@ -39,6 +39,50 @@ static inline int alu_divides(uint8_t opcode, uint32_t a, uint32_t b) {
     return b != 0 && (opcode == DIV_OP || opcode == MOD_OP || a != 0x80000000u || b != 0xFFFFFFFFu);
 }
 
+static inline uint32_t alu_mul(uint32_t *sr, uint32_t a, uint32_t b) {
+    uint32_t result = a * b;
+    set_flags(sr, ZERO_FLAG | NEG_FLAG | OVER_FLAG, zero_negative(result) | (((uint64_t)a * b) >> 32 ? OVER_FLAG : 0));
+    return result;
+}
+
+// AND, OR, XOR and TEST leave no carry or overflow behind
+static inline uint32_t alu_logic(uint32_t *sr, uint32_t result) {
+    set_flags(sr, ALU_FLAGS, zero_negative(result));
+    return result;
+}
+
+// Shifts and rotations set C to the last bit that went out when the count is not zero
+static inline uint32_t alu_shift(uint32_t *sr, uint32_t result, uint32_t count, uint32_t carry) {
+    set_flags(sr, (count ? CARRY_FLAG : 0) | ZERO_FLAG | NEG_FLAG, (carry ? CARRY_FLAG : 0) | zero_negative(result));
+    return result;
+}
+
+static inline uint32_t alu_shl(uint32_t *sr, uint32_t a, uint32_t b) {
+    uint32_t count = b & 0x1F;
+    return alu_shift(sr, a << count, count, count && (a >> (32 - count)) & 1);
+}
+
+static inline uint32_t alu_shr(uint32_t *sr, uint32_t a, uint32_t b) {
+    uint32_t count = b & 0x1F;
+    return alu_shift(sr, a >> count, count, count && (a >> (count - 1)) & 1);
+}
+
+static inline uint32_t alu_sar(uint32_t *sr, uint32_t a, uint32_t b) {
+    uint32_t count = b & 0x1F;
+    uint32_t result = (a & 0x80000000) && count ? (a >> count) | (0xFFFFFFFFu << (32 - count)) : a >> count;
+    return alu_shift(sr, result, count, count && (a >> (count - 1)) & 1);
+}
+
+// DIV, MOD, IDIV and IMOD, once alu_divides allowed them
+static inline uint32_t alu_divide(uint8_t opcode, uint32_t *sr, uint32_t a, uint32_t b) {
+    uint32_t result = opcode == DIV_OP    ? a / b
+                      : opcode == MOD_OP  ? a % b
+                      : opcode == IDIV_OP ? (uint32_t)((int32_t)a / (int32_t)b)
+                                          : (uint32_t)((int32_t)a % (int32_t)b);
+    set_flags(sr, ZERO_FLAG | NEG_FLAG, zero_negative(result));
+    return result;
+}
+
 // The result of an instruction with a register and an operand; CMP and TEST only set the flags
 static inline uint32_t alu_binary(uint8_t opcode, uint32_t *sr, uint32_t a, uint32_t b) {
     uint32_t count = b & 0x1F, result;
@@ -54,72 +98,37 @@ static inline uint32_t alu_binary(uint8_t opcode, uint32_t *sr, uint32_t a, uint
         case SUBC_OP:
             return alu_sub(sr, a, b, (*sr & CARRY_FLAG) != 0);
         case MUL_OP:
-            result = a * b;
-            set_flags(sr, ZERO_FLAG | NEG_FLAG | OVER_FLAG,
-                      zero_negative(result) | (((uint64_t)a * b) >> 32 ? OVER_FLAG : 0));
-            return result;
+            return alu_mul(sr, a, b);
         case DIV_OP:
-            result = a / b;
-            break;
         case MOD_OP:
-            result = a % b;
-            break;
         case IDIV_OP:
-            result = (uint32_t)((int32_t)a / (int32_t)b);
-            break;
         case IMOD_OP:
-            result = (uint32_t)((int32_t)a % (int32_t)b);
-            break;
+            return alu_divide(opcode, sr, a, b);
         case MULH_OP:
             result = (uint32_t)(((int64_t)(int32_t)a * (int32_t)b) >> 32);
             break;
         case UMULH_OP:
             result = (uint32_t)(((uint64_t)a * b) >> 32);
             break;
-        // Bitwise operations leave no carry or overflow behind
         case AND_OP:
         case TEST_OP:
-            result = a & b;
-            set_flags(sr, ALU_FLAGS, zero_negative(result));
-            return result;
+            return alu_logic(sr, a & b);
         case OR_OP:
-            result = a | b;
-            set_flags(sr, ALU_FLAGS, zero_negative(result));
-            return result;
+            return alu_logic(sr, a | b);
         case XOR_OP:
-            result = a ^ b;
-            set_flags(sr, ALU_FLAGS, zero_negative(result));
-            return result;
+            return alu_logic(sr, a ^ b);
         case SHL_OP:
-            if (count) {
-                set_flags(sr, CARRY_FLAG, (a >> (32 - count)) & 1 ? CARRY_FLAG : 0);
-            }
-            result = a << count;
-            break;
+            return alu_shl(sr, a, b);
         case SHR_OP:
-            if (count) {
-                set_flags(sr, CARRY_FLAG, (a >> (count - 1)) & 1 ? CARRY_FLAG : 0);
-            }
-            result = a >> count;
-            break;
+            return alu_shr(sr, a, b);
         case SAR_OP:
-            if (count) {
-                set_flags(sr, CARRY_FLAG, (a >> (count - 1)) & 1 ? CARRY_FLAG : 0);
-            }
-            result = (a & 0x80000000) && count ? (a >> count) | (0xFFFFFFFFu << (32 - count)) : a >> count;
-            break;
+            return alu_sar(sr, a, b);
         case ROL_OP:
             result = count ? (a << count) | (a >> (32 - count)) : a;
-            if (count) {
-                set_flags(sr, CARRY_FLAG, result & 1 ? CARRY_FLAG : 0);
-            }
-            break;
+            return alu_shift(sr, result, count, result & 1);
         default:
             result = count ? (a >> count) | (a << (32 - count)) : a;
-            if (count) {
-                set_flags(sr, CARRY_FLAG, result >> 31 ? CARRY_FLAG : 0);
-            }
-            break;
+            return alu_shift(sr, result, count, result >> 31);
     }
     set_flags(sr, ZERO_FLAG | NEG_FLAG, zero_negative(result));
     return result;

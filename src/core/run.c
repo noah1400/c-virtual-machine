@@ -121,6 +121,7 @@ enum {
     D_STORE, D_STOREB, D_STOREW, D_LEA,
     D_ADD_V, D_ADD_M, D_SUB_V, D_SUB_M, D_CMP_V, D_CMP_M, D_TEST_V, D_TEST_M,
     D_BINARY_V, D_BINARY_M, D_DIVIDE_V, D_DIVIDE_M, D_COUNT_V, D_COUNT_M, D_FLOAT_V, D_FLOAT_M,
+    D_MUL, D_AND, D_OR, D_XOR, D_SHL, D_SHR, D_SAR,
     D_UNARY, D_FLOAT_SIGN, D_SET,
     D_JUMP, D_JUMP_OUT, D_JUMP_V, D_JUMP_M,
     D_CALL, D_CALL_OUT, D_CALL_V, D_CALL_M, D_RET,
@@ -283,6 +284,28 @@ static void decode_target(Decoded *d, uint32_t target, uint32_t words, uint8_t i
     d->imm = index < words ? index : target;
 }
 
+// The kind of a binary instruction whose operand is a value: its own for the common ones
+static uint8_t value_kind(uint8_t opcode) {
+    switch (opcode) {
+        case MUL_OP:
+            return D_MUL;
+        case AND_OP:
+            return D_AND;
+        case OR_OP:
+            return D_OR;
+        case XOR_OP:
+            return D_XOR;
+        case SHL_OP:
+            return D_SHL;
+        case SHR_OP:
+            return D_SHR;
+        case SAR_OP:
+            return D_SAR;
+        default:
+            return D_BINARY_V;
+    }
+}
+
 // Decodes the instruction at a word. Instructions that write PC or SR as a register or read PC from their
 // first field stop, as do those that cpu_run does not run, and vm_step runs them.
 static void decode(VM *vm, Decoded *d, uint32_t index, uint32_t words) {
@@ -350,15 +373,19 @@ static void decode(VM *vm, Decoded *d, uint32_t index, uint32_t words) {
             }
             break;
         case RUN_BINARY:
+            if (!writes_special(a)) {
+                memory = decode_operand(d, w, code, REG2, next);
+                d->kind = memory ? D_BINARY_M : value_kind(d->op);
+            }
+            break;
         case RUN_DIVIDE:
         case RUN_COUNT:
         case RUN_FLOAT:
             if (!writes_special(a)) {
                 memory = decode_operand(d, w, code, REG2, next);
-                d->kind = (uint8_t)((run == RUN_BINARY   ? D_BINARY_V
-                                     : run == RUN_DIVIDE ? D_DIVIDE_V
-                                     : run == RUN_COUNT  ? D_COUNT_V
-                                                         : D_FLOAT_V) + memory);
+                d->kind = (uint8_t)((run == RUN_DIVIDE  ? D_DIVIDE_V
+                                     : run == RUN_COUNT ? D_COUNT_V
+                                                        : D_FLOAT_V) + memory);
             }
             break;
         case RUN_UNARY:
@@ -516,23 +543,26 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
     }
 #ifdef __GNUC__
     static void *const targets[] = {
-        [D_DECODE] = &&run_D_DECODE,     [D_STOP] = &&run_D_STOP,         [D_NOP] = &&run_D_NOP,
-        [D_LOAD_V] = &&run_D_LOAD_V,     [D_LOAD_M] = &&run_D_LOAD_M,     [D_LOADB_V] = &&run_D_LOADB_V,
-        [D_LOADB_M] = &&run_D_LOADB_M,   [D_LOADW_V] = &&run_D_LOADW_V,   [D_LOADW_M] = &&run_D_LOADW_M,
-        [D_STORE] = &&run_D_STORE,       [D_STOREB] = &&run_D_STOREB,     [D_STOREW] = &&run_D_STOREW,
-        [D_LEA] = &&run_D_LEA,           [D_ADD_V] = &&run_D_ADD_V,       [D_ADD_M] = &&run_D_ADD_M,
-        [D_SUB_V] = &&run_D_SUB_V,       [D_SUB_M] = &&run_D_SUB_M,       [D_CMP_V] = &&run_D_CMP_V,
-        [D_CMP_M] = &&run_D_CMP_M,       [D_TEST_V] = &&run_D_TEST_V,     [D_TEST_M] = &&run_D_TEST_M,
-        [D_BINARY_V] = &&run_D_BINARY_V, [D_BINARY_M] = &&run_D_BINARY_M, [D_DIVIDE_V] = &&run_D_DIVIDE_V,
-        [D_DIVIDE_M] = &&run_D_DIVIDE_M, [D_COUNT_V] = &&run_D_COUNT_V,   [D_COUNT_M] = &&run_D_COUNT_M,
-        [D_FLOAT_V] = &&run_D_FLOAT_V,   [D_FLOAT_M] = &&run_D_FLOAT_M,   [D_UNARY] = &&run_D_UNARY,
-        [D_FLOAT_SIGN] = &&run_D_FLOAT_SIGN, [D_SET] = &&run_D_SET,       [D_JUMP] = &&run_D_JUMP,
-        [D_JUMP_OUT] = &&run_D_JUMP_OUT, [D_JUMP_V] = &&run_D_JUMP_V,     [D_JUMP_M] = &&run_D_JUMP_M,
-        [D_CALL] = &&run_D_CALL,         [D_CALL_OUT] = &&run_D_CALL_OUT, [D_CALL_V] = &&run_D_CALL_V,
-        [D_CALL_M] = &&run_D_CALL_M,     [D_RET] = &&run_D_RET,           [D_LOOP] = &&run_D_LOOP,
-        [D_LOOP_OUT] = &&run_D_LOOP_OUT, [D_PUSH_V] = &&run_D_PUSH_V,     [D_PUSH_M] = &&run_D_PUSH_M,
-        [D_POP] = &&run_D_POP,           [D_ENTER] = &&run_D_ENTER,       [D_LEAVE] = &&run_D_LEAVE,
-        [D_MEMCPY] = &&run_D_MEMCPY,     [D_MEMSET] = &&run_D_MEMSET,     [D_SYSCALL] = &&run_D_SYSCALL,
+        [D_DECODE] = &&run_D_DECODE,         [D_STOP] = &&run_D_STOP,             [D_NOP] = &&run_D_NOP,
+        [D_LOAD_V] = &&run_D_LOAD_V,         [D_LOAD_M] = &&run_D_LOAD_M,         [D_LOADB_V] = &&run_D_LOADB_V,
+        [D_LOADB_M] = &&run_D_LOADB_M,       [D_LOADW_V] = &&run_D_LOADW_V,       [D_LOADW_M] = &&run_D_LOADW_M,
+        [D_STORE] = &&run_D_STORE,           [D_STOREB] = &&run_D_STOREB,         [D_STOREW] = &&run_D_STOREW,
+        [D_LEA] = &&run_D_LEA,               [D_ADD_V] = &&run_D_ADD_V,           [D_ADD_M] = &&run_D_ADD_M,
+        [D_SUB_V] = &&run_D_SUB_V,           [D_SUB_M] = &&run_D_SUB_M,           [D_CMP_V] = &&run_D_CMP_V,
+        [D_CMP_M] = &&run_D_CMP_M,           [D_TEST_V] = &&run_D_TEST_V,         [D_TEST_M] = &&run_D_TEST_M,
+        [D_BINARY_V] = &&run_D_BINARY_V,     [D_BINARY_M] = &&run_D_BINARY_M,     [D_DIVIDE_V] = &&run_D_DIVIDE_V,
+        [D_DIVIDE_M] = &&run_D_DIVIDE_M,     [D_COUNT_V] = &&run_D_COUNT_V,       [D_COUNT_M] = &&run_D_COUNT_M,
+        [D_FLOAT_V] = &&run_D_FLOAT_V,       [D_FLOAT_M] = &&run_D_FLOAT_M,       [D_MUL] = &&run_D_MUL,
+        [D_AND] = &&run_D_AND,               [D_OR] = &&run_D_OR,                 [D_XOR] = &&run_D_XOR,
+        [D_SHL] = &&run_D_SHL,               [D_SHR] = &&run_D_SHR,               [D_SAR] = &&run_D_SAR,
+        [D_UNARY] = &&run_D_UNARY,           [D_FLOAT_SIGN] = &&run_D_FLOAT_SIGN, [D_SET] = &&run_D_SET,
+        [D_JUMP] = &&run_D_JUMP,             [D_JUMP_OUT] = &&run_D_JUMP_OUT,     [D_JUMP_V] = &&run_D_JUMP_V,
+        [D_JUMP_M] = &&run_D_JUMP_M,         [D_CALL] = &&run_D_CALL,             [D_CALL_OUT] = &&run_D_CALL_OUT,
+        [D_CALL_V] = &&run_D_CALL_V,         [D_CALL_M] = &&run_D_CALL_M,         [D_RET] = &&run_D_RET,
+        [D_LOOP] = &&run_D_LOOP,             [D_LOOP_OUT] = &&run_D_LOOP_OUT,     [D_PUSH_V] = &&run_D_PUSH_V,
+        [D_PUSH_M] = &&run_D_PUSH_M,         [D_POP] = &&run_D_POP,               [D_ENTER] = &&run_D_ENTER,
+        [D_LEAVE] = &&run_D_LEAVE,           [D_MEMCPY] = &&run_D_MEMCPY,         [D_MEMSET] = &&run_D_MEMSET,
+        [D_SYSCALL] = &&run_D_SYSCALL,
     };
 #endif
     Decoded *code = vm->decoded, *d = code + index, *next = d + d->len;
@@ -627,13 +657,13 @@ dispatch:
             alu_sub(&r[R4_SR], r[d->a], value, 0);
             NEXT();
         TARGET(D_TEST_V):
-            alu_binary(TEST_OP, &r[R4_SR], r[d->a], operand(r, d));
+            alu_logic(&r[R4_SR], r[d->a] & operand(r, d));
             NEXT();
         TARGET(D_TEST_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            alu_binary(TEST_OP, &r[R4_SR], r[d->a], value);
+            alu_logic(&r[R4_SR], r[d->a] & value);
             NEXT();
         TARGET(D_BINARY_V):
             r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], operand(r, d));
@@ -649,13 +679,34 @@ dispatch:
             if (!alu_divides(d->op, r[d->a], value)) {
                 goto stop;
             }
-            r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
+            r[d->a] = alu_divide(d->op, &r[R4_SR], r[d->a], value);
             NEXT();
         TARGET(D_DIVIDE_M):
             if (!load(vm, operand(r, d), 4, &value) || !alu_divides(d->op, r[d->a], value)) {
                 goto stop;
             }
-            r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
+            r[d->a] = alu_divide(d->op, &r[R4_SR], r[d->a], value);
+            NEXT();
+        TARGET(D_MUL):
+            r[d->a] = alu_mul(&r[R4_SR], r[d->a], operand(r, d));
+            NEXT();
+        TARGET(D_AND):
+            r[d->a] = alu_logic(&r[R4_SR], r[d->a] & operand(r, d));
+            NEXT();
+        TARGET(D_OR):
+            r[d->a] = alu_logic(&r[R4_SR], r[d->a] | operand(r, d));
+            NEXT();
+        TARGET(D_XOR):
+            r[d->a] = alu_logic(&r[R4_SR], r[d->a] ^ operand(r, d));
+            NEXT();
+        TARGET(D_SHL):
+            r[d->a] = alu_shl(&r[R4_SR], r[d->a], operand(r, d));
+            NEXT();
+        TARGET(D_SHR):
+            r[d->a] = alu_shr(&r[R4_SR], r[d->a], operand(r, d));
+            NEXT();
+        TARGET(D_SAR):
+            r[d->a] = alu_sar(&r[R4_SR], r[d->a], operand(r, d));
             NEXT();
         TARGET(D_COUNT_V):
             r[d->a] = alu_count(d->op, &r[R4_SR], operand(r, d));
