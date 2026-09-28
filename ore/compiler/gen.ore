@@ -652,16 +652,25 @@ fn check_null(g: *Gen, register: []u8) {
     emitf(g, "    CMP %s, #0\n    JNZ .L%d\n    CALL rt.null_error\n.L%d:\n", [][]u8 { register }, []int { ok, ok });
 }
 
+// The k of a value 2^k with k > 0, or else 0
+fn shift_of(value: int) int {
+    if (value < 2 || (value & (value - 1)) != 0) {
+        return 0;
+    }
+    var shift = 0;
+    while (1 << shift < value) {
+        shift += 1;
+    }
+    return shift;
+}
+
 // Multiplies a register by the size of an element
 fn scale(g: *Gen, size: int, register: []u8) {
     if (size == 1) {
         return;
     }
-    if ((size & (size - 1)) == 0) {
-        var shift = 0;
-        while (1 << shift < size) {
-            shift += 1;
-        }
+    var shift = shift_of(size);
+    if (shift > 0) {
         emitf(g, "    SHL %s, #%d\n", [][]u8 { register }, []int { shift });
     } else {
         emitf(g, "    MUL %s, #%d\n", [][]u8 { register }, []int { size });
@@ -854,8 +863,28 @@ fn is_arithmetic(op: ast.TokenKind) bool {
         op == ast.TokenKind.PIPE || op == ast.TokenKind.CARET || op == ast.TokenKind.SHL || op == ast.TokenKind.SHR;
 }
 
+// The value of an immediate operand that is a positive number, or else 0
+fn immediate(operand: []u8) int {
+    if (operand[0] != '#') {
+        return 0;
+    }
+    var value = 0;
+    for (var i = 1; i < operand.len; i += 1) {
+        if (operand[i] < '0' || operand[i] > '9') {
+            return 0;
+        }
+        value = value * 10 + (operand[i] - '0') as int;
+    }
+    return value;
+}
+
 fn arithmetic_on(g: *Gen, register: []u8, op: ast.TokenKind, t: *ast.Type, right: []u8) {
     var instruction = "ADD";
+    // Unsigned division and remainder by 2^k are a shift and a mask
+    var shift = 0;
+    if (!is_signed(t)) {
+        shift = shift_of(immediate(right));
+    }
     switch (op) {
         case ast.TokenKind.MINUS {
             instruction = "SUB";
@@ -867,12 +896,18 @@ fn arithmetic_on(g: *Gen, register: []u8, op: ast.TokenKind, t: *ast.Type, right
             instruction = "DIV";
             if (is_signed(t)) {
                 instruction = "IDIV";
+            } else if (shift > 0) {
+                instruction = "SHR";
+                right = constant_operand(shift);
             }
         }
         case ast.TokenKind.PERCENT {
             instruction = "MOD";
             if (is_signed(t)) {
                 instruction = "IMOD";
+            } else if (shift > 0) {
+                instruction = "AND";
+                right = constant_operand((1 << shift) - 1);
             }
         }
         case ast.TokenKind.AMP {
