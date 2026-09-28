@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1071,6 +1072,104 @@ static void gen_entry(Gen *g) {
     append(&g->text, "    RET\n");
 }
 
+typedef struct {
+    Decl **items;
+    int count;
+    int capacity;
+} Pending;
+
+// A function or global joins pending the first time something uses it
+static void reach(Pending *pending, const Symbol *s) {
+    if (s && s->decl && !s->decl->used && (s->kind == SYM_FN || s->kind == SYM_GLOBAL)) {
+        s->decl->used = 1;
+        extend((void **)&pending->items, &pending->capacity, pending->count, sizeof(Decl *));
+        pending->items[pending->count++] = s->decl;
+    }
+}
+
+static void reach_expr(Pending *pending, const Expr *e) {
+    if (!e) {
+        return;
+    }
+    reach(pending, e->symbol);
+    reach_expr(pending, e->left);
+    reach_expr(pending, e->right);
+    reach_expr(pending, e->third);
+    for (int i = 0; i < e->arg_count; i++) {
+        reach_expr(pending, e->args[i]);
+    }
+}
+
+static void reach_stmt(Pending *pending, const Stmt *s) {
+    if (!s) {
+        return;
+    }
+    for (int i = 0; i < s->count; i++) {
+        reach_stmt(pending, s->body[i]);
+    }
+    reach_expr(pending, s->value);
+    reach_expr(pending, s->target);
+    reach_expr(pending, s->cond);
+    reach_stmt(pending, s->then);
+    reach_stmt(pending, s->otherwise);
+    reach_stmt(pending, s->init);
+    reach_stmt(pending, s->step);
+    for (int i = 0; i < s->case_count; i++) {
+        reach_stmt(pending, s->cases[i].body);
+    }
+    reach_stmt(pending, s->fallback);
+}
+
+// Assembly names functions and globals as module.name
+static void reach_assembly(const Program *program, Pending *pending, const char *path) {
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return;
+    }
+    char word[256];
+    size_t length = 0;
+    for (int c = getc(file);; c = getc(file)) {
+        if (c != EOF && (isalnum(c) || c == '_' || c == '.')) {
+            if (length < sizeof(word) - 1) {
+                word[length++] = (char)c;
+            }
+            continue;
+        }
+        word[length] = '\0';
+        char *dot = strchr(word, '.');
+        for (int i = 0; dot && dot > word && i < program->module_count; i++) {
+            const Module *m = program->modules[i];
+            if (strlen(m->name) == (size_t)(dot - word) && strncmp(m->name, word, (size_t)(dot - word)) == 0) {
+                for (int k = 0; k < m->symbol_count; k++) {
+                    if (strcmp(m->symbols[k]->name, dot + 1) == 0) {
+                        reach(pending, m->symbols[k]);
+                    }
+                }
+            }
+        }
+        length = 0;
+        if (c == EOF) {
+            break;
+        }
+    }
+    fclose(file);
+}
+
+// Marks what main reaches, directly or through other functions and globals, and what the program's
+// assembly names, which is all that gets generated
+static void mark_used(Program *program) {
+    Pending pending = { 0 };
+    reach(&pending, program->main);
+    for (int i = 0; i < program->assembly_count; i++) {
+        reach_assembly(program, &pending, program->assembly[i]);
+    }
+    for (int i = 0; i < pending.count; i++) {
+        reach_expr(&pending, pending.items[i]->value);
+        reach_stmt(&pending, pending.items[i]->body);
+    }
+    free(pending.items);
+}
+
 char *generate(Program *program, size_t *size) {
     Gen g = { .program = program };
 
@@ -1081,17 +1180,18 @@ char *generate(Program *program, size_t *size) {
         append(&g.text, "\n");
     }
     append(&g.text, "\n.text\n");
+    mark_used(program);
     gen_entry(&g);
     for (int i = 0; i < program->module_count; i++) {
         g.m = program->modules[i];
         for (int k = 0; k < g.m->decl_count; k++) {
             Decl *d = g.m->decls[k];
-            if (d->kind == DECL_FN && d->body) {
+            if (d->kind == DECL_FN && d->body && d->used) {
                 gen_function(&g, d);
             }
         }
         for (int k = 0; k < g.m->decl_count; k++) {
-            if (g.m->decls[k]->kind == DECL_VAR) {
+            if (g.m->decls[k]->kind == DECL_VAR && g.m->decls[k]->used) {
                 gen_global(&g, g.m->decls[k]);
             }
         }

@@ -285,6 +285,7 @@ struct Decl {
     Symbol *symbol;
     Type *type;
     int state;              // of a constant: 0 unchecked, 1 being checked, 2 checked
+    int used;               // reached from main or named in assembly, so generated
 };
 
 struct Module {
