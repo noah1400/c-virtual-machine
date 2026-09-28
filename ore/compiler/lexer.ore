@@ -54,7 +54,8 @@ struct Lexer {
     buffer: str.Builder;    // the bytes of a string literal
 }
 
-fn add(lx: *Lexer, t: *ast.Token) {
+// The next token, which the lexer fills in where it stays
+fn next_token(lx: *Lexer) *ast.Token {
     if (lx.count == lx.tokens.len) {
         var capacity = lx.tokens.len * 2;
         if (capacity == 0) {
@@ -67,8 +68,9 @@ fn add(lx: *Lexer, t: *ast.Token) {
         free(lx.tokens);
         lx.tokens = larger;
     }
-    lx.tokens[lx.count] = *t;
+    var t = &lx.tokens[lx.count];
     lx.count += 1;
+    return t;
 }
 
 // Ends the line at the line end at p, keeping its text without the line end for .loc
@@ -381,8 +383,9 @@ fn skip_space(lx: *Lexer) {
     }
 }
 
-// Letters, digits and _
+// Letters, digits and _, and those that start a name
 var name_chars: [256]bool;
+var name_starts: [256]bool;
 
 pub fn lex(m: *ast.Module) {
     var lx = Lexer { m: m, source: m.source, line: 1, buffer: str.builder(64) };
@@ -391,14 +394,17 @@ pub fn lex(m: *ast.Module) {
     if (!name_chars['_']) {
         for (var i = 0; i < 256; i += 1) {
             name_chars[i] = is_alnum(i as u8);
+            name_starts[i] = is_alpha(i as u8);
         }
         name_chars['_'] = true;
+        name_starts['_'] = true;
     }
     for (;;) {
         skip_space(&lx);
-        var t = ast.Token { line: lx.line };
         var start = lx.p;
         var c = src[start];
+        var t = next_token(&lx);
+        t.line = lx.line;
         if (c == 0) {
             if (start != src.len - 1) {
                 no_nul(&lx);
@@ -408,10 +414,9 @@ pub fn lex(m: *ast.Module) {
             }
             t.kind = ast.TokenKind.EOF;
             t.text = src[start:start];
-            add(&lx, &t);
             break;
         }
-        if (is_alpha(c) || c == '_') {
+        if (name_starts[c]) {
             var p = start;
             while (name_chars[src[p]]) {
                 p += 1;
@@ -422,18 +427,19 @@ pub fn lex(m: *ast.Module) {
                 var word = src[start:p];
                 var letter = (c - 'a') as int;
                 for (var i = keyword_starts[letter]; i < keyword_starts[letter + 1]; i += 1) {
-                    if (ast.same(keywords[i], word)) {
+                    if (keywords[i].len == word.len && ast.same(keywords[i], word)) {
                         t.kind = (ast.TokenKind.AS as int + i) as ast.TokenKind;
+                        break;
                     }
                 }
             }
         } else if (is_digit(c)) {
-            number(&lx, &t);
+            number(&lx, t);
         } else if (c == '\'') {
-            character(&lx, &t);
+            character(&lx, t);
         } else if (c == '"') {
-            string(&lx, &t);
-        } else if (!punct(&lx, &t)) {
+            string(&lx, t);
+        } else if (!punct(&lx, t)) {
             if (c >= 32 && c < 127) {
                 var text = [1]u8 { c };
                 fail(&lx, ast.cat([][]u8 { "unexpected character '", text, "'" }));
@@ -446,7 +452,6 @@ pub fn lex(m: *ast.Module) {
             fail(&lx, ast.cat([][]u8 { "unexpected byte 0x", upper(hex) }));
         }
         t.text = src[start:lx.p];
-        add(&lx, &t);
     }
     m.tokens = lx.tokens[:lx.count];
     m.lines = ast.texts(lx.lines);
