@@ -56,21 +56,28 @@ struct Placeholders {
     count: int;
 }
 
-// Patterns are string literals, which their address tells apart, so each is scanned only once
-var placeholders: [256]Placeholders;
+// Patterns are string literals, which their address tells apart, so each is scanned only once. Its address
+// picks a pair of slots, which holds the last two patterns that picked it.
+var placeholders: [512]Placeholders;
 
 // Appends pattern to out with each %s replaced by the next of texts, each %d by the next of numbers,
 // and each %+d by the next number with its sign
 fn format(out: *str.Builder, pattern: []u8, texts: [][]u8, numbers: []int) {
-    var found = &placeholders[(pattern.ptr as u32 >> 2 & 255) as int];
+    var found = &placeholders[(pattern.ptr as u32 >> 1 & 510) as int];
     if (found.pattern.ptr != pattern.ptr || found.pattern.len != pattern.len) {
-        found.pattern = pattern;
-        found.count = 0;
-        for (var i = 0; i < pattern.len; i += 1) {
-            if (pattern[i] == '%') {
-                found.at[found.count] = i;
-                found.kind[found.count] = pattern[i + 1];
-                found.count += 1;
+        var first = found;
+        found = &first[1];
+        if (found.pattern.ptr != pattern.ptr || found.pattern.len != pattern.len) {
+            *found = *first;
+            found = &first[0];
+            found.pattern = pattern;
+            found.count = 0;
+            for (var i = 0; i < pattern.len; i += 1) {
+                if (pattern[i] == '%') {
+                    found.at[found.count] = i;
+                    found.kind[found.count] = pattern[i + 1];
+                    found.count += 1;
+                }
             }
         }
     }
