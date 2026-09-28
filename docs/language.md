@@ -441,4 +441,4 @@ These need supervisor mode, which programs start in.
 
 **Symbols:** functions and globals of module `m` are named `m.name` in assembly, and `main` calls the main module's `main`. The program's assembly files may name them too, which keeps them in the program even when no Ore code uses them. `extern fn` names stay as written. An `interrupt fn` ends with `IRET` instead of `RET`.
 
-**Runtime:** `ore/lib/runtime.asm` calls `main` and passes its result to the Exit syscall. For a runtime error it formats the message and makes syscall 35, Abort, which stops the program the way a fault does. R0 holds the message, and R5 the number of calls to leave out of the report, so that it starts at the Ore line that failed.
+**Runtime:** `ore/lib/runtime.asm` calls `main` and passes its result to the Exit syscall. It is a [library](../README.md#libraries), so a program only gets the routines and messages that it can use. For a runtime error it formats the message and makes syscall 35, Abort, which stops the program the way a fault does. R0 holds the message, and R5 the number of calls to leave out of the report, so that it starts at the Ore line that failed.

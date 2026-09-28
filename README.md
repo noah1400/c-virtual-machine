@@ -709,6 +709,7 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.loc "file", line[, "text"]` | Attribute the code and labels that follow to a line of another source file (see below) |
 | `.macro` ... `.endm` | Define a macro |
 | `.if`, `.ifdef`, `.ifndef`, `.else`, `.endif` | Conditional assembly |
+| `.library` | Make the rest of the file a [library](#libraries), of which a program only gets what it uses |
 
 A value can be written signed or unsigned, but it must fit its width. For example, `.byte` accepts −128 to 255.
 
@@ -792,6 +793,30 @@ entries:
 - `vmasm -D NAME[=VALUE]` defines constants from the command line.
 
 Includes and macro definitions are processed even inside a false block. The included file must therefore exist, and macros defined there are available either way.
+
+### Libraries
+
+After `.library`, the code or data from one label to the next is a unit of its own, and the program only gets the units that it uses. A file of routines that programs include costs each program only the routines it calls:
+
+```asm
+    .library
+square:                 ; kept by a CALL square elsewhere
+    MUL R0, R0
+    RET
+cube:                   ; left out while nothing refers to it
+    MOVE R5, R0
+    MUL R0, R0
+    MUL R0, R5
+    RET
+```
+
+- **Used:** a unit is kept when one of its labels or constants is exported with `.global`, or named by `.entry`, by code or data outside libraries or by a unit that is kept. Without `.entry`, the unit where the code starts is kept too.
+- **Running on:** code that does not end with `JMP`, `RET`, `IRET` or `HALT` can run on into the next unit, which is then kept with it. A `HALT` after a syscall that does not return, such as Exit, tells vmasm that it does not.
+- **Data** is only kept for the label it follows, so code must not reach past a label into the data of the next.
+- **Directives** other than data and `.equ` stay even in a unit that is left out, so `.align` still pads.
+- A unit that is left out may refer to symbols that nothing defines.
+
+The runtime of Ore programs and `std/cpu` are libraries.
 
 ### vmasm
 
@@ -896,7 +921,7 @@ Two compilers take these options:
 - **`vmc`** is written in Ore, in `ore/compiler`, and optimizes. It keeps scalar locals and parameters in registers, uses variables, fields and slice lengths as operands where instructions can take them, checks a pointer for `null` once until something changes it and branches on conditions without first making values of them. Its code executes about half as many instructions as `vmc0`'s and is a third smaller. `make` builds it in two stages: `vmc0` compiles it into `vmc1.bin`, which compiles it again into `vmc.bin`, and `vmc.bin` compiles itself into the very same file. The `vmc` script runs `vmc.bin` on the VM with 256 MB of memory and an 8 MB stack and assembles the program it writes with `vmasm`.
 - **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. Its code keeps every local in the frame. It runs natively, so it compiles much faster: `vmc` takes 1.8 seconds for its own 6,000 lines, `vmc0` 0.04 seconds.
 
-- **How it compiles:** the compiler writes the whole program as one assembly file, with only the functions and globals that `main` reaches, directly or through others, and those that the program's assembly names: a program that calls `io.write` gets that function and not the rest of `std/io`. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler.
+- **How it compiles:** the compiler writes the whole program as one assembly file, with only the functions and globals that `main` reaches, directly or through others, and those that the program's assembly names: a program that calls `io.write` gets that function and not the rest of `std/io`. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler, which leaves out the routines of the runtime and `std/cpu` that the program does not use, since they are [libraries](#libraries).
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
 - **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines. `-g0` leaves them out, and with them the symbols and source lines of the binary, which then holds only its code and data at a tenth of the size or less. Faults in it are reported by address only.
 - **Runtime errors**, such as an index out of bounds, a `null` pointer or a failed `assert`, stop the program with a message, reported at the Ore line that failed. For the `digits.ore` example in the language description:
@@ -925,8 +950,8 @@ A:\>DIR /W
  Directory of A:\
 
 FIND.EXE        SORT.EXE
-        2 file(s)          8,015 bytes
-        0 dir(s)       4,151,808 bytes free
+        2 file(s)          7,831 bytes
+        0 dir(s)       4,152,320 bytes free
 ```
 
 ## Syscalls
