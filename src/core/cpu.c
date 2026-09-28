@@ -21,6 +21,7 @@ void cpu_reset(VM *vm) {
     vm->registers[R4_SR] = SYS_FLAG;
     vm->halted = 0;
     vm->call_depth = 0;
+    cpu_forget_all(vm);
 }
 
 // The stack lies between the SLO and SHI control registers

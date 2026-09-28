@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "binfmt.h"
+#include "cpu.h"
 #include "memory.h"
 #include "vm.h"
 
@@ -40,6 +41,7 @@ int memory_init(VM *vm, uint32_t size) {
 }
 
 void memory_cleanup(VM *vm) {
+    cpu_forget_all(vm);
     free(vm->memory);
     vm->memory = NULL;
     vm->memory_size = 0;
@@ -311,6 +313,9 @@ static int access_range(VM *vm, uint32_t address, uint8_t *buffer, uint32_t size
                                 "Memory access violation: address 0x%04X, size %u", address, size);
         }
         copy_bytes(buffer, vm->memory + address, size, access);
+        if (buffer && access == PROT_WRITE) {
+            cpu_forget(vm, address, size);
+        }
         return VM_ERROR_NONE;
     }
 
@@ -339,6 +344,9 @@ static int access_range(VM *vm, uint32_t address, uint8_t *buffer, uint32_t size
                                 "Memory access violation: 0x%08X maps outside memory", virtual);
         }
         copy_bytes(buffer ? buffer + done : NULL, vm->memory + physical, chunk, access);
+        if (buffer && access == PROT_WRITE) {
+            cpu_forget(vm, physical, chunk);
+        }
         done += chunk;
     }
     return VM_ERROR_NONE;
@@ -447,6 +455,7 @@ void memory_write_dword(VM *vm, uint32_t address, uint32_t value) {
     uint8_t *memory = direct(vm, address, 4);
     if (memory) {
         write_le32(memory, value);
+        cpu_forget(vm, address, 4);
         return;
     }
     uint8_t bytes[4];
@@ -462,6 +471,7 @@ int memory_copy(VM *vm, uint32_t dest, uint32_t src, uint32_t size) {
     }
     if (!vm->control[CR_PTB]) {
         memmove(vm->memory + dest, vm->memory + src, size);
+        cpu_forget(vm, dest, size);
         return VM_ERROR_NONE;
     }
 
@@ -482,6 +492,7 @@ int memory_set(VM *vm, uint32_t address, uint8_t value, uint32_t size) {
     }
     if (!vm->control[CR_PTB]) {
         memset(vm->memory + address, value, size);
+        cpu_forget(vm, address, size);
         return VM_ERROR_NONE;
     }
 

@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 #include "alu.h"
 #include "binfmt.h"
@@ -10,6 +11,9 @@
 // on every instruction. It stops before an instruction that would fault or that needs more than it
 // does, such as most syscalls, a device, a privileged instruction or a write to PC or SR as a register, and
 // leaves that one to vm_step, which does the same as it would.
+//
+// It decodes an instruction the first time it runs at an address below the heap and keeps what it found
+// until something writes to the words of the instruction.
 
 enum {
     STOP,
@@ -106,6 +110,38 @@ static void prepare(void) {
     }
 }
 
+
+// What cpu_run does with a decoded instruction. The operand of a V kind is a value and that of the M kind
+// after it is in memory.
+enum {
+    D_DECODE,
+    D_STOP,
+    D_NOP,
+    D_LOAD_V, D_LOAD_M, D_LOADB_V, D_LOADB_M, D_LOADW_V, D_LOADW_M,
+    D_STORE, D_STOREB, D_STOREW, D_LEA,
+    D_ADD_V, D_ADD_M, D_SUB_V, D_SUB_M, D_CMP_V, D_CMP_M, D_TEST_V, D_TEST_M,
+    D_BINARY_V, D_BINARY_M, D_DIVIDE_V, D_DIVIDE_M, D_COUNT_V, D_COUNT_M, D_FLOAT_V, D_FLOAT_M,
+    D_UNARY, D_FLOAT_SIGN, D_SET,
+    D_JUMP, D_JUMP_OUT, D_JUMP_V, D_JUMP_M,
+    D_CALL, D_CALL_OUT, D_CALL_V, D_CALL_M, D_RET,
+    D_LOOP, D_LOOP_OUT,
+    D_PUSH_V, D_PUSH_M, D_POP, D_ENTER, D_LEAVE, D_MEMCPY, D_MEMSET, D_SYSCALL,
+};
+
+// An instruction as cpu_run runs it. Its operand, or the address of its operand, is (r[b] & mask) + imm.
+struct Decoded {
+    uint8_t kind;       // 0 until the words at its address are decoded
+    uint8_t a;          // the register of the first field
+    uint8_t b;          // the register of the operand, or the base of its address
+    uint8_t op;         // the opcode for the kinds that several share, or the register of a block size
+    uint32_t mask;      // keeps register b, or leaves only imm
+    uint32_t imm;       // the immediate or displacement, or the word a jump goes to
+    uint16_t cond;      // one bit for each value of the Z, N, C and O flags under which a jump or SET holds
+    uint8_t len;        // the words the instruction takes
+};
+
+typedef struct Decoded Decoded;
+
 INLINE uint32_t signed16(uint32_t w) {
     return ((w & 0xFFFF) ^ 0x8000) - 0x8000;
 }
@@ -142,55 +178,6 @@ INLINE uint8_t *reach(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
     return memory_direct(vm, address, size, access);
 }
 
-INLINE uint32_t operand_address(const uint32_t *r, uint32_t w, const uint8_t *code, int field) {
-    int extended = (w & EXTENDED_BIT) != 0;
-    switch ((w >> 20) & 7) {
-        case MEM_MODE:
-            return extended ? extension(code) : w & 0xFFFF;
-        case REGM_MODE:
-            return r[(w >> field) & 0x0F];
-        case IDX_MODE:
-            return r[(w >> field) & 0x0F] + (extended ? extension(code) : signed12(w));
-        case STK_MODE:
-            return r[R2_SP] + immediate(w, code);
-        default:
-            return r[R1_BP] + immediate(w, code);
-    }
-}
-
-// Reads the variable operand, zero-extended from width bytes; returns 0 if reading it would fault
-INLINE int read_operand(VM *vm, uint32_t w, const uint8_t *code, int field, uint32_t width, uint32_t *value) {
-    uint32_t mode = (w >> 20) & 7;
-    if (mode == IMM_MODE || mode == REG_MODE) {
-        uint32_t v = mode == IMM_MODE ? immediate(w, code) : vm->registers[(w >> field) & 0x0F];
-        *value = width == 4 ? v : v & ((1u << (8 * width)) - 1);
-        return 1;
-    }
-    const uint8_t *bytes = reach(vm, operand_address(vm->registers, w, code, field), width, PROT_READ);
-    if (!bytes) {
-        return 0;
-    }
-    *value = width == 4 ? read_le32(bytes) : width == 2 ? read_le16(bytes) : bytes[0];
-    return 1;
-}
-
-// Immediate targets are relative to the next instruction
-INLINE int jump_target(VM *vm, uint32_t w, const uint8_t *code, uint32_t next, int field, uint32_t *target) {
-    if (((w >> 20) & 7) == IMM_MODE) {
-        *target = next + immediate(w, code);
-        return 1;
-    }
-    return read_operand(vm, w, code, field, 4, target);
-}
-
-// MEMCPY and MEMSET take their size from the immediate or from the register it names
-INLINE uint32_t block_size(const uint32_t *r, uint32_t w, const uint8_t *code) {
-    if (((w >> 20) & 7) == REG_MODE) {
-        return r[w & 0x0F];
-    }
-    return w & EXTENDED_BIT ? extension(code) : w & 0x0FFF;
-}
-
 // The stack lies between SLO and SHI
 INLINE uint8_t *push_slot(VM *vm, uint32_t sp) {
     uint32_t low = vm->control[CR_SLO];
@@ -220,216 +207,550 @@ INLINE uint32_t word_index(uint32_t address) {
     return (address >> 2) | (address << 30);
 }
 
+void cpu_forget(VM *vm, uint32_t address, uint32_t size) {
+    if (address >= vm->decoded_end || size == 0) {
+        return;
+    }
+    uint32_t first = address >> 2;
+    uint64_t last = ((uint64_t)address + size - 1) >> 2;
+    // An instruction that starts in the word before takes the first word as its extension
+    if (first > 0) {
+        first--;
+    }
+    if (last > vm->decoded_words) {
+        last = vm->decoded_words;
+    }
+    for (uint32_t k = first; k <= last; k++) {
+        if (vm->decoded[k].kind != D_DECODE) {
+            vm->decoded[k].kind = D_DECODE;
+        }
+    }
+}
+
+void cpu_forget_all(VM *vm) {
+    free(vm->decoded);
+    vm->decoded = NULL;
+    vm->decoded_words = 0;
+    vm->decoded_end = 0;
+}
+
+INLINE void written(VM *vm, uint32_t address, uint32_t size) {
+    if (address < vm->decoded_end) {
+        cpu_forget(vm, address, size);
+    }
+}
+
+// Sets the operand in the register field at field as register b, mask and imm, where PC reads as the address
+// of the next instruction; tells whether the operand is in memory
+static int decode_operand(Decoded *d, uint32_t w, const uint8_t *code, int field, uint32_t next) {
+    uint32_t mode = (w >> 20) & 7;
+    d->b = (uint8_t)((w >> field) & 0x0F);
+    d->mask = ~0u;
+    d->imm = 0;
+    switch (mode) {
+        case IMM_MODE:
+            d->mask = 0;
+            d->imm = immediate(w, code);
+            break;
+        case MEM_MODE:
+            d->mask = 0;
+            d->imm = w & EXTENDED_BIT ? extension(code) : w & 0xFFFF;
+            break;
+        case IDX_MODE:
+            d->imm = w & EXTENDED_BIT ? extension(code) : signed12(w);
+            break;
+        case STK_MODE:
+            d->b = R2_SP;
+            d->imm = immediate(w, code);
+            break;
+        case BAS_MODE:
+            d->b = R1_BP;
+            d->imm = immediate(w, code);
+            break;
+    }
+    if (d->mask && d->b == R3_PC) {
+        d->mask = 0;
+        d->imm += next;
+    }
+    return mode != IMM_MODE && mode != REG_MODE;
+}
+
+// An immediate target goes in imm as a word with the kind in, or as an address with the kind out when it
+// lies where cpu_run does not run
+static void decode_target(Decoded *d, uint32_t target, uint32_t words, uint8_t in, uint8_t out) {
+    uint32_t index = word_index(target);
+    d->kind = index < words ? in : out;
+    d->imm = index < words ? index : target;
+}
+
+// Decodes the instruction at a word. Instructions that write PC or SR as a register or read PC from their
+// first field stop, as do those that cpu_run does not run, and vm_step runs them.
+static void decode(VM *vm, Decoded *d, uint32_t index, uint32_t words) {
+    memset(d, 0, sizeof(*d));
+    d->kind = D_STOP;
+    d->len = 1;
+    if (index >= words) {
+        return;
+    }
+    uint32_t pc = index * 4;
+    const uint8_t *code = vm->memory + pc;
+    uint32_t w = read_le32(code), next = pc + 4 + ((w >> 21) & 4), a = reg1(w), value;
+    uint8_t run = kinds[w >> 20];
+    int memory;
+
+    d->len = (uint8_t)((next - pc) / 4);
+    d->a = (uint8_t)a;
+    d->op = (uint8_t)(w >> 24);
+    switch (run) {
+        case RUN_NOP:
+            d->kind = D_NOP;
+            break;
+        case RUN_LOAD:
+        case RUN_LOADB:
+        case RUN_LOADW:
+            if (!writes_special(a)) {
+                memory = decode_operand(d, w, code, REG2, next);
+                d->kind = (uint8_t)((run == RUN_LOAD ? D_LOAD_V : run == RUN_LOADB ? D_LOADB_V : D_LOADW_V) + memory);
+            }
+            break;
+        case RUN_STORE:
+        case RUN_STOREB:
+        case RUN_STOREW:
+            if (a != R3_PC) {
+                decode_operand(d, w, code, REG2, next);
+                d->kind = run == RUN_STORE ? D_STORE : run == RUN_STOREB ? D_STOREB : D_STOREW;
+            }
+            break;
+        case RUN_LEA:
+            if (!writes_special(a)) {
+                decode_operand(d, w, code, REG2, next);
+                d->kind = D_LEA;
+            }
+            break;
+        case RUN_MOVE:
+            if (!writes_special(a)) {
+                d->b = (uint8_t)((w >> REG2) & 0x0F);
+                d->mask = d->b == R3_PC ? 0 : ~0u;
+                d->imm = d->b == R3_PC ? next : 0;
+                d->kind = D_LOAD_V;
+            }
+            break;
+        case RUN_ADD:
+        case RUN_SUB:
+            if (!writes_special(a)) {
+                memory = decode_operand(d, w, code, REG2, next);
+                d->kind = (uint8_t)((run == RUN_ADD ? D_ADD_V : D_SUB_V) + memory);
+            }
+            break;
+        case RUN_CMP:
+        case RUN_TEST:
+            if (a != R3_PC) {
+                memory = decode_operand(d, w, code, REG2, next);
+                d->kind = (uint8_t)((run == RUN_CMP ? D_CMP_V : D_TEST_V) + memory);
+            }
+            break;
+        case RUN_BINARY:
+        case RUN_DIVIDE:
+        case RUN_COUNT:
+        case RUN_FLOAT:
+            if (!writes_special(a)) {
+                memory = decode_operand(d, w, code, REG2, next);
+                d->kind = (uint8_t)((run == RUN_BINARY   ? D_BINARY_V
+                                     : run == RUN_DIVIDE ? D_DIVIDE_V
+                                     : run == RUN_COUNT  ? D_COUNT_V
+                                                         : D_FLOAT_V) + memory);
+            }
+            break;
+        case RUN_UNARY:
+        case RUN_FLOAT_SIGN:
+            if (!writes_special(a)) {
+                d->kind = run == RUN_UNARY ? D_UNARY : D_FLOAT_SIGN;
+            }
+            break;
+        case RUN_SET:
+            value = immediate(w, code);
+            if (!writes_special(a) && value <= 0xFF && isa_is_conditional_jump((uint8_t)value)) {
+                d->cond = conditions[value];
+                d->kind = D_SET;
+            }
+            break;
+        case RUN_JUMP:
+        case RUN_CALL:
+            memory = decode_operand(d, w, code, REG1, next);
+            d->cond = conditions[d->op];
+            if (((w >> 20) & 7) == IMM_MODE && run == RUN_JUMP) {
+                decode_target(d, next + d->imm, words, D_JUMP, D_JUMP_OUT);
+            } else if (((w >> 20) & 7) == IMM_MODE) {
+                decode_target(d, next + d->imm, words, D_CALL, D_CALL_OUT);
+            } else {
+                d->kind = (uint8_t)((run == RUN_JUMP ? D_JUMP_V : D_CALL_V) + memory);
+            }
+            break;
+        case RUN_RET:
+            d->imm = immediate(w, code);
+            d->kind = D_RET;
+            break;
+        case RUN_LOOP:
+            if (!writes_special(a) && ((w >> 20) & 7) == IMM_MODE) {
+                decode_target(d, next + immediate(w, code), words, D_LOOP, D_LOOP_OUT);
+            }
+            break;
+        case RUN_PUSH:
+            memory = decode_operand(d, w, code, REG1, next);
+            d->kind = (uint8_t)(D_PUSH_V + memory);
+            break;
+        case RUN_POP:
+            if (!writes_special(a)) {
+                d->kind = D_POP;
+            }
+            break;
+        case RUN_ENTER:
+            d->imm = immediate(w, code);
+            d->kind = D_ENTER;
+            break;
+        case RUN_LEAVE:
+            d->kind = D_LEAVE;
+            break;
+        case RUN_MEMCPY:
+        case RUN_MEMSET:
+            // The size is an immediate or the register in the lowest bits
+            d->b = (uint8_t)((w >> REG2) & 0x0F);
+            d->op = ((w >> 20) & 7) == REG_MODE ? (uint8_t)(w & 0x0F) : 0;
+            d->mask = ((w >> 20) & 7) == REG_MODE ? ~0u : 0;
+            d->imm = ((w >> 20) & 7) == REG_MODE ? 0 : w & EXTENDED_BIT ? extension(code) : w & 0x0FFF;
+            if (a != R3_PC && d->b != R3_PC && (!d->mask || d->op != R3_PC)) {
+                d->kind = run == RUN_MEMCPY ? D_MEMCPY : D_MEMSET;
+            }
+            break;
+        case RUN_SYSCALL:
+            d->imm = immediate(w, code);
+            d->kind = D_SYSCALL;
+            break;
+    }
+}
+
+INLINE uint32_t operand(const uint32_t *r, const Decoded *d) {
+    return (r[d->b] & d->mask) + d->imm;
+}
+
+// Reads width bytes at address into value; returns 0 if reading them would fault
+INLINE int load(VM *vm, uint32_t address, uint32_t width, uint32_t *value) {
+    const uint8_t *bytes = reach(vm, address, width, PROT_READ);
+    if (!bytes) {
+        return 0;
+    }
+    *value = width == 4 ? read_le32(bytes) : width == 2 ? read_le16(bytes) : bytes[0];
+    return 1;
+}
+
+// Pushes a value; returns 0 if pushing it would fault
+INLINE int push(VM *vm, uint32_t value) {
+    uint8_t *slot = push_slot(vm, vm->registers[R2_SP]);
+    if (!slot) {
+        return 0;
+    }
+    write_le32(slot, value);
+    vm->registers[R2_SP] -= 4;
+    written(vm, vm->registers[R2_SP], 4);
+    return 1;
+}
+
+// Pushes the address after a call and notes the call for backtraces; returns 0 if pushing would fault
+INLINE int call(VM *vm, const Decoded *code, const Decoded *d) {
+    uint32_t site = (uint32_t)(d - code) * 4, back = site + d->len * 4u;
+    if (!push(vm, back)) {
+        return 0;
+    }
+    cpu_push_frame(vm, site, back, -1);
+    return 1;
+}
+
+INLINE int holds(const uint32_t *r, const Decoded *d) {
+    return (d->cond >> (r[R4_SR] & 0x0F)) & 1;
+}
+
 // Runs up to limit instructions and returns how many it ran. The caller makes sure that nothing has to
 // happen between them: no paging, trap, deliverable interrupt or device that counts instructions.
 uint32_t cpu_run(VM *vm, uint32_t limit) {
     static int prepared;
     uint32_t *r = vm->registers;
-    uint32_t pc = r[R3_PC], left = limit, words = fetch_words(vm);
+    uint32_t left = limit, words = fetch_words(vm), index = word_index(r[R3_PC]), value;
 
     if (!prepared) {
         prepare();
         prepared = 1;
     }
-    for (; left > 0 && word_index(pc) < words; left--) {
-        const uint8_t *code = vm->memory + pc;
-        uint32_t w = read_le32(code), next = pc + 4 + ((w >> 21) & 4), value;
-        uint8_t *slot;
-
-        // PC already points at the next instruction while this one executes
-        r[R3_PC] = next;
-        switch (kinds[w >> 20]) {
-            case RUN_NOP:
+    if (!vm->decoded || vm->decoded_words != words) {
+        cpu_forget_all(vm);
+        vm->decoded = calloc((size_t)words + 2, sizeof(Decoded));
+        if (!vm->decoded) {
+            return 0;
+        }
+        vm->decoded_words = words;
+        vm->decoded_end = (words + 1) * 4;
+    }
+    if (index >= words) {
+        return 0;
+    }
+    Decoded *code = vm->decoded, *e = code + index;
+    uint8_t *slot;
+    for (; left > 0; left--) {
+        Decoded *d = e, *next = e + e->len;
+    again:
+        switch (d->kind) {
+            case D_DECODE:
+                decode(vm, d, (uint32_t)(d - code), words);
+                next = d + d->len;
+                goto again;
+            case D_NOP:
                 break;
-            case RUN_LOAD:
-                if (writes_special(reg1(w)) || !read_operand(vm, w, code, REG2, 4, &value)) {
+            case D_LOAD_V:
+                r[d->a] = operand(r, d);
+                break;
+            case D_LOAD_M:
+                if (!load(vm, operand(r, d), 4, &r[d->a])) {
                     goto stop;
                 }
-                r[reg1(w)] = value;
                 break;
-            case RUN_LOADB:
-                if (writes_special(reg1(w)) || !read_operand(vm, w, code, REG2, 1, &value)) {
+            case D_LOADB_V:
+                r[d->a] = operand(r, d) & 0xFF;
+                break;
+            case D_LOADB_M:
+                if (!load(vm, operand(r, d), 1, &r[d->a])) {
                     goto stop;
                 }
-                r[reg1(w)] = value;
                 break;
-            case RUN_LOADW:
-                if (writes_special(reg1(w)) || !read_operand(vm, w, code, REG2, 2, &value)) {
+            case D_LOADW_V:
+                r[d->a] = operand(r, d) & 0xFFFF;
+                break;
+            case D_LOADW_M:
+                if (!load(vm, operand(r, d), 2, &r[d->a])) {
                     goto stop;
                 }
-                r[reg1(w)] = value;
                 break;
-            case RUN_STORE:
-                if (!(slot = reach(vm, operand_address(r, w, code, REG2), 4, PROT_WRITE))) {
+            case D_STORE:
+                value = operand(r, d);
+                if (!(slot = reach(vm, value, 4, PROT_WRITE))) {
                     goto stop;
                 }
-                write_le32(slot, r[reg1(w)]);
+                write_le32(slot, r[d->a]);
+                written(vm, value, 4);
                 break;
-            case RUN_STOREB:
-                if (!(slot = reach(vm, operand_address(r, w, code, REG2), 1, PROT_WRITE))) {
+            case D_STOREB:
+                value = operand(r, d);
+                if (!(slot = reach(vm, value, 1, PROT_WRITE))) {
                     goto stop;
                 }
-                slot[0] = (uint8_t)r[reg1(w)];
+                slot[0] = (uint8_t)r[d->a];
+                written(vm, value, 1);
                 break;
-            case RUN_STOREW:
-                if (!(slot = reach(vm, operand_address(r, w, code, REG2), 2, PROT_WRITE))) {
+            case D_STOREW:
+                value = operand(r, d);
+                if (!(slot = reach(vm, value, 2, PROT_WRITE))) {
                     goto stop;
                 }
-                write_le16(slot, (uint16_t)r[reg1(w)]);
+                write_le16(slot, (uint16_t)r[d->a]);
+                written(vm, value, 2);
                 break;
-            case RUN_LEA:
-                if (writes_special(reg1(w))) {
+            case D_LEA:
+                r[d->a] = operand(r, d);
+                break;
+            case D_ADD_V:
+                r[d->a] = alu_add(&r[R4_SR], r[d->a], operand(r, d), 0);
+                break;
+            case D_ADD_M:
+                if (!load(vm, operand(r, d), 4, &value)) {
                     goto stop;
                 }
-                r[reg1(w)] = operand_address(r, w, code, REG2);
+                r[d->a] = alu_add(&r[R4_SR], r[d->a], value, 0);
                 break;
-            case RUN_MOVE:
-                if (writes_special(reg1(w))) {
+            case D_SUB_V:
+                r[d->a] = alu_sub(&r[R4_SR], r[d->a], operand(r, d), 0);
+                break;
+            case D_SUB_M:
+                if (!load(vm, operand(r, d), 4, &value)) {
                     goto stop;
                 }
-                r[reg1(w)] = r[(w >> REG2) & 0x0F];
+                r[d->a] = alu_sub(&r[R4_SR], r[d->a], value, 0);
                 break;
-            case RUN_ADD:
-                if (writes_special(reg1(w)) || !read_operand(vm, w, code, REG2, 4, &value)) {
+            case D_CMP_V:
+                alu_sub(&r[R4_SR], r[d->a], operand(r, d), 0);
+                break;
+            case D_CMP_M:
+                if (!load(vm, operand(r, d), 4, &value)) {
                     goto stop;
                 }
-                r[reg1(w)] = alu_add(&r[R4_SR], r[reg1(w)], value, 0);
+                alu_sub(&r[R4_SR], r[d->a], value, 0);
                 break;
-            case RUN_SUB:
-                if (writes_special(reg1(w)) || !read_operand(vm, w, code, REG2, 4, &value)) {
+            case D_TEST_V:
+                alu_binary(TEST_OP, &r[R4_SR], r[d->a], operand(r, d));
+                break;
+            case D_TEST_M:
+                if (!load(vm, operand(r, d), 4, &value)) {
                     goto stop;
                 }
-                r[reg1(w)] = alu_sub(&r[R4_SR], r[reg1(w)], value, 0);
+                alu_binary(TEST_OP, &r[R4_SR], r[d->a], value);
                 break;
-            case RUN_CMP:
-                if (!read_operand(vm, w, code, REG2, 4, &value)) {
+            case D_BINARY_V:
+                r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], operand(r, d));
+                break;
+            case D_BINARY_M:
+                if (!load(vm, operand(r, d), 4, &value)) {
                     goto stop;
                 }
-                alu_sub(&r[R4_SR], r[reg1(w)], value, 0);
+                r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
                 break;
-            case RUN_TEST:
-                if (!read_operand(vm, w, code, REG2, 4, &value)) {
+            case D_DIVIDE_V:
+                value = operand(r, d);
+                if (!alu_divides(d->op, r[d->a], value)) {
                     goto stop;
                 }
-                alu_binary(TEST_OP, &r[R4_SR], r[reg1(w)], value);
+                r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
                 break;
-            case RUN_BINARY:
-                if (writes_special(reg1(w)) || !read_operand(vm, w, code, REG2, 4, &value)) {
+            case D_DIVIDE_M:
+                if (!load(vm, operand(r, d), 4, &value) || !alu_divides(d->op, r[d->a], value)) {
                     goto stop;
                 }
-                r[reg1(w)] = alu_binary((uint8_t)(w >> 24), &r[R4_SR], r[reg1(w)], value);
+                r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
                 break;
-            case RUN_DIVIDE:
-                if (writes_special(reg1(w)) || !read_operand(vm, w, code, REG2, 4, &value) ||
-                    !alu_divides((uint8_t)(w >> 24), r[reg1(w)], value)) {
+            case D_COUNT_V:
+                r[d->a] = alu_count(d->op, &r[R4_SR], operand(r, d));
+                break;
+            case D_COUNT_M:
+                if (!load(vm, operand(r, d), 4, &value)) {
                     goto stop;
                 }
-                r[reg1(w)] = alu_binary((uint8_t)(w >> 24), &r[R4_SR], r[reg1(w)], value);
+                r[d->a] = alu_count(d->op, &r[R4_SR], value);
                 break;
-            case RUN_UNARY:
-                if (writes_special(reg1(w))) {
+            case D_FLOAT_V:
+                alu_float(d->op, &r[R4_SR], &r[d->a], operand(r, d));
+                break;
+            case D_FLOAT_M:
+                if (!load(vm, operand(r, d), 4, &value)) {
                     goto stop;
                 }
-                r[reg1(w)] = alu_unary((uint8_t)(w >> 24), &r[R4_SR], r[reg1(w)]);
+                alu_float(d->op, &r[R4_SR], &r[d->a], value);
                 break;
-            case RUN_COUNT:
-                if (writes_special(reg1(w)) || !read_operand(vm, w, code, REG2, 4, &value)) {
+            case D_UNARY:
+                r[d->a] = alu_unary(d->op, &r[R4_SR], r[d->a]);
+                break;
+            case D_FLOAT_SIGN:
+                alu_float(d->op, &r[R4_SR], &r[d->a], 0);
+                break;
+            case D_SET:
+                r[d->a] = holds(r, d);
+                break;
+            case D_JUMP:
+                if (holds(r, d)) {
+                    next = code + d->imm;
+                }
+                break;
+            case D_JUMP_OUT:
+                if (holds(r, d)) {
+                    value = d->imm;
+                    goto leave;
+                }
+                break;
+            case D_JUMP_V:
+                value = operand(r, d);
+                if (holds(r, d)) {
+                    goto go;
+                }
+                break;
+            case D_JUMP_M:
+                if (!load(vm, operand(r, d), 4, &value)) {
                     goto stop;
                 }
-                r[reg1(w)] = alu_count((uint8_t)(w >> 24), &r[R4_SR], value);
+                if (holds(r, d)) {
+                    goto go;
+                }
                 break;
-            case RUN_FLOAT:
-                if (writes_special(reg1(w)) || !read_operand(vm, w, code, REG2, 4, &value)) {
+            case D_CALL:
+                if (!call(vm, code, d)) {
                     goto stop;
                 }
-                alu_float((uint8_t)(w >> 24), &r[R4_SR], &r[reg1(w)], value);
+                next = code + d->imm;
                 break;
-            case RUN_FLOAT_SIGN:
-                if (writes_special(reg1(w))) {
+            case D_CALL_OUT:
+                if (!call(vm, code, d)) {
                     goto stop;
                 }
-                alu_float((uint8_t)(w >> 24), &r[R4_SR], &r[reg1(w)], 0);
-                break;
-            case RUN_SET:
-                value = immediate(w, code);
-                if (writes_special(reg1(w)) || value > 0xFF || !isa_is_conditional_jump((uint8_t)value)) {
+                value = d->imm;
+                goto leave;
+            case D_CALL_V:
+                value = operand(r, d);
+                if (!call(vm, code, d)) {
                     goto stop;
                 }
-                r[reg1(w)] = (conditions[value] >> (r[R4_SR] & 0x0F)) & 1;
-                break;
-            case RUN_JUMP:
-                if (!jump_target(vm, w, code, next, REG1, &value)) {
+                goto go;
+            case D_CALL_M:
+                if (!load(vm, operand(r, d), 4, &value) || !call(vm, code, d)) {
                     goto stop;
                 }
-                if ((conditions[w >> 24] >> (r[R4_SR] & 0x0F)) & 1) {
-                    next = value;
-                }
-                break;
-            case RUN_CALL:
-                if (!jump_target(vm, w, code, next, REG1, &value) || !(slot = push_slot(vm, r[R2_SP]))) {
-                    goto stop;
-                }
-                write_le32(slot, next);
-                r[R2_SP] -= 4;
-                cpu_push_frame(vm, pc, next, -1);
-                next = value;
-                break;
-            case RUN_RET:
+                goto go;
+            case D_RET:
                 if (!(slot = pop_slot(vm, r[R2_SP]))) {
                     goto stop;
                 }
-                next = read_le32(slot);
-                r[R2_SP] += 4 + immediate(w, code);
+                value = read_le32(slot);
+                r[R2_SP] += 4 + d->imm;
                 cpu_pop_frames(vm, 0);
+                goto go;
+            case D_LOOP:
+                if (--r[d->a] != 0) {
+                    next = code + d->imm;
+                }
                 break;
-            case RUN_LOOP:
-                if (writes_special(reg1(w)) || !jump_target(vm, w, code, next, REG2, &value)) {
+            case D_LOOP_OUT:
+                if (--r[d->a] != 0) {
+                    value = d->imm;
+                    goto leave;
+                }
+                break;
+            case D_PUSH_V:
+                if (!push(vm, operand(r, d))) {
                     goto stop;
                 }
-                if (--r[reg1(w)] != 0) {
-                    next = value;
-                }
                 break;
-            case RUN_PUSH:
-                if (!read_operand(vm, w, code, REG1, 4, &value) || !(slot = push_slot(vm, r[R2_SP]))) {
+            case D_PUSH_M:
+                if (!load(vm, operand(r, d), 4, &value) || !push(vm, value)) {
                     goto stop;
                 }
-                write_le32(slot, value);
-                r[R2_SP] -= 4;
                 break;
-            case RUN_POP:
-                if (writes_special(reg1(w)) || !(slot = pop_slot(vm, r[R2_SP]))) {
+            case D_POP:
+                if (!(slot = pop_slot(vm, r[R2_SP]))) {
                     goto stop;
                 }
                 r[R2_SP] += 4;
-                r[reg1(w)] = read_le32(slot);
+                r[d->a] = read_le32(slot);
                 break;
-            case RUN_ENTER: {
-                uint32_t sp = r[R2_SP], size = immediate(w, code);
-                if (!(slot = push_slot(vm, sp)) || size > sp - 4 - vm->control[CR_SLO]) {
+            case D_ENTER: {
+                uint32_t sp = r[R2_SP];
+                if (!(slot = push_slot(vm, sp)) || d->imm > sp - 4 - vm->control[CR_SLO]) {
                     goto stop;
                 }
                 write_le32(slot, r[R1_BP]);
+                written(vm, sp - 4, 4);
                 r[R1_BP] = sp - 4;
-                r[R2_SP] = sp - 4 - size;
+                r[R2_SP] = sp - 4 - d->imm;
                 break;
             }
-            case RUN_LEAVE:
+            case D_LEAVE:
                 if (!(slot = pop_slot(vm, r[R1_BP]))) {
                     goto stop;
                 }
                 r[R2_SP] = r[R1_BP] + 4;
                 r[R1_BP] = read_le32(slot);
                 break;
-            case RUN_MEMCPY:
-            case RUN_MEMSET: {
-                uint32_t size = block_size(r, w, code), from = r[(w >> REG2) & 0x0F];
+            case D_MEMCPY:
+            case D_MEMSET: {
+                uint32_t size = (r[d->op] & d->mask) + d->imm, from = r[d->b], to = r[d->a];
                 const uint8_t *source = NULL;
                 if (size == 0) {
                     break;
                 }
-                if (!(slot = reach(vm, r[reg1(w)], size, PROT_WRITE)) ||
-                    (kinds[w >> 20] == RUN_MEMCPY && !(source = reach(vm, from, size, PROT_READ)))) {
+                if (!(slot = reach(vm, to, size, PROT_WRITE)) ||
+                    (d->kind == D_MEMCPY && !(source = reach(vm, from, size, PROT_READ)))) {
                     goto stop;
                 }
                 if (source) {
@@ -437,24 +758,39 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
                 } else {
                     memset(slot, (uint8_t)from, size);
                 }
+                written(vm, to, size);
                 break;
             }
-            case RUN_SYSCALL:
+            case D_SYSCALL:
                 // The heap and copy syscalls of supervisor mode, which report errors in R5 instead of faulting
-                value = immediate(w, code);
-                if (!(r[R4_SR] & SYS_FLAG) || value < SYS_ALLOC || value > SYS_MEMCPY) {
+                if (!(r[R4_SR] & SYS_FLAG) || d->imm < SYS_ALLOC || d->imm > SYS_MEMCPY) {
                     goto stop;
                 }
-                vm->error_pc = pc;
-                syscall_dispatch(vm, value);
+                vm->error_pc = (uint32_t)(d - code) * 4;
+                r[R3_PC] = vm->error_pc + d->len * 4u;
+                syscall_dispatch(vm, d->imm);
                 break;
             default:
                 goto stop;
         }
-        pc = next;
+        e = next;
+        continue;
+    go:
+        // A jump to a computed address
+        index = word_index(value);
+        if (index >= words) {
+            goto leave;
+        }
+        e = code + index;
     }
 stop:
-    r[R3_PC] = pc;
+    r[R3_PC] = (uint32_t)(e - code) * 4;
+    vm->instruction_count += limit - left;
+    return limit - left;
+leave:
+    // The instruction ran and goes where cpu_run does not
+    left--;
+    r[R3_PC] = value;
     vm->instruction_count += limit - left;
     return limit - left;
 }

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "cpu.h"
 #include "devices.h"
 #include "vm.h"
 
@@ -50,6 +51,9 @@ static uint32_t disk_transfer(VM *vm, DiskState *disk, uint32_t command) {
         } else if (moved == 0 || errno != EINTR) {
             return DISK_HOST_ERROR;
         }
+    }
+    if (command == DISK_READ) {
+        cpu_forget(vm, disk->buffer, (uint32_t)size);
     }
     return DISK_OK;
 }

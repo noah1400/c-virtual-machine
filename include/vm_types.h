@@ -99,6 +99,10 @@ typedef struct {
     int arg_count;           // Program arguments, starting with the program path
     char **args;
 
+    struct Decoded *decoded;       // the instructions below the heap as cpu_run decoded them, by word
+    uint32_t decoded_words;        // how many words cpu_run runs instructions at
+    uint32_t decoded_end;          // the end of the words that decoded instructions take
+
     struct DebugInfo *debug_info;  // Debug information (NULL if not loaded)
     CallFrame call_frames[VM_CALL_FRAMES];  // shadow call stack, innermost last
     uint32_t call_depth;
