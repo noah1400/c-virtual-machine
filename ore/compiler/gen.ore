@@ -1239,8 +1239,16 @@ fn unshared(e: *ast.Expr) bool {
 }
 
 // Leaves in R0 the address of an element, minus the displacement it returns, after checking the index
-// Whether a loop around keeps the index within what it indexes
+// Whether the type of the index or a loop around keeps it within what it indexes
 fn in_bounds(g: *Gen, e: *ast.Expr) bool {
+    var index = e.right.type;
+    if (e.right.kind == ast.ExprKind.CONVERT) {
+        index = e.right.left.type;
+    }
+    if (e.left.type.kind == ast.TypeKind.ARRAY && index.kind == ast.TypeKind.INT && !index.is_signed &&
+        index.size < 4 && e.left.type.length >= 1 << 8 * index.size) {
+        return true;
+    }
     if (local_of(e.right) == null) {
         return false;
     }
