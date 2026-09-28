@@ -1,0 +1,8 @@
+// expect-error: syscall takes integers, floats and pointers, not Point
+struct Point {
+    x: int;
+}
+
+fn main() {
+    syscall(1, Point {});
+}

@@ -332,7 +332,7 @@ Integer overflow is not an error. It wraps around.
 | `sizeof(T)` | The size of `T` in bytes, a constant |
 | `panic(message)` | Stop with a runtime error |
 | `assert(condition)` | Stop with a runtime error if the condition is false |
-| `syscall(n, a, b, c)` | Make syscall *n*, a constant, with R0, R5 and R6 set to `a`, `b` and `c`, all optional. Returns a `SyscallResult` with fields `value` (R0) and `status` (R5) |
+| `syscall(n, a, b, c)` | Make syscall *n*, a constant, with R0, R5 and R6 set to `a`, `b` and `c`, all optional: integers, floats, pointers, booleans or enums. Returns a `SyscallResult` with fields `value` (R0) and `status` (R5) |
 
 A `u8` prints as a number; `print("a")` prints a character.
 

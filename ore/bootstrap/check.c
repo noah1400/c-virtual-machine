@@ -831,8 +831,9 @@ static Type *check_builtin(Checker *c, Expr *e, Builtin builtin) {
             }
             for (int i = 1; i < e->arg_count; i++) {
                 Type *t = settle(c, &e->args[i]);
-                if (t->kind != TY_INT && t->kind != TY_POINTER && t->kind != TY_BOOL && t->kind != TY_ENUM) {
-                    error(c, e->args[i]->line, "syscall takes integers and pointers, not %s", type_name(t));
+                if (t->kind != TY_INT && t->kind != TY_FLOAT && t->kind != TY_POINTER && t->kind != TY_BOOL &&
+                    t->kind != TY_ENUM) {
+                    error(c, e->args[i]->line, "syscall takes integers, floats and pointers, not %s", type_name(t));
                 }
             }
             return e->type = &t_syscall;

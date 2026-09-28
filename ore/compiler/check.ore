@@ -904,9 +904,11 @@ fn check_builtin(c: *Checker, e: *ast.Expr, builtin: ast.Builtin) *ast.Type {
             }
             for (var i = 1; i < e.args.len; i += 1) {
                 var t = settle(c, &e.args[i]);
-                if (t.kind != ast.TypeKind.INT && t.kind != ast.TypeKind.POINTER && t.kind != ast.TypeKind.BOOL &&
-                    t.kind != ast.TypeKind.ENUM) {
-                    error(c, e.args[i].line, ast.cat([][]u8 { "syscall takes integers and pointers, not ", type_name(t) }));
+                if (t.kind != ast.TypeKind.INT && t.kind != ast.TypeKind.FLOAT && t.kind != ast.TypeKind.POINTER &&
+                    t.kind != ast.TypeKind.BOOL && t.kind != ast.TypeKind.ENUM) {
+                    error(c, e.args[i].line, ast.cat([][]u8 {
+                        "syscall takes integers, floats and pointers, not ", type_name(t),
+                    }));
                 }
             }
             e.type = &t_syscall;
