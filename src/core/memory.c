@@ -527,6 +527,7 @@ static int insert_block(VM *vm, uint32_t start, uint32_t size) {
         set_last_room(vm, before, block);
     }
     vm->heap_blocks = merge(merge(before, block), after);
+    vm->heap_last = block;
     set_rights(vm, start, size, HEAP_UNIT_USED | PROT_ALL);
     return 1;
 }
