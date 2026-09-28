@@ -1,0 +1,8 @@
+// -g0 leaves out the .loc lines, so a fault is reported at a line of the assembly instead
+// vmc-args: -g0
+// expect-exit: 1
+// expect-stderr: no_loc.asm:
+fn main() {
+    var p: *int = null;
+    print(*p, "\n");
+}

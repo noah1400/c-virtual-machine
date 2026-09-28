@@ -51,8 +51,8 @@ expectation() {
     sed -n -e "s/^; $2: //p" -e "s|^// $2: ||p" "$1" | head -n 1
 }
 
-# Compiles an Ore test with vmc into $tmp/NAME.asm, and with vmc1.bin and vmc0 as well, which have to
-# agree with it. Leaves the status of vmc in $status and its errors in $tmp/NAME.log.
+# Compiles an Ore test with vmc into $tmp/NAME.asm, with vmc0 into $tmp/vmc0/NAME.asm and with vmc1.bin
+# as well, which have to agree with it. Leaves the status of vmc in $status and its errors in $tmp/NAME.log.
 compile_ore() {
     name=$1
     shift
@@ -60,7 +60,7 @@ compile_ore() {
     status=$?
     (cd "$root" && "$vm" -m 262144 -S 8192 ./vmc1.bin -S "$@" -o "$tmp/$name.stage1.asm" 2> "$tmp/$name.stage1.log")
     stage1=$?
-    (cd "$root" && ./vmc0 -S "$@" -o "$tmp/$name.vmc0.asm" 2> "$tmp/$name.vmc0.log")
+    (cd "$root" && ./vmc0 -S "$@" -o "$tmp/vmc0/$name.asm" 2> "$tmp/$name.vmc0.log")
     vmc0=$?
     sed 's/^vmc0: /vmc: /' "$tmp/$name.vmc0.log" > "$tmp/$name.vmc0.err"
     if [ "$stage1" -ne "$status" ] || ! cmp -s "$tmp/$name.log" "$tmp/$name.stage1.log"; then
@@ -246,7 +246,7 @@ for src in "$root"/ore/tests/*.ore; do
         continue
     fi
     if ! (cd "$root" && "$asm" -I ./ore/lib -I . "$tmp/$name.asm" -o "$tmp/$name.bin" 2> "$tmp/$name.log" &&
-        "$asm" -I ./ore/lib -I . "$tmp/$name.vmc0.asm" -o "$tmp/vmc0/$name.bin" 2> "$tmp/$name.log"); then
+        "$asm" -I ./ore/lib -I . "$tmp/vmc0/$name.asm" -o "$tmp/vmc0/$name.bin" 2> "$tmp/$name.log"); then
         fail "$name" "does not assemble: $(head -n 1 "$tmp/$name.log")"
         continue
     fi
