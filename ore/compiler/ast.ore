@@ -195,6 +195,7 @@ pub struct Program {
     library: []u8;
     assembly: Texts;        // files of assembly for extern functions
     main: *Symbol;
+    no_loc: bool;
 }
 
 pub fn copy(to: *u8, from: *u8, size: int) {

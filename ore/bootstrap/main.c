@@ -190,6 +190,7 @@ static void usage(FILE *out) {
                  "assembly files that define its extern functions.\n"
                  "  -o FILE   write the binary to FILE (default: the program with .bin)\n"
                  "  -S        write the assembly instead, to FILE or the program with .asm\n"
+                 "  -g0       leave out the .loc lines that tie the code to Ore source lines\n"
                  "  -b ADDR   put the program at ADDR instead of 0, as vmasm -b does\n"
                  "  -I DIR    look for imported modules in DIR as well\n"
                  "  -L DIR    take the runtime and the standard library from DIR\n"
@@ -260,6 +261,8 @@ int main(int argc, char **argv) {
             return 0;
         } else if (strcmp(arg, "-S") == 0) {
             assembly_only = 1;
+        } else if (strcmp(arg, "-g0") == 0) {
+            program.no_loc = 1;
         } else if ((strcmp(arg, "-o") == 0 || strcmp(arg, "-I") == 0 || strcmp(arg, "-L") == 0 ||
                     strcmp(arg, "-b") == 0) && i + 1 < argc) {
             if (arg[1] == 'o') {

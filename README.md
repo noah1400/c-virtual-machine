@@ -885,6 +885,7 @@ $ ./vm primes.bin
 Usage: vmc [options] program.ore [file.asm...]
   -o FILE   write the binary to FILE (default: the program with .bin)
   -S        write the assembly instead, to FILE or the program with .asm
+  -g0       leave out the .loc lines that tie the code to Ore source lines
   -b ADDR   put the program at ADDR instead of 0, as vmasm -b does
   -I DIR    look for imported modules in DIR as well
   -L DIR    take the runtime and the standard library from DIR
@@ -897,7 +898,7 @@ Two compilers take these options:
 
 - **How it compiles:** the compiler writes the whole program as one assembly file. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler.
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
-- **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines.
+- **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines. `-g0` leaves them out, which makes the assembly easier to read; the binary then names lines of the assembly instead.
 - **Runtime errors**, such as an index out of bounds, a `null` pointer or a failed `assert`, stop the program with a message, reported at the Ore line that failed. For the `digits.ore` example in the language description:
 
 ```console

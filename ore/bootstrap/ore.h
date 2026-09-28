@@ -311,6 +311,7 @@ typedef struct {
     int assembly_count;
     int assembly_capacity;
     Symbol *main;
+    int no_loc;
 } Program;
 
 extern Type *type_void, *type_bool, *type_int, *type_u8, *type_u32, *type_syscall;

@@ -157,7 +157,7 @@ fn quoted(out: *str.Builder, text: []u8) {
 }
 
 fn loc(g: *Gen, line: int) {
-    if (g.loc_module == g.m && g.loc_line == line) {
+    if (g.program.no_loc || g.loc_module == g.m && g.loc_line == line) {
         return;
     }
     if (g.loc_module != g.m) {

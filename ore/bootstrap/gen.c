@@ -110,7 +110,7 @@ static void quoted(Text *t, const char *text, size_t length) {
 }
 
 static void loc(Gen *g, int line) {
-    if (g->loc_module == g->m && g->loc_line == line) {
+    if (g->program->no_loc || (g->loc_module == g->m && g->loc_line == line)) {
         return;
     }
     g->loc_module = g->m;
