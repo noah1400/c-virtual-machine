@@ -239,13 +239,14 @@ fn register_of(e: *ast.Expr) []u8 {
     return none;
 }
 
-// Loads the value of type t from the address place into R0 (and R5); place is a register, BP-8 or a label
+// Loads the value of type t from the address place into R0 (and R5); place is a register, a place in the
+// frame such as BP-8 or SP+4, or a label
 fn load_from(g: *Gen, t: *ast.Type, place: []u8) {
     if (t.kind == ast.TypeKind.SLICE) {
         emits(g, "    LOAD R5, [%s+4]\n    LOAD R0, [%s]\n", [][]u8 { place, place });
     } else if (is_aggregate(t)) {
         if (!ast.same(place, "R0")) {
-            if (place[0] == 'R' || place[0] == 'B') {
+            if (place[0] == 'R' || place[0] == 'B' || place[0] == 'S') {
                 emits(g, "    LEA R0, [%s]\n", [][]u8 { place });
             } else {
                 emits(g, "    LOAD R0, %s\n", [][]u8 { place });
@@ -316,6 +317,47 @@ fn store_from(g: *Gen, t: *ast.Type, register: []u8, place: []u8) {
     emits(g, "    %s %s, [%s]\n", [][]u8 { store, register, place });
 }
 
+// A function without a frame reaches its parameters through SP, past the registers it saved and what its
+// code has pushed since. Code that pushes and pops as part of a value tells how much.
+struct Stack {
+    frameless: bool;
+    saved: int;
+    pushed: int;
+}
+
+var stack: Stack;
+
+fn push(g: *Gen, operand: []u8) {
+    emits(g, "    PUSH %s\n", [][]u8 { operand });
+    stack.pushed += 4;
+}
+
+fn pop(g: *Gen, register: []u8) {
+    emits(g, "    POP %s\n", [][]u8 { register });
+    stack.pushed -= 4;
+}
+
+// Removes arguments or temporaries from the stack
+fn drop(g: *Gen, bytes: int) {
+    emitd(g, "    ADD SP, #%d\n", []int { bytes });
+    stack.pushed -= bytes;
+}
+
+// The register that the frame offsets of parameters count from, and their offset from it
+fn frame_base(offset: int) []u8 {
+    if (stack.frameless && offset > 0) {
+        return "SP";
+    }
+    return "BP";
+}
+
+fn frame_offset(offset: int) int {
+    if (stack.frameless && offset > 0) {
+        return offset - 4 + 4 * stack.saved + stack.pushed;
+    }
+    return offset;
+}
+
 // Operands are made once for the frame offsets and constants that are common
 const CACHED = 1024;
 var local_places: [2 * CACHED][]u8;
@@ -323,6 +365,9 @@ var local_operands: [2 * CACHED][]u8;
 var constant_operands: [2 * CACHED][]u8;
 
 fn local_place(offset: int) []u8 {
+    if (stack.frameless && offset > 0) {
+        return ast.cat([][]u8 { "SP+", ast.number(frame_offset(offset)) });
+    }
     var cached = offset >= -CACHED && offset < CACHED;
     if (cached && local_places[offset + CACHED].ptr != null) {
         return local_places[offset + CACHED];
@@ -341,6 +386,9 @@ fn local_place(offset: int) []u8 {
 
 // A local in memory as an instruction operand
 fn local_operand(offset: int) []u8 {
+    if (stack.frameless && offset > 0) {
+        return ast.cat([][]u8 { "[", local_place(offset), "]" });
+    }
     var cached = offset >= -CACHED && offset < CACHED;
     if (cached && local_operands[offset + CACHED].ptr != null) {
         return local_operands[offset + CACHED];
@@ -366,6 +414,9 @@ fn constant_operand(value: int) []u8 {
 
 // A place that is a register or a label, with an offset added
 fn relative(base: []u8, offset: int) []u8 {
+    if (ast.same(base, "BP")) {
+        return local_place(offset);
+    }
     if (offset == 0) {
         return base;
     }
@@ -766,9 +817,9 @@ fn swap_operands(g: *Gen, e: *ast.Expr) bool {
         return false;
     }
     gen_expr(g, e.left);
-    emit(g, "    PUSH R0\n");
+    push(g, "R0");
     gen_expr(g, e.right);
-    emit(g, "    POP R6\n");
+    pop(g, "R6");
     return true;
 }
 
@@ -786,9 +837,10 @@ fn operands(g: *Gen, e: *ast.Expr) []u8 {
         return "R6";
     }
     gen_expr(g, e.left);
-    emit(g, "    PUSH R0\n");
+    push(g, "R0");
     gen_expr(g, e.right);
-    emit(g, "    MOVE R6, R0\n    POP R0\n");
+    emit(g, "    MOVE R6, R0\n");
+    pop(g, "R0");
     return "R6";
 }
 
@@ -883,17 +935,21 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
             return;
         }
         gen_expr(g, e.left);
-        emit(g, "    PUSH R0\n");
+        push(g, "R0");
         gen_expr(g, e.right);
         if (e.right.type.kind == ast.TypeKind.POINTER) {
-            emit(g, "    MOVE R6, R0\n    POP R0\n    SUB R0, R6\n");
+            emit(g, "    MOVE R6, R0\n");
+            pop(g, "R0");
+            emit(g, "    SUB R0, R6\n");
             if (size > 1) {
                 emitd(g, "    IDIV R0, #%d\n", []int { size });
             }
             return;
         }
         scale(g, size, "R0");
-        emits(g, "    MOVE R6, R0\n    POP R0\n    %s R0, R6\n", [][]u8 { instruction });
+        emit(g, "    MOVE R6, R0\n");
+        pop(g, "R0");
+        emits(g, "    %s R0, R6\n", [][]u8 { instruction });
         return;
     }
 
@@ -1023,7 +1079,8 @@ fn push_argument(g: *Gen, arg: *ast.Expr, emitting: bool) bool {
     if (arg.kind == ast.ExprKind.STRING || arg.kind == ast.ExprKind.NAME && arg.symbol.kind == ast.SymbolKind.CONST &&
         arg.symbol.string != null) {
         if (emitting) {
-            emitf(g, "    PUSH #%d\n    PUSH %s\n", [][]u8 { string_of(g, arg) }, []int { string_size(arg) });
+            push(g, constant_operand(string_size(arg)));
+            push(g, string_of(g, arg));
         }
         return true;
     }
@@ -1032,8 +1089,11 @@ fn push_argument(g: *Gen, arg: *ast.Expr, emitting: bool) bool {
             return false;
         }
         if (emitting) {
-            var at = fixed_place(g, arg);
-            emits(g, "    PUSH [%s+4]\n    PUSH [%s]\n", [][]u8 { at, at });
+            var base: []u8;
+            var offset = 0;
+            fixed_base(g, arg, &base, &offset);
+            push(g, ast.cat([][]u8 { "[", relative(base, offset + 4), "]" }));
+            push(g, ast.cat([][]u8 { "[", relative(base, offset), "]" }));
         }
         return true;
     }
@@ -1041,7 +1101,7 @@ fn push_argument(g: *Gen, arg: *ast.Expr, emitting: bool) bool {
         return false;
     }
     if (emitting) {
-        emits(g, "    PUSH %s\n", [][]u8 { gen_operand(g, arg) });
+        push(g, gen_operand(g, arg));
     }
     return true;
 }
@@ -1121,20 +1181,21 @@ fn gen_call(g: *Gen, e: *ast.Expr) {
         if (computed >= 0) {
             gen_expr(g, e.args[computed]);
             if (e.args[computed].type.kind == ast.TypeKind.SLICE) {
-                emit(g, "    PUSH R5\n");
+                push(g, "R5");
             }
-            emit(g, "    PUSH R0\n");
+            push(g, "R0");
             for (var i = computed - 1; i >= 0; i -= 1) {
                 push_argument(g, e.args[i], true);
             }
         }
         if (hidden) {
             temp = alloc_frame(g, result.size);
-            emitd(g, "    LEA R0, [BP%+d]\n    PUSH R0\n", []int { temp });
+            emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
+            push(g, "R0");
         }
         emits(g, "    CALL %s\n", [][]u8 { symbol_name(e.left.symbol) });
         if (size != 0) {
-            emitd(g, "    ADD SP, #%d\n", []int { size });
+            drop(g, size);
         }
         if (hidden) {
             emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
@@ -1143,10 +1204,11 @@ fn gen_call(g: *Gen, e: *ast.Expr) {
     }
     if (!direct) {
         gen_expr(g, e.left);
-        emit(g, "    PUSH R0\n");
+        push(g, "R0");
     }
     if (size != 0) {
         emitd(g, "    SUB SP, #%d\n", []int { size });
+        stack.pushed += size;
     }
     var offset = 0;
     if (hidden) {
@@ -1167,7 +1229,7 @@ fn gen_call(g: *Gen, e: *ast.Expr) {
         size += 4;
     }
     if (size != 0) {
-        emitd(g, "    ADD SP, #%d\n", []int { size });
+        drop(g, size);
     }
     if (hidden) {
         emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
@@ -1257,13 +1319,13 @@ fn gen_syscall(g: *Gen, e: *ast.Expr) {
     for (var i = 1; i < e.args.len; i += 1) {
         if (computed < 0) {
             gen_expr(g, e.args[i]);
-            emit(g, "    PUSH R0\n");
+            push(g, "R0");
         } else if (i != computed) {
             set_register(g, syscall_registers[i - 1], gen_operand(g, e.args[i]));
         }
     }
     for (var i = e.args.len - 1; i >= 1 && computed < 0; i -= 1) {
-        emits(g, "    POP %s\n", [][]u8 { syscall_registers[i - 1] });
+        pop(g, syscall_registers[i - 1]);
     }
     emitd(g, "    SYSCALL #%d\n", []int { wide.low(e.args[0].value) });
 }
@@ -1340,7 +1402,11 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
                 []int { t.length, ok, t.length, ok });
         }
         scale(g, size, "R0");
-        if (ast.same(base, "BP") || in_register(e.left)) {
+        if (ast.same(base, "BP")) {
+            emits(g, "    ADD R0, %s\n", [][]u8 { frame_base(offset) });
+            return frame_offset(offset);
+        }
+        if (in_register(e.left)) {
             emits(g, "    ADD R0, %s\n", [][]u8 { base });
             return offset;
         }
@@ -1373,18 +1439,20 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
     if (t.kind == ast.TypeKind.POINTER) {
         check_pointer(g, e.left, "R0");
     }
-    emit(g, "    PUSH R0\n");
+    push(g, "R0");
     if (t.kind == ast.TypeKind.SLICE) {
-        emit(g, "    PUSH R5\n");
+        push(g, "R5");
     }
     gen_expr(g, e.right);
-    if (t.kind == ast.TypeKind.SLICE && safe) {
-        emit(g, "    POP R7\n    POP R6\n");
-    } else if (t.kind == ast.TypeKind.SLICE) {
-        emitd(g, "    POP R7\n    POP R6\n    CMP R0, R7\n    JB .L%d\n    PUSH R7\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
+    if (t.kind == ast.TypeKind.SLICE) {
+        pop(g, "R7");
+        pop(g, "R6");
+    }
+    if (t.kind == ast.TypeKind.SLICE && !safe) {
+        emitd(g, "    CMP R0, R7\n    JB .L%d\n    PUSH R7\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
             []int { ok, ok });
-    } else {
-        emit(g, "    POP R6\n");
+    } else if (t.kind != ast.TypeKind.SLICE) {
+        pop(g, "R6");
         if (t.kind == ast.TypeKind.ARRAY && !e.right.is_const && !safe) {
             emitd(g, "    CMP R0, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
                 []int { t.length, ok, t.length, ok });
@@ -1434,8 +1502,17 @@ fn gen_slice(g: *Gen, e: *ast.Expr) {
             emitf(g, "    CMP R5, %s\n    JAE .L%d\n", [][]u8 { low }, []int { ok });
         }
         if (e.third != null || !from_start) {
-            emitf(g, ".L%d:\n    PUSH %s\n    PUSH R5\n    PUSH %s\n    CALL rt.slice_error\n.L%d:\n",
-                [][]u8 { length, low }, []int { failed, ok });
+            // The pushes before it move SP, which a bound in the frame may count from
+            var pushed_low = low;
+            if (low[0] == '[') {
+                pushed_low = "R7";
+            }
+            emitd(g, ".L%d:\n", []int { failed });
+            if (low[0] == '[') {
+                emits(g, "    LOAD R7, %s\n", [][]u8 { low });
+            }
+            emitf(g, "    PUSH %s\n    PUSH R5\n    PUSH %s\n    CALL rt.slice_error\n.L%d:\n",
+                [][]u8 { length, pushed_low }, []int { ok });
         }
         if (t.kind == ast.TypeKind.ARRAY) {
             load_from(g, t, at);
@@ -1461,28 +1538,32 @@ fn gen_slice(g: *Gen, e: *ast.Expr) {
 
     if (t.kind == ast.TypeKind.ARRAY) {
         gen_addr(g, e.left);
-        emitd(g, "    PUSH R0\n    PUSH #%d\n", []int { t.length });
+        push(g, "R0");
+        push(g, constant_operand(t.length));
     } else {
         gen_expr(g, e.left);
         if (t.kind == ast.TypeKind.POINTER) {
             check_pointer(g, e.left, "R0");
-            emit(g, "    PUSH R0\n    PUSH #-1\n");
+            push(g, "R0");
+            push(g, "#-1");
         } else {
-            emit(g, "    PUSH R0\n    PUSH R5\n");
+            push(g, "R0");
+            push(g, "R5");
         }
     }
     if (e.right != null) {
         gen_expr(g, e.right);
-        emit(g, "    PUSH R0\n");
+        push(g, "R0");
     } else {
-        emit(g, "    PUSH #0\n");
+        push(g, "#0");
     }
     if (e.third != null) {
         gen_expr(g, e.third);
     } else {
         emit(g, "    LOAD R0, [SP+4]\n");
     }
-    emit(g, "    POP R7\n    POP R6\n");
+    pop(g, "R7");
+    pop(g, "R6");
     if (t.kind != ast.TypeKind.POINTER) {
         emitd(g, "    CMP R0, R6\n    JA .L%d\n", []int { failed });
     }
@@ -1490,7 +1571,8 @@ fn gen_slice(g: *Gen, e: *ast.Expr) {
         []int { ok, failed, ok });
     emit(g, "    MOVE R5, R0\n    SUB R5, R7\n");
     scale(g, t.base.size, "R7");
-    emit(g, "    POP R0\n    ADD R0, R7\n");
+    pop(g, "R0");
+    emit(g, "    ADD R0, R7\n");
 }
 
 // Builds a struct, array or slice literal in a temporary of the frame
@@ -1550,9 +1632,12 @@ fn gen_new(g: *Gen, e: *ast.Expr) {
         return;
     }
     gen_expr(g, e.left);
-    emit(g, "    PUSH R0\n");
+    push(g, "R0");
     scale(g, size, "R0");
-    emit(g, "    PUSH R0\n    CALL rt.alloc\n    ADD SP, #4\n    POP R5\n");
+    push(g, "R0");
+    emit(g, "    CALL rt.alloc\n");
+    drop(g, 4);
+    pop(g, "R5");
 }
 
 // A place at a fixed offset from a pointer in a register
@@ -1658,7 +1743,7 @@ fn gen_address(g: *Gen, e: *ast.Expr, base: *[]u8) int {
             ast.fail(g.m, e.line, "a variable in a register has no address (internal error)");
         }
         if (e.symbol.kind == ast.SymbolKind.LOCAL) {
-            emitd(g, "    LEA R0, [BP%+d]\n", []int { e.symbol.offset });
+            emits(g, "    LEA R0, [%s]\n", [][]u8 { local_place(e.symbol.offset) });
         } else {
             emits(g, "    LOAD R0, %s\n", [][]u8 { symbol_name(e.symbol) });
         }
@@ -1911,7 +1996,7 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
             if (simple) {
                 emit(g, "    MOVE R6, R0\n");
             } else {
-                emit(g, "    PUSH R0\n");
+                push(g, "R0");
                 pushed = true;
             }
         }
@@ -1940,7 +2025,7 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
     gen_expr(g, s.value);
     if (s.op == ast.TokenKind.ASSIGN) {
         if (pushed) {
-            emit(g, "    POP R6\n");
+            pop(g, "R6");
         }
         store_to(g, t, target);
         return;
@@ -1950,7 +2035,7 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
     }
     emit(g, "    MOVE R7, R0\n");
     if (pushed) {
-        emit(g, "    POP R6\n");
+        pop(g, "R6");
     }
     load_from(g, t, target);
     arithmetic(g, compound(s.op), t, "R7");
@@ -2185,9 +2270,10 @@ fn gen_stmt(g: *Gen, s: *ast.Stmt) {
                 var t = s.value.type;
                 gen_expr(g, s.value);
                 if (is_aggregate(t) && t.size > 0) {
-                    emitd(g, "    LOAD R6, [BP+8]\n    MEMCPY R6, R0, #%d\n    MOVE R0, R6\n", []int { t.size });
+                    emitf(g, "    LOAD R6, %s\n    MEMCPY R6, R0, #%d\n    MOVE R0, R6\n", [][]u8 { local_operand(8) },
+                        []int { t.size });
                 } else if (is_aggregate(t)) {
-                    emit(g, "    LOAD R0, [BP+8]\n");
+                    emits(g, "    LOAD R0, %s\n", [][]u8 { local_operand(8) });
                 }
             }
             if (g.return_count < g.returns.len) {
@@ -2222,11 +2308,19 @@ fn is_through_local(e: *ast.Expr) bool {
         e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.STAR) && local_of(e.left) != null;
 }
 
+// Whether the function counted last makes a temporary in its frame: a literal, the result of a call that
+// returns a struct or an array, or the result of a syscall
+var makes_temporary: bool;
+
 // Estimates what registers would save in an expression, and notes the locals whose address it takes:
 // comparing a local in a register, or reaching a field through one, takes one instruction less
 fn count_expr(e: *ast.Expr, weight: int) {
     if (e == null) {
         return;
+    }
+    if (e.kind == ast.ExprKind.STRUCT || e.kind == ast.ExprKind.ARRAY ||
+        e.kind == ast.ExprKind.CALL && (e.builtin == ast.Builtin.SYSCALL || is_aggregate(e.type))) {
+        makes_temporary = true;
     }
     if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.AMP && local_of(e.left) != null) {
         e.left.symbol.address_taken = true;
@@ -2292,7 +2386,14 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
             count_expr(value, weight);
         }
         case ast.StmtKind.EXPR, ast.StmtKind.RETURN {
-            count_expr(s.value, weight);
+            // A syscall on its own leaves its result in registers
+            if (s.kind == ast.StmtKind.EXPR && s.value.kind == ast.ExprKind.CALL && s.value.builtin == ast.Builtin.SYSCALL) {
+                for (var i = 0; i < s.value.args.len; i += 1) {
+                    count_expr(s.value.args[i], weight);
+                }
+            } else {
+                count_expr(s.value, weight);
+            }
         }
         case ast.StmtKind.IF {
             count_expr(s.cond, weight);
@@ -2321,9 +2422,11 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
 
 // Scalar locals and parameters whose address is not taken can live in R8 to R14, which calls keep. A local
 // gets one when it saves more than saving and restoring the register costs, and a parameter more than
-// loading it as well. Returns how many registers from R8 on the function uses.
-fn assign_registers(d: *ast.Decl) int {
+// loading it as well. Returns how many registers from R8 on the function uses, and tells whether a local is
+// left in memory.
+fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
     var locals = ast.List {};
+    makes_temporary = false;
     for (var i = 0; i < d.params.len; i += 1) {
         d.params[i].symbol.gain = -1;
         ast.add(&locals, d.params[i].symbol as *u8);
@@ -2344,28 +2447,25 @@ fn assign_registers(d: *ast.Decl) int {
         }
         best.reg = 8 + count;
     }
+    *in_memory = makes_temporary;
+    for (var i = d.params.len; i < locals.count; i += 1) {
+        if ((locals.items[i] as *ast.Symbol).reg == 0) {
+            *in_memory = true;
+        }
+    }
+    free(locals.items);
     return count;
 }
 
-fn gen_function(g: *Gen, d: *ast.Decl) {
-    var t = d.symbol.type;
-    var offset = 8;
-    if (is_aggregate(t.base)) {
-        offset = 12;
-    }
-
+// Generates the body of a function into g.body after the location of its first line, which it returns the
+// end of
+fn gen_body(g: *Gen, d: *ast.Decl, frame: *ast.Symbol) int {
     g.frame = 0;
     g.checked.count = 0;
     g.return_count = 0;
+    stack.pushed = 0;
     str.clear(&g.body);
-    for (var i = 0; i < d.params.len; i += 1) {
-        d.params[i].symbol.offset = offset;
-        offset += words(t.params[i].size);
-    }
-    // The parameter of an interrupt function points at the registers saved above the frame
-    var frame: *ast.Symbol = null;
-    if (d.is_interrupt && d.params.len == 1) {
-        frame = d.params[0].symbol;
+    if (frame != null) {
         frame.offset = alloc_frame(g, 4);
         ast.add(&g.checked, frame as *u8);
     }
@@ -2375,7 +2475,6 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
             ast.add(&g.checked, param as *u8);
         }
     }
-    var saved = assign_registers(d);
     g.loc_module = null;
     loc(g, d.line);
     var start = g.body.len;
@@ -2388,6 +2487,33 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
         }
     }
     loc(g, d.body.end_line);
+    return start;
+}
+
+fn gen_function(g: *Gen, d: *ast.Decl) {
+    var t = d.symbol.type;
+    var offset = 8;
+    if (is_aggregate(t.base)) {
+        offset = 12;
+    }
+    for (var i = 0; i < d.params.len; i += 1) {
+        d.params[i].symbol.offset = offset;
+        offset += words(t.params[i].size);
+    }
+    // The parameter of an interrupt function points at the registers saved above the frame
+    var frame: *ast.Symbol = null;
+    if (d.is_interrupt && d.params.len == 1) {
+        frame = d.params[0].symbol;
+    }
+    // Without locals in memory, a function needs no frame unless a temporary asks for one after all
+    var in_memory = false;
+    var saved = assign_registers(d, &in_memory);
+    stack = Stack { frameless: !d.is_interrupt && !in_memory, saved: saved };
+    var start = gen_body(g, d, frame);
+    if (stack.frameless && g.frame > 0) {
+        stack.frameless = false;
+        start = gen_body(g, d, frame);
+    }
 
     // ENTER needs the size of the frame, known only after the body
     var body = str.text(&g.body);
@@ -2397,7 +2523,10 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     }
     str.append(&g.text, "\n");
     str.append(&g.text, body[:start]);
-    format(&g.text, "%s:\n    ENTER #%d\n", [][]u8 { symbol_name(d.symbol) }, []int { g.frame });
+    format(&g.text, "%s:\n", [][]u8 { symbol_name(d.symbol) }, []int {});
+    if (!stack.frameless) {
+        format(&g.text, "    ENTER #%d\n", [][]u8 {}, []int { g.frame });
+    }
     for (var i = 0; i < saved; i += 1) {
         format(&g.text, "    PUSH %s\n", [][]u8 { register_names[8 + i] }, []int {});
     }
@@ -2415,7 +2544,7 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
             } else if (s.type.size == 2) {
                 load = "LOADW";
             }
-            format(&g.text, "    %s %s, [BP+%d]\n", [][]u8 { load, register_names[s.reg] }, []int { s.offset });
+            format(&g.text, "    %s %s, [%s]\n", [][]u8 { load, register_names[s.reg], local_place(s.offset) }, []int {});
             if (s.type.kind == ast.TypeKind.INT && s.type.is_signed && s.type.size < 4) {
                 var bits = 32 - 8 * s.type.size;
                 format(&g.text, "    SHL %s, #%d\n    SAR %s, #%d\n", [][]u8 { register_names[s.reg], register_names[s.reg] },
@@ -2427,7 +2556,10 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     for (var i = saved - 1; i >= 0; i -= 1) {
         format(&epilogue, "    POP %s\n", [][]u8 { register_names[8 + i] }, []int {});
     }
-    format(&epilogue, "    LEAVE\n    %s\n", [][]u8 { ending }, []int {});
+    if (!stack.frameless) {
+        str.append(&epilogue, "    LEAVE\n");
+    }
+    format(&epilogue, "    %s\n", [][]u8 { ending }, []int {});
     // Returns before the end leave through a copy of a short epilogue instead of jumping to it
     var rest = start;
     for (var i = 0; i < g.return_count && saved <= 3; i += 1) {
@@ -2439,6 +2571,7 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     str.append(&g.text, ".ret:\n");
     str.append(&g.text, str.text(&epilogue));
     str.release(&epilogue);
+    stack.frameless = false;
 }
 
 // Emits the initial value of data of type t
