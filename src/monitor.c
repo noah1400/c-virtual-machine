@@ -432,7 +432,8 @@ int monitor_write_coverage(const VM *vm, const Monitor *monitor, const char *pat
         for (uint32_t i = first; i < end; i++) {
             char count[24];
             snprintf(count, sizeof(count), "%llu", (unsigned long long)lines[i].count);
-            fprintf(out, "%9s:%5u: %s\n", lines[i].count ? count : "#####", lines[i].line, lines[i].source->source);
+            fprintf(out, "%9s:%5u: %s\n", lines[i].count ? count : "#####", lines[i].line,
+                    lines[i].source->source ? lines[i].source->source : "");
         }
     }
     if (file_count > 1) {
