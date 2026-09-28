@@ -47,6 +47,7 @@ pub struct Type {
     length: int;            // of an array
     params: []*Type;
     is_interrupt: bool;
+    is_extern: bool;        // leaves its arguments to the caller to remove
     name: []u8;             // integer, struct and enum types
     decl: *Decl;
     fields: []Field;

@@ -84,7 +84,8 @@ fn same_type(a: *ast.Type, b: *ast.Type) bool {
             return a.length == b.length && same_type(a.base, b.base);
         }
         case ast.TypeKind.FN {
-            if (a.params.len != b.params.len || a.is_interrupt != b.is_interrupt || !same_type(a.base, b.base)) {
+            if (a.params.len != b.params.len || a.is_interrupt != b.is_interrupt || a.is_extern != b.is_extern ||
+                !same_type(a.base, b.base)) {
                 return false;
             }
             for (var i = 0; i < a.params.len; i += 1) {
@@ -119,6 +120,9 @@ fn type_name(t: *ast.Type) []u8 {
         }
         case ast.TypeKind.FN {
             var text = "fn(";
+            if (t.is_extern) {
+                text = "extern fn(";
+            }
             for (var i = 0; i < t.params.len && text.len < 256; i += 1) {
                 if (i > 0) {
                     text = ast.cat([][]u8 { text, ", " });
@@ -1172,6 +1176,9 @@ fn infer(c: *Checker, slot: **ast.Expr, line: int) *ast.Type {
     if (t.kind == ast.TypeKind.FN && t.is_interrupt) {
         error(c, line, "an interrupt function can only be converted to u32");
     }
+    if (t.kind == ast.TypeKind.FN && t.is_extern) {
+        error(c, line, "an extern function can only be called or converted to u32");
+    }
     return t;
 }
 
@@ -1616,6 +1623,7 @@ fn check_signature(c: *Checker, d: *ast.Decl) {
     }
     var t = new_type(ast.TypeKind.FN, result);
     t.is_interrupt = d.is_interrupt;
+    t.is_extern = d.is_extern;
     var count = d.params.len;
     t.params = new(*ast.Type, count);
     for (var i = 0; i < count; i += 1) {

@@ -1,0 +1,6 @@
+// expect-error: expected fn(), found extern fn()
+extern fn tick();
+
+fn main() {
+    var f: fn() = tick;
+}

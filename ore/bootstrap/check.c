@@ -82,7 +82,7 @@ int same_type(const Type *a, const Type *b) {
             return a->length == b->length && same_type(a->base, b->base);
         case TY_FN:
             if (a->param_count != b->param_count || a->is_interrupt != b->is_interrupt ||
-                !same_type(a->base, b->base)) {
+                a->is_extern != b->is_extern || !same_type(a->base, b->base)) {
                 return 0;
             }
             for (int i = 0; i < a->param_count; i++) {
@@ -109,7 +109,7 @@ const char *type_name(const Type *t) {
             snprintf(text, sizeof(text), "[%d]%s", t->length, type_name(t->base));
             break;
         case TY_FN: {
-            size_t used = (size_t)snprintf(text, sizeof(text), "fn(");
+            size_t used = (size_t)snprintf(text, sizeof(text), "%sfn(", t->is_extern ? "extern " : "");
             for (int i = 0; i < t->param_count && used < sizeof(text); i++) {
                 used += (size_t)snprintf(text + used, sizeof(text) - used, "%s%s", i ? ", " : "",
                                          type_name(t->params[i]));
@@ -1054,6 +1054,9 @@ static Type *infer(Checker *c, Expr **slot, int line) {
     if (t->kind == TY_FN && t->is_interrupt) {
         error(c, line, "an interrupt function can only be converted to u32");
     }
+    if (t->kind == TY_FN && t->is_extern) {
+        error(c, line, "an extern function can only be called or converted to u32");
+    }
     return t;
 }
 
@@ -1439,6 +1442,7 @@ static void check_types(Checker *c, Decl *d) {
 static void check_signature(Checker *c, Decl *d) {
     Type *t = new_type(TY_FN, d->type_expr ? value_type(c, d->type_expr) : &t_void);
     t->is_interrupt = d->is_interrupt;
+    t->is_extern = d->is_extern;
     t->param_count = d->param_count;
     t->params = allocate((size_t)d->param_count * sizeof(Type *));
     for (int i = 0; i < d->param_count; i++) {

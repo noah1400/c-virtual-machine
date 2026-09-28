@@ -1320,6 +1320,15 @@ fn computed_argument(g: *Gen, e: *ast.Expr) int {
     return computed;
 }
 
+// An Ore function has removed its arguments as it returned; those of an extern function are left to its caller
+fn called(g: *Gen, function: *ast.Type, size: int) {
+    if (!function.is_extern) {
+        stack.pushed -= size;
+    } else if (size != 0) {
+        drop(g, size);
+    }
+}
+
 fn gen_call(g: *Gen, e: *ast.Expr) {
     var function = e.left.type;
     var result = function.base;
@@ -1370,9 +1379,7 @@ fn gen_call(g: *Gen, e: *ast.Expr) {
             push(g, "R0");
         }
         emits(g, "    CALL %s\n", [][]u8 { symbol_name(e.left.symbol) });
-        if (size != 0) {
-            drop(g, size);
-        }
+        called(g, function, size);
         if (hidden) {
             emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
         }
@@ -1402,10 +1409,10 @@ fn gen_call(g: *Gen, e: *ast.Expr) {
         emitd(g, "    LOAD R6, [SP+%d]\n", []int { size });
         check_null(g, "R6");
         emit(g, "    CALL R6\n");
-        size += 4;
     }
-    if (size != 0) {
-        drop(g, size);
+    called(g, function, size);
+    if (!direct) {
+        drop(g, 4);
     }
     if (hidden) {
         emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
@@ -2782,10 +2789,6 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
 
     // ENTER needs the size of the frame, known only after the body
     var body = str.text(&g.body);
-    var ending = "RET";
-    if (d.is_interrupt) {
-        ending = "IRET";
-    }
     str.append(&g.text, "\n");
     str.append(&g.text, body[:start]);
     format(&g.text, "%s:\n", [][]u8 { symbol_name(d.symbol) }, []int {});
@@ -2824,7 +2827,14 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     if (!stack.frameless) {
         str.append(&epilogue, "    LEAVE\n");
     }
-    format(&epilogue, "    %s\n", [][]u8 { ending }, []int {});
+    // A function removes its arguments as it returns, and an interrupt function returns with IRET
+    if (d.is_interrupt) {
+        str.append(&epilogue, "    IRET\n");
+    } else if (offset > 8) {
+        format(&epilogue, "    RET #%d\n", [][]u8 {}, []int { offset - 8 });
+    } else {
+        str.append(&epilogue, "    RET\n");
+    }
     // Returns before the end leave through a copy of a short epilogue instead of jumping to it
     var rest = start;
     for (var i = 0; i < g.return_count && saved <= 3; i += 1) {
@@ -2983,9 +2993,6 @@ fn gen_entry(g: *Gen) {
         str.append(&g.text, "    CALL rt.args\n    PUSH R5\n    PUSH R0\n");
     }
     format(&g.text, "    CALL %s\n", [][]u8 { symbol_name(main) }, []int {});
-    if (t.params.len > 0) {
-        str.append(&g.text, "    ADD SP, #8\n");
-    }
     if (t.base.kind == ast.TypeKind.VOID) {
         str.append(&g.text, "    LOAD R0, #0\n");
     }

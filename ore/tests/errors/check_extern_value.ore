@@ -1,0 +1,6 @@
+// expect-error: an extern function can only be called or converted to u32
+extern fn tick();
+
+fn main() {
+    var f = tick;
+}

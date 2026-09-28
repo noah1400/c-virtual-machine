@@ -502,10 +502,11 @@ static void gen_call(Gen *g, Expr *e) {
         emit(g, "    LOAD R6, [SP+%d]\n", size);
         check_null(g, "R6");
         emit(g, "    CALL R6\n");
-        size += 4;
     }
-    if (size) {
-        emit(g, "    ADD SP, #%d\n", size);
+    // An Ore function has removed its arguments as it returned; those of an extern function are left to its caller
+    int left = (fn->is_extern ? size : 0) + (direct ? 0 : 4);
+    if (left) {
+        emit(g, "    ADD SP, #%d\n", left);
     }
     if (hidden) {
         emit(g, "    LEA R0, [BP%+d]\n", temp);
@@ -1016,10 +1017,16 @@ static void gen_function(Gen *g, Decl *d) {
     gen_block(g, d->body);
     loc(g, d->body->end_line);
 
+    // A function removes its arguments as it returns, and an interrupt function returns with IRET
+    char ending[24] = "RET";
+    if (d->is_interrupt) {
+        snprintf(ending, sizeof(ending), "IRET");
+    } else if (offset > 8) {
+        snprintf(ending, sizeof(ending), "RET #%d", offset - 8);
+    }
     // ENTER needs the size of the frame, known only after the body
     append(&g->text, "\n%.*s%s:\n    ENTER #%d\n%.*s.ret:\n    LEAVE\n    %s\n", (int)start, g->body.bytes,
-           symbol_name(d->symbol), g->frame, (int)(g->body.size - start), g->body.bytes + start,
-           d->is_interrupt ? "IRET" : "RET");
+           symbol_name(d->symbol), g->frame, (int)(g->body.size - start), g->body.bytes + start, ending);
 }
 
 // Emits the initial value of data of type t
@@ -1143,9 +1150,6 @@ static void gen_entry(Gen *g) {
         append(&g->text, "    CALL rt.args\n    PUSH R5\n    PUSH R0\n");
     }
     append(&g->text, "    CALL %s\n", symbol_name(main));
-    if (t->param_count) {
-        append(&g->text, "    ADD SP, #8\n");
-    }
     if (t->base->kind == TY_VOID) {
         append(&g->text, "    LOAD R0, #0\n");
     }

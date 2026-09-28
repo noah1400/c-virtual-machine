@@ -134,6 +134,8 @@ pub fn distance2(a: Point, b: Point) int {
 extern fn clear_screen();
 ```
 
+An extern function leaves its arguments for the caller to remove, unlike an Ore function, so it is no function value: it can only be called, and `clear_screen as u32` is its address.
+
 `interrupt fn` declares an interrupt handler. It returns nothing and takes either nothing or one pointer. The CPU saves every register when it enters a handler and restores them on `IRET`, so the handler may use any of them. The pointer points at the saved registers, R0 first, as [`cpu.Frame`](#stdcpu) lays them out, and what the handler writes there is what the interrupted code gets back. A handler cannot be called; `handler as u32` is its address for the interrupt vector table.
 
 ```
@@ -445,7 +447,7 @@ These need supervisor mode, which programs start in.
 `vmc`, written in Ore in `ore/compiler`, and `vmc0`, the bootstrap compiler written in C, read the main module and its imports and write the whole program as one assembly file with `.loc` lines. It holds only the functions and globals that `main` reaches, through calls, function values and the initial values of globals. It includes the runtime and any assembly files given on the command line, and is then assembled with `vmasm`. The two write different code for the same program, since only `vmc` optimizes, but the code behaves the same. `-S` stops after the assembly, `-o` names the output and `-g0` leaves out the debug information: the `.loc` lines, and the symbols and source lines of the binary. `vmc` runs on the VM, where it keeps constants exact to 64 bits in a pair of 32-bit halves and rounds float literals with [`str.parse_float`](#stdstr), whose exact arithmetic gives the same `f32`s as `vmc0` gets from C's `strtof`.
 
 **Calling convention:**
-- **Arguments** are pushed from right to left, each taking its size rounded up to 4 bytes, and the caller removes them.
+- **Arguments** are pushed from right to left, each taking its size rounded up to 4 bytes. An Ore function removes them as it returns, with `RET #n`, so assembly that calls one leaves them alone. The caller of an `extern fn` removes them itself, so the assembly behind it returns with a plain `RET`.
 - **Frames** use `ENTER` and `LEAVE`: arguments start at `[BP+8]` and locals lie below BP. `vmc` gives a function that keeps no locals in memory no frame; it reaches its arguments through SP instead.
 - **Results:** integers, booleans, enums and pointers return in R0, and slices in R0 (the pointer) and R5 (the length). For a struct or array, the caller passes the address of room for it as a hidden first argument, and the callee returns that address in R0.
 - **Registers:** R0 and R5–R7 are free for the callee to change; R8–R15 must come back unchanged.

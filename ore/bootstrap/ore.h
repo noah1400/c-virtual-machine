@@ -127,6 +127,7 @@ struct Type {
     Type **params;
     int param_count;
     int is_interrupt;
+    int is_extern;          // leaves its arguments to the caller to remove
     const char *name;       // integer, struct and enum types
     Decl *decl;
     Field *fields;
