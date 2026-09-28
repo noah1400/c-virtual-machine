@@ -731,7 +731,7 @@ vm: error: Division by zero
 vm: at 0x0024 <fact+24> fact.c:3: DIV R5, R0
 ```
 
-The file name is recorded as written, without reading the file. The text is what coverage listings show, and what the debugger shows when it cannot open the file.
+The file name is recorded as written. Without the text, vmasm takes the line from the file when it can read it. The text is what coverage listings show, and what the debugger shows when it cannot open the file.
 
 ### Structures
 
@@ -923,7 +923,7 @@ Two compilers take these options:
 
 - **How it compiles:** the compiler writes the whole program as one assembly file, with only the functions and globals that `main` reaches, directly or through others, and those that the program's assembly names: a program that calls `io.write` gets that function and not the rest of `std/io`. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler, which leaves out the routines of the runtime and `std/cpu` that the program does not use, since they are [libraries](#libraries).
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
-- **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines. `-g0` leaves them out, and with them the symbols and source lines of the binary, which then holds only its code and data at a tenth of the size or less. Faults in it are reported by address only.
+- **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines. Only with `-S` do they carry the text of the line too, for people to read; otherwise vmasm reads it from the source file. `-g0` leaves them out, and with them the symbols and source lines of the binary, which then holds only its code and data at a tenth of the size or less. Faults in it are reported by address only.
 - **Runtime errors**, such as an index out of bounds, a `null` pointer or a failed `assert`, stop the program with a message, reported at the Ore line that failed. For the `digits.ore` example in the language description:
 
 ```console
