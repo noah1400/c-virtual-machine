@@ -2160,9 +2160,15 @@ fn count_expr(e: *ast.Expr, weight: int) {
     if (e.kind == ast.ExprKind.INDEX && e.left.type.kind != ast.TypeKind.POINTER && is_through_local(e.left)) {
         e.left.left.symbol.gain += 3 * weight;
     }
-    count_expr(e.left, weight);
-    count_expr(e.right, weight);
-    count_expr(e.third, weight);
+    if (e.left != null) {
+        count_expr(e.left, weight);
+    }
+    if (e.right != null) {
+        count_expr(e.right, weight);
+    }
+    if (e.third != null) {
+        count_expr(e.third, weight);
+    }
     for (var i = 0; i < e.args.len; i += 1) {
         count_expr(e.args[i], weight);
     }
@@ -2498,14 +2504,23 @@ fn reach(pending: *ast.List, s: *ast.Symbol) {
     }
 }
 
+// Constants need nothing at run time
 fn reach_expr(pending: *ast.List, e: *ast.Expr) {
-    if (e == null) {
+    if (e == null || e.is_const) {
         return;
     }
-    reach(pending, e.symbol);
-    reach_expr(pending, e.left);
-    reach_expr(pending, e.right);
-    reach_expr(pending, e.third);
+    if (e.symbol != null) {
+        reach(pending, e.symbol);
+    }
+    if (e.left != null) {
+        reach_expr(pending, e.left);
+    }
+    if (e.right != null) {
+        reach_expr(pending, e.right);
+    }
+    if (e.third != null) {
+        reach_expr(pending, e.third);
+    }
     for (var i = 0; i < e.args.len; i += 1) {
         reach_expr(pending, e.args[i]);
     }
