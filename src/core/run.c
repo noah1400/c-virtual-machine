@@ -469,6 +469,28 @@ INLINE int holds(const uint32_t *r, const Decoded *d) {
     return (d->cond >> (r[R4_SR] & 0x0F)) & 1;
 }
 
+#ifdef __GNUC__
+// The instructions go to the code for the next through a table of labels, which spares the range check and
+// the offset arithmetic of the switch
+#define TARGET(kind) case kind: run_##kind
+#define DISPATCH() goto *targets[d->kind]
+#else
+#define TARGET(kind) case kind
+#define DISPATCH() goto dispatch
+#endif
+
+// Goes on with the instruction at next, or stops there once limit instructions ran. It finds the instruction
+// after that one before running it, so that the host loads it while the instruction runs.
+#define NEXT()             \
+    do {                   \
+        d = next;          \
+        if (--left == 0) { \
+            goto stop;     \
+        }                  \
+        next = d + d->len; \
+        DISPATCH();        \
+    } while (0)
+
 // Runs up to limit instructions and returns how many it ran. The caller makes sure that nothing has to
 // happen between them: no paging, trap, deliverable interrupt or device that counts instructions.
 uint32_t cpu_run(VM *vm, uint32_t limit) {
@@ -489,302 +511,320 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
         vm->decoded_words = words;
         vm->decoded_end = (words + 1) * 4;
     }
-    if (index >= words) {
+    if (limit == 0 || index >= words) {
         return 0;
     }
-    Decoded *code = vm->decoded, *e = code + index;
+#ifdef __GNUC__
+    static void *const targets[] = {
+        [D_DECODE] = &&run_D_DECODE,     [D_STOP] = &&run_D_STOP,         [D_NOP] = &&run_D_NOP,
+        [D_LOAD_V] = &&run_D_LOAD_V,     [D_LOAD_M] = &&run_D_LOAD_M,     [D_LOADB_V] = &&run_D_LOADB_V,
+        [D_LOADB_M] = &&run_D_LOADB_M,   [D_LOADW_V] = &&run_D_LOADW_V,   [D_LOADW_M] = &&run_D_LOADW_M,
+        [D_STORE] = &&run_D_STORE,       [D_STOREB] = &&run_D_STOREB,     [D_STOREW] = &&run_D_STOREW,
+        [D_LEA] = &&run_D_LEA,           [D_ADD_V] = &&run_D_ADD_V,       [D_ADD_M] = &&run_D_ADD_M,
+        [D_SUB_V] = &&run_D_SUB_V,       [D_SUB_M] = &&run_D_SUB_M,       [D_CMP_V] = &&run_D_CMP_V,
+        [D_CMP_M] = &&run_D_CMP_M,       [D_TEST_V] = &&run_D_TEST_V,     [D_TEST_M] = &&run_D_TEST_M,
+        [D_BINARY_V] = &&run_D_BINARY_V, [D_BINARY_M] = &&run_D_BINARY_M, [D_DIVIDE_V] = &&run_D_DIVIDE_V,
+        [D_DIVIDE_M] = &&run_D_DIVIDE_M, [D_COUNT_V] = &&run_D_COUNT_V,   [D_COUNT_M] = &&run_D_COUNT_M,
+        [D_FLOAT_V] = &&run_D_FLOAT_V,   [D_FLOAT_M] = &&run_D_FLOAT_M,   [D_UNARY] = &&run_D_UNARY,
+        [D_FLOAT_SIGN] = &&run_D_FLOAT_SIGN, [D_SET] = &&run_D_SET,       [D_JUMP] = &&run_D_JUMP,
+        [D_JUMP_OUT] = &&run_D_JUMP_OUT, [D_JUMP_V] = &&run_D_JUMP_V,     [D_JUMP_M] = &&run_D_JUMP_M,
+        [D_CALL] = &&run_D_CALL,         [D_CALL_OUT] = &&run_D_CALL_OUT, [D_CALL_V] = &&run_D_CALL_V,
+        [D_CALL_M] = &&run_D_CALL_M,     [D_RET] = &&run_D_RET,           [D_LOOP] = &&run_D_LOOP,
+        [D_LOOP_OUT] = &&run_D_LOOP_OUT, [D_PUSH_V] = &&run_D_PUSH_V,     [D_PUSH_M] = &&run_D_PUSH_M,
+        [D_POP] = &&run_D_POP,           [D_ENTER] = &&run_D_ENTER,       [D_LEAVE] = &&run_D_LEAVE,
+        [D_MEMCPY] = &&run_D_MEMCPY,     [D_MEMSET] = &&run_D_MEMSET,     [D_SYSCALL] = &&run_D_SYSCALL,
+    };
+#endif
+    Decoded *code = vm->decoded, *d = code + index, *next = d + d->len;
     uint8_t *slot;
-    for (; left > 0; left--) {
-        Decoded *d = e, *next = e + e->len;
-    again:
-        switch (d->kind) {
-            case D_DECODE:
-                decode(vm, d, (uint32_t)(d - code), words);
-                next = d + d->len;
-                goto again;
-            case D_NOP:
-                break;
-            case D_LOAD_V:
-                r[d->a] = operand(r, d);
-                break;
-            case D_LOAD_M:
-                if (!load(vm, operand(r, d), 4, &r[d->a])) {
-                    goto stop;
-                }
-                break;
-            case D_LOADB_V:
-                r[d->a] = operand(r, d) & 0xFF;
-                break;
-            case D_LOADB_M:
-                if (!load(vm, operand(r, d), 1, &r[d->a])) {
-                    goto stop;
-                }
-                break;
-            case D_LOADW_V:
-                r[d->a] = operand(r, d) & 0xFFFF;
-                break;
-            case D_LOADW_M:
-                if (!load(vm, operand(r, d), 2, &r[d->a])) {
-                    goto stop;
-                }
-                break;
-            case D_STORE:
-                value = operand(r, d);
-                if (!(slot = reach(vm, value, 4, PROT_WRITE))) {
-                    goto stop;
-                }
-                write_le32(slot, r[d->a]);
-                written(vm, value, 4);
-                break;
-            case D_STOREB:
-                value = operand(r, d);
-                if (!(slot = reach(vm, value, 1, PROT_WRITE))) {
-                    goto stop;
-                }
-                slot[0] = (uint8_t)r[d->a];
-                written(vm, value, 1);
-                break;
-            case D_STOREW:
-                value = operand(r, d);
-                if (!(slot = reach(vm, value, 2, PROT_WRITE))) {
-                    goto stop;
-                }
-                write_le16(slot, (uint16_t)r[d->a]);
-                written(vm, value, 2);
-                break;
-            case D_LEA:
-                r[d->a] = operand(r, d);
-                break;
-            case D_ADD_V:
-                r[d->a] = alu_add(&r[R4_SR], r[d->a], operand(r, d), 0);
-                break;
-            case D_ADD_M:
-                if (!load(vm, operand(r, d), 4, &value)) {
-                    goto stop;
-                }
-                r[d->a] = alu_add(&r[R4_SR], r[d->a], value, 0);
-                break;
-            case D_SUB_V:
-                r[d->a] = alu_sub(&r[R4_SR], r[d->a], operand(r, d), 0);
-                break;
-            case D_SUB_M:
-                if (!load(vm, operand(r, d), 4, &value)) {
-                    goto stop;
-                }
-                r[d->a] = alu_sub(&r[R4_SR], r[d->a], value, 0);
-                break;
-            case D_CMP_V:
-                alu_sub(&r[R4_SR], r[d->a], operand(r, d), 0);
-                break;
-            case D_CMP_M:
-                if (!load(vm, operand(r, d), 4, &value)) {
-                    goto stop;
-                }
-                alu_sub(&r[R4_SR], r[d->a], value, 0);
-                break;
-            case D_TEST_V:
-                alu_binary(TEST_OP, &r[R4_SR], r[d->a], operand(r, d));
-                break;
-            case D_TEST_M:
-                if (!load(vm, operand(r, d), 4, &value)) {
-                    goto stop;
-                }
-                alu_binary(TEST_OP, &r[R4_SR], r[d->a], value);
-                break;
-            case D_BINARY_V:
-                r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], operand(r, d));
-                break;
-            case D_BINARY_M:
-                if (!load(vm, operand(r, d), 4, &value)) {
-                    goto stop;
-                }
-                r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
-                break;
-            case D_DIVIDE_V:
-                value = operand(r, d);
-                if (!alu_divides(d->op, r[d->a], value)) {
-                    goto stop;
-                }
-                r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
-                break;
-            case D_DIVIDE_M:
-                if (!load(vm, operand(r, d), 4, &value) || !alu_divides(d->op, r[d->a], value)) {
-                    goto stop;
-                }
-                r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
-                break;
-            case D_COUNT_V:
-                r[d->a] = alu_count(d->op, &r[R4_SR], operand(r, d));
-                break;
-            case D_COUNT_M:
-                if (!load(vm, operand(r, d), 4, &value)) {
-                    goto stop;
-                }
-                r[d->a] = alu_count(d->op, &r[R4_SR], value);
-                break;
-            case D_FLOAT_V:
-                alu_float(d->op, &r[R4_SR], &r[d->a], operand(r, d));
-                break;
-            case D_FLOAT_M:
-                if (!load(vm, operand(r, d), 4, &value)) {
-                    goto stop;
-                }
-                alu_float(d->op, &r[R4_SR], &r[d->a], value);
-                break;
-            case D_UNARY:
-                r[d->a] = alu_unary(d->op, &r[R4_SR], r[d->a]);
-                break;
-            case D_FLOAT_SIGN:
-                alu_float(d->op, &r[R4_SR], &r[d->a], 0);
-                break;
-            case D_SET:
-                r[d->a] = holds(r, d);
-                break;
-            case D_JUMP:
-                if (holds(r, d)) {
-                    next = code + d->imm;
-                }
-                break;
-            case D_JUMP_OUT:
-                if (holds(r, d)) {
-                    value = d->imm;
-                    goto leave;
-                }
-                break;
-            case D_JUMP_V:
-                value = operand(r, d);
-                if (holds(r, d)) {
-                    goto go;
-                }
-                break;
-            case D_JUMP_M:
-                if (!load(vm, operand(r, d), 4, &value)) {
-                    goto stop;
-                }
-                if (holds(r, d)) {
-                    goto go;
-                }
-                break;
-            case D_CALL:
-                if (!call(vm, code, d)) {
-                    goto stop;
-                }
+dispatch:
+    switch (d->kind) {
+        TARGET(D_DECODE):
+            decode(vm, d, (uint32_t)(d - code), words);
+            next = d + d->len;
+            goto dispatch;
+        TARGET(D_STOP):
+        default:
+            goto stop;
+        TARGET(D_NOP):
+            NEXT();
+        TARGET(D_LOAD_V):
+            r[d->a] = operand(r, d);
+            NEXT();
+        TARGET(D_LOAD_M):
+            if (!load(vm, operand(r, d), 4, &r[d->a])) {
+                goto stop;
+            }
+            NEXT();
+        TARGET(D_LOADB_V):
+            r[d->a] = operand(r, d) & 0xFF;
+            NEXT();
+        TARGET(D_LOADB_M):
+            if (!load(vm, operand(r, d), 1, &r[d->a])) {
+                goto stop;
+            }
+            NEXT();
+        TARGET(D_LOADW_V):
+            r[d->a] = operand(r, d) & 0xFFFF;
+            NEXT();
+        TARGET(D_LOADW_M):
+            if (!load(vm, operand(r, d), 2, &r[d->a])) {
+                goto stop;
+            }
+            NEXT();
+        TARGET(D_STORE):
+            value = operand(r, d);
+            if (!(slot = reach(vm, value, 4, PROT_WRITE))) {
+                goto stop;
+            }
+            write_le32(slot, r[d->a]);
+            written(vm, value, 4);
+            NEXT();
+        TARGET(D_STOREB):
+            value = operand(r, d);
+            if (!(slot = reach(vm, value, 1, PROT_WRITE))) {
+                goto stop;
+            }
+            slot[0] = (uint8_t)r[d->a];
+            written(vm, value, 1);
+            NEXT();
+        TARGET(D_STOREW):
+            value = operand(r, d);
+            if (!(slot = reach(vm, value, 2, PROT_WRITE))) {
+                goto stop;
+            }
+            write_le16(slot, (uint16_t)r[d->a]);
+            written(vm, value, 2);
+            NEXT();
+        TARGET(D_LEA):
+            r[d->a] = operand(r, d);
+            NEXT();
+        TARGET(D_ADD_V):
+            r[d->a] = alu_add(&r[R4_SR], r[d->a], operand(r, d), 0);
+            NEXT();
+        TARGET(D_ADD_M):
+            if (!load(vm, operand(r, d), 4, &value)) {
+                goto stop;
+            }
+            r[d->a] = alu_add(&r[R4_SR], r[d->a], value, 0);
+            NEXT();
+        TARGET(D_SUB_V):
+            r[d->a] = alu_sub(&r[R4_SR], r[d->a], operand(r, d), 0);
+            NEXT();
+        TARGET(D_SUB_M):
+            if (!load(vm, operand(r, d), 4, &value)) {
+                goto stop;
+            }
+            r[d->a] = alu_sub(&r[R4_SR], r[d->a], value, 0);
+            NEXT();
+        TARGET(D_CMP_V):
+            alu_sub(&r[R4_SR], r[d->a], operand(r, d), 0);
+            NEXT();
+        TARGET(D_CMP_M):
+            if (!load(vm, operand(r, d), 4, &value)) {
+                goto stop;
+            }
+            alu_sub(&r[R4_SR], r[d->a], value, 0);
+            NEXT();
+        TARGET(D_TEST_V):
+            alu_binary(TEST_OP, &r[R4_SR], r[d->a], operand(r, d));
+            NEXT();
+        TARGET(D_TEST_M):
+            if (!load(vm, operand(r, d), 4, &value)) {
+                goto stop;
+            }
+            alu_binary(TEST_OP, &r[R4_SR], r[d->a], value);
+            NEXT();
+        TARGET(D_BINARY_V):
+            r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], operand(r, d));
+            NEXT();
+        TARGET(D_BINARY_M):
+            if (!load(vm, operand(r, d), 4, &value)) {
+                goto stop;
+            }
+            r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
+            NEXT();
+        TARGET(D_DIVIDE_V):
+            value = operand(r, d);
+            if (!alu_divides(d->op, r[d->a], value)) {
+                goto stop;
+            }
+            r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
+            NEXT();
+        TARGET(D_DIVIDE_M):
+            if (!load(vm, operand(r, d), 4, &value) || !alu_divides(d->op, r[d->a], value)) {
+                goto stop;
+            }
+            r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
+            NEXT();
+        TARGET(D_COUNT_V):
+            r[d->a] = alu_count(d->op, &r[R4_SR], operand(r, d));
+            NEXT();
+        TARGET(D_COUNT_M):
+            if (!load(vm, operand(r, d), 4, &value)) {
+                goto stop;
+            }
+            r[d->a] = alu_count(d->op, &r[R4_SR], value);
+            NEXT();
+        TARGET(D_FLOAT_V):
+            alu_float(d->op, &r[R4_SR], &r[d->a], operand(r, d));
+            NEXT();
+        TARGET(D_FLOAT_M):
+            if (!load(vm, operand(r, d), 4, &value)) {
+                goto stop;
+            }
+            alu_float(d->op, &r[R4_SR], &r[d->a], value);
+            NEXT();
+        TARGET(D_UNARY):
+            r[d->a] = alu_unary(d->op, &r[R4_SR], r[d->a]);
+            NEXT();
+        TARGET(D_FLOAT_SIGN):
+            alu_float(d->op, &r[R4_SR], &r[d->a], 0);
+            NEXT();
+        TARGET(D_SET):
+            r[d->a] = holds(r, d);
+            NEXT();
+        TARGET(D_JUMP):
+            if (holds(r, d)) {
                 next = code + d->imm;
-                break;
-            case D_CALL_OUT:
-                if (!call(vm, code, d)) {
-                    goto stop;
-                }
+            }
+            NEXT();
+        TARGET(D_JUMP_OUT):
+            if (holds(r, d)) {
                 value = d->imm;
                 goto leave;
-            case D_CALL_V:
-                value = operand(r, d);
-                if (!call(vm, code, d)) {
-                    goto stop;
-                }
-                goto go;
-            case D_CALL_M:
-                if (!load(vm, operand(r, d), 4, &value) || !call(vm, code, d)) {
-                    goto stop;
-                }
-                goto go;
-            case D_RET:
-                if (!(slot = pop_slot(vm, r[R2_SP]))) {
-                    goto stop;
-                }
-                value = read_le32(slot);
-                r[R2_SP] += 4 + d->imm;
-                cpu_pop_frames(vm, 0);
-                goto go;
-            case D_LOOP:
-                if (--r[d->a] != 0) {
-                    next = code + d->imm;
-                }
-                break;
-            case D_LOOP_OUT:
-                if (--r[d->a] != 0) {
-                    value = d->imm;
-                    goto leave;
-                }
-                break;
-            case D_PUSH_V:
-                if (!push(vm, operand(r, d))) {
-                    goto stop;
-                }
-                break;
-            case D_PUSH_M:
-                if (!load(vm, operand(r, d), 4, &value) || !push(vm, value)) {
-                    goto stop;
-                }
-                break;
-            case D_POP:
-                if (!(slot = pop_slot(vm, r[R2_SP]))) {
-                    goto stop;
-                }
-                r[R2_SP] += 4;
-                r[d->a] = read_le32(slot);
-                break;
-            case D_ENTER: {
-                uint32_t sp = r[R2_SP];
-                if (!(slot = push_slot(vm, sp)) || d->imm > sp - 4 - vm->control[CR_SLO]) {
-                    goto stop;
-                }
-                write_le32(slot, r[R1_BP]);
-                written(vm, sp - 4, 4);
-                r[R1_BP] = sp - 4;
-                r[R2_SP] = sp - 4 - d->imm;
-                break;
             }
-            case D_LEAVE:
-                if (!(slot = pop_slot(vm, r[R1_BP]))) {
-                    goto stop;
-                }
-                r[R2_SP] = r[R1_BP] + 4;
-                r[R1_BP] = read_le32(slot);
-                break;
-            case D_MEMCPY:
-            case D_MEMSET: {
-                uint32_t size = (r[d->op] & d->mask) + d->imm, from = r[d->b], to = r[d->a];
-                const uint8_t *source = NULL;
-                if (size == 0) {
-                    break;
-                }
-                if (!(slot = reach(vm, to, size, PROT_WRITE)) ||
-                    (d->kind == D_MEMCPY && !(source = reach(vm, from, size, PROT_READ)))) {
-                    goto stop;
-                }
-                if (source) {
-                    memmove(slot, source, size);
-                } else {
-                    memset(slot, (uint8_t)from, size);
-                }
-                written(vm, to, size);
-                break;
+            NEXT();
+        TARGET(D_JUMP_V):
+            value = operand(r, d);
+            if (holds(r, d)) {
+                goto go;
             }
-            case D_SYSCALL:
-                // The heap and copy syscalls of supervisor mode, which report errors in R5 instead of faulting
-                if (!(r[R4_SR] & SYS_FLAG) || d->imm < SYS_ALLOC || d->imm > SYS_MEMCPY) {
-                    goto stop;
-                }
-                vm->error_pc = (uint32_t)(d - code) * 4;
-                r[R3_PC] = vm->error_pc + d->len * 4u;
-                syscall_dispatch(vm, d->imm);
-                break;
-            default:
+            NEXT();
+        TARGET(D_JUMP_M):
+            if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
-        }
-        e = next;
-        continue;
-    go:
-        // A jump to a computed address
-        index = word_index(value);
-        if (index >= words) {
+            }
+            if (holds(r, d)) {
+                goto go;
+            }
+            NEXT();
+        TARGET(D_CALL):
+            if (!call(vm, code, d)) {
+                goto stop;
+            }
+            next = code + d->imm;
+            NEXT();
+        TARGET(D_CALL_OUT):
+            if (!call(vm, code, d)) {
+                goto stop;
+            }
+            value = d->imm;
             goto leave;
+        TARGET(D_CALL_V):
+            value = operand(r, d);
+            if (!call(vm, code, d)) {
+                goto stop;
+            }
+            goto go;
+        TARGET(D_CALL_M):
+            if (!load(vm, operand(r, d), 4, &value) || !call(vm, code, d)) {
+                goto stop;
+            }
+            goto go;
+        TARGET(D_RET):
+            if (!(slot = pop_slot(vm, r[R2_SP]))) {
+                goto stop;
+            }
+            value = read_le32(slot);
+            r[R2_SP] += 4 + d->imm;
+            cpu_pop_frames(vm, 0);
+            goto go;
+        TARGET(D_LOOP):
+            if (--r[d->a] != 0) {
+                next = code + d->imm;
+            }
+            NEXT();
+        TARGET(D_LOOP_OUT):
+            if (--r[d->a] != 0) {
+                value = d->imm;
+                goto leave;
+            }
+            NEXT();
+        TARGET(D_PUSH_V):
+            if (!push(vm, operand(r, d))) {
+                goto stop;
+            }
+            NEXT();
+        TARGET(D_PUSH_M):
+            if (!load(vm, operand(r, d), 4, &value) || !push(vm, value)) {
+                goto stop;
+            }
+            NEXT();
+        TARGET(D_POP):
+            if (!(slot = pop_slot(vm, r[R2_SP]))) {
+                goto stop;
+            }
+            r[R2_SP] += 4;
+            r[d->a] = read_le32(slot);
+            NEXT();
+        TARGET(D_ENTER): {
+            uint32_t sp = r[R2_SP];
+            if (!(slot = push_slot(vm, sp)) || d->imm > sp - 4 - vm->control[CR_SLO]) {
+                goto stop;
+            }
+            write_le32(slot, r[R1_BP]);
+            written(vm, sp - 4, 4);
+            r[R1_BP] = sp - 4;
+            r[R2_SP] = sp - 4 - d->imm;
+            NEXT();
         }
-        e = code + index;
+        TARGET(D_LEAVE):
+            if (!(slot = pop_slot(vm, r[R1_BP]))) {
+                goto stop;
+            }
+            r[R2_SP] = r[R1_BP] + 4;
+            r[R1_BP] = read_le32(slot);
+            NEXT();
+        TARGET(D_MEMCPY):
+        TARGET(D_MEMSET): {
+            uint32_t size = (r[d->op] & d->mask) + d->imm, from = r[d->b], to = r[d->a];
+            const uint8_t *source = NULL;
+            if (size == 0) {
+                NEXT();
+            }
+            if (!(slot = reach(vm, to, size, PROT_WRITE)) ||
+                (d->kind == D_MEMCPY && !(source = reach(vm, from, size, PROT_READ)))) {
+                goto stop;
+            }
+            if (source) {
+                memmove(slot, source, size);
+            } else {
+                memset(slot, (uint8_t)from, size);
+            }
+            written(vm, to, size);
+            NEXT();
+        }
+        TARGET(D_SYSCALL):
+            // The heap and copy syscalls of supervisor mode, which report errors in R5 instead of faulting
+            if (!(r[R4_SR] & SYS_FLAG) || d->imm < SYS_ALLOC || d->imm > SYS_MEMCPY) {
+                goto stop;
+            }
+            vm->error_pc = (uint32_t)(d - code) * 4;
+            r[R3_PC] = vm->error_pc + d->len * 4u;
+            syscall_dispatch(vm, d->imm);
+            NEXT();
     }
+go:
+    // A jump to a computed address
+    index = word_index(value);
+    if (index >= words) {
+        goto leave;
+    }
+    next = code + index;
+    NEXT();
 stop:
-    r[R3_PC] = (uint32_t)(e - code) * 4;
+    r[R3_PC] = (uint32_t)(d - code) * 4;
     vm->instruction_count += limit - left;
     return limit - left;
 leave:
