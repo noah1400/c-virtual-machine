@@ -1131,21 +1131,45 @@ fn gen_builtin(g: *Gen, e: *ast.Expr) {
 }
 
 // Leaves the two words of the result in R0 and R5
-fn gen_syscall(g: *Gen, e: *ast.Expr) {
-    // Arguments that need no code go to their registers directly, in order
-    var direct = true;
+// The one argument of a syscall that needs code, 0 when none does, or -1 when the others cannot go to their
+// registers after it without a change to what they are or to the order of their null checks
+fn computed_syscall_argument(e: *ast.Expr) int {
+    var computed = 0;
     for (var i = 1; i < e.args.len; i += 1) {
-        direct = direct && is_operand(e.args[i]);
-    }
-    for (var i = 1; i < e.args.len; i += 1) {
-        if (direct) {
-            set_register(g, syscall_registers[i - 1], gen_operand(g, e.args[i]));
-        } else {
-            gen_expr(g, e.args[i]);
-            emit(g, "    PUSH R0\n");
+        if (!is_operand(e.args[i])) {
+            if (computed > 0) {
+                return -1;
+            }
+            computed = i;
         }
     }
-    for (var i = e.args.len - 1; i >= 1 && !direct; i -= 1) {
+    var calls = computed > 0 && has_call(e.args[computed]);
+    for (var i = 1; i < e.args.len && computed > 0; i += 1) {
+        if (i < computed && in_register(e.args[i]) || i != computed && calls && !is_stable(e.args[i])) {
+            return -1;
+        }
+    }
+    return computed;
+}
+
+fn gen_syscall(g: *Gen, e: *ast.Expr) {
+    // Arguments that need no code go to their registers directly, after the one that needs code
+    var computed = computed_syscall_argument(e);
+    if (computed > 0) {
+        gen_expr(g, e.args[computed]);
+        if (computed > 1) {
+            emits(g, "    MOVE %s, R0\n", [][]u8 { syscall_registers[computed - 1] });
+        }
+    }
+    for (var i = 1; i < e.args.len; i += 1) {
+        if (computed < 0) {
+            gen_expr(g, e.args[i]);
+            emit(g, "    PUSH R0\n");
+        } else if (i != computed) {
+            set_register(g, syscall_registers[i - 1], gen_operand(g, e.args[i]));
+        }
+    }
+    for (var i = e.args.len - 1; i >= 1 && computed < 0; i -= 1) {
         emits(g, "    POP %s\n", [][]u8 { syscall_registers[i - 1] });
     }
     emitd(g, "    SYSCALL #%d\n", []int { wide.low(e.args[0].value) });
