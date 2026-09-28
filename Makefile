@@ -46,9 +46,10 @@ vmc.bin: vmc1.bin vm vmasm
 minidos.bin: vmc.bin vm vmasm $(MINIDOS_SRC) $(ORE_LIB)
 	./vmc -b 0x100000 ore/minidos/main.ore -o $@
 
+# MiniDos only loads the code and data of a program, so its programs leave out debug information
 $(BUILD)/minidos/%.bin: ore/minidos/programs/%.ore vmc.bin vm vmasm $(ORE_LIB)
 	@mkdir -p $(dir $@)
-	./vmc $< -o $@
+	./vmc -g0 $< -o $@
 
 # A 4 MB disk with the MiniDos programs on it, which MiniDos formats and fills itself
 minidos.img: minidos.bin $(MINIDOS_PROGRAMS)
