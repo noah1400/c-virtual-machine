@@ -60,6 +60,9 @@ void vm_catch_signals(void) {
 // cpu_run stops at least this often to let vm_step notice a stop signal
 #define RUN_CHUNK (1u << 20)
 
+// Output waits in the buffer of stdout for this many instructions at most
+#define OUTPUT_DELAY (1u << 20)
+
 // How many instructions cpu_run may run before the next step, which is none while something has to happen
 // between instructions: a stop signal, device ticks, a trap, an interrupt to deliver or paging
 static uint32_t run_limit(const VM *vm) {
@@ -163,6 +166,10 @@ int vm_step(VM *vm) {
     }
 
     vm->instruction_count++;
+    if (vm->instruction_count - vm->output_flushed >= OUTPUT_DELAY) {
+        fflush(stdout);
+        vm->output_flushed = vm->instruction_count;
+    }
     if (vm->io_ticking) {
         io_tick(vm);
     }

@@ -8,6 +8,7 @@ static uint32_t console_read(VM *vm, IODevice *device, uint16_t offset) {
     if (offset != 0) {
         return 0;
     }
+    fflush(stdout);
     int c = getchar();
     return c == EOF ? 0 : (uint32_t)c;
 }
@@ -15,9 +16,10 @@ static uint32_t console_read(VM *vm, IODevice *device, uint16_t offset) {
 static void console_write(VM *vm, IODevice *device, uint16_t offset, uint32_t value) {
     (void)vm;
     (void)device;
-    FILE *stream = offset == 0 ? stdout : stderr;
-    fputc((int)(value & 0xFF), stream);
-    fflush(stream);
+    if (offset != 0) {
+        fflush(stdout);
+    }
+    fputc((int)(value & 0xFF), offset == 0 ? stdout : stderr);
 }
 
 int console_device(VM *vm, IODevice *device) {

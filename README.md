@@ -979,6 +979,8 @@ FIND.EXE        SORT.EXE
 | 8 | Clear screen | | |
 | 9 | Set color | R0 = foreground + background × 256, each 0–7 | Foreground 0xFF resets the colors. A background of 8 or more selects the terminal's default background |
 
+Output to stdout is buffered. `vm` writes it out before the program reads input, sleeps, writes to stderr or a file, or stops, and otherwise after a million instructions at most.
+
 ### Files
 
 | # | Name | Arguments | Result |

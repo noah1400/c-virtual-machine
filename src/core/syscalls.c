@@ -207,7 +207,7 @@ static void file_transfer(VM *vm, uint32_t handle, uint32_t address, uint32_t co
         return;
     }
 
-    if (writing) {
+    if (file != stdout) {
         fflush(stdout);
     }
     // Pages of the buffer need not be contiguous in physical memory, so the data goes through a chunk
@@ -228,7 +228,7 @@ static void file_transfer(VM *vm, uint32_t handle, uint32_t address, uint32_t co
             break;
         }
     }
-    if (writing) {
+    if (writing && file != stdout) {
         fflush(file);
     }
     vm->registers[R0_ACC] = moved;
@@ -310,6 +310,7 @@ int syscall_dispatch(VM *vm, uint32_t number) {
             print_string(vm, arg0);
             break;
         case SYS_GETCHAR: {
+            fflush(stdout);
             int c = getchar();
             r[R0_ACC] = c == EOF ? 0 : (uint32_t)c;
             r[R5] = c == EOF ? VM_ERROR_IO_ERROR : 0;
@@ -405,7 +406,5 @@ int syscall_dispatch(VM *vm, uint32_t number) {
         default:
             return vm_raise(vm, VM_ERROR_INVALID_SYSCALL, "Invalid system call: %u", number);
     }
-
-    fflush(stdout);
     return vm->last_error;
 }

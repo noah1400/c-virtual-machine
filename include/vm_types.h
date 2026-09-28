@@ -74,6 +74,7 @@ typedef struct {
     // Instruction cycle info for debugging
     uint32_t instruction_count; // Number of instructions executed
     uint32_t instruction_limit; // Execution stops with an error after this many, 0 for no limit
+    uint32_t output_flushed;    // instruction count when stdout was last written out
     Instruction current_instr;  // Currently executing instruction
     uint32_t error_pc;         // Address of last error
 
