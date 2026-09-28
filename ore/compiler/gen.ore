@@ -6,7 +6,8 @@ import "check";
 import "wide";
 
 // Scalars end up in R0, slices in R0 (pointer) and R5 (length), structs and arrays as their address in
-// R0. R6 and R7 are scratch; every variable lives in the frame.
+// R0. R6 and R7 are scratch. R8 to R14 hold the scalar locals and parameters that gain the most from a
+// register; other variables live in the frame, and a function without one reaches its parameters through SP.
 
 struct Gen {
     program: *ast.Program;
