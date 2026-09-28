@@ -47,6 +47,8 @@ struct Lexer {
     source: []u8;
     p: int;
     line: int;
+    line_start: int;
+    lines: ast.Texts;
     tokens: []ast.Token;
     count: int;
     buffer: str.Builder;    // the bytes of a string literal
@@ -69,8 +71,33 @@ fn add(lx: *Lexer, t: *ast.Token) {
     lx.count += 1;
 }
 
+// Ends the line at the line end at p, keeping its text without the line end for .loc
+fn end_line(lx: *Lexer, p: int) {
+    var end = p;
+    if (end > lx.line_start && lx.source[end - 1] == '\r') {
+        end -= 1;
+    }
+    ast.add_text(&lx.lines, lx.source[lx.line_start:end]);
+    lx.line_start = p + 1;
+    lx.line += 1;
+}
+
+fn no_nul(lx: *Lexer) {
+    ast.fail(null, 0, ast.cat([][]u8 { lx.m.path, " contains a NUL byte" }));
+}
+
+// The lexer stops at a NUL byte, which is the first problem to report
+fn fail_at(lx: *Lexer, line: int, message: []u8) {
+    for (var i = 0; i < lx.source.len - 1; i += 1) {
+        if (lx.source[i] == 0) {
+            no_nul(lx);
+        }
+    }
+    ast.fail(lx.m, line, message);
+}
+
 fn fail(lx: *Lexer, message: []u8) {
-    ast.fail(lx.m, lx.line, message);
+    fail_at(lx, lx.line, message);
 }
 
 fn is_digit(c: u8) bool {
@@ -328,7 +355,7 @@ fn skip_space(lx: *Lexer) {
     for (;;) {
         var c = src[p];
         if (c == '\n') {
-            lx.line += 1;
+            end_line(lx, p);
             p += 1;
         } else if (c == ' ' || c == '\t' || c == '\r' || c == 11 || c == 12) {
             p += 1;
@@ -340,10 +367,10 @@ fn skip_space(lx: *Lexer) {
             var start = lx.line;
             for (p += 2; !(src[p] == '*' && src[p + 1] == '/'); p += 1) {
                 if (src[p] == 0) {
-                    ast.fail(lx.m, start, "unterminated comment");
+                    fail_at(lx, start, "unterminated comment");
                 }
                 if (src[p] == '\n') {
-                    lx.line += 1;
+                    end_line(lx, p);
                 }
             }
             p += 2;
@@ -354,34 +381,6 @@ fn skip_space(lx: *Lexer) {
     }
 }
 
-// The lines of the source without their ends, for .loc; a line end at the end of the file starts no line
-fn split_lines(m: *ast.Module) {
-    var src = m.source;
-    var lines = ast.Texts {};
-    var p = 0;
-    var c = src[0];
-    while (c != 0) {
-        var start = p;
-        while (c != '\r' && c != '\n' && c != 0) {
-            p += 1;
-            c = src[p];
-        }
-        ast.add_text(&lines, src[start:p]);
-        while (c != '\n' && c != 0) {
-            p += 1;
-            c = src[p];
-        }
-        if (c == '\n') {
-            p += 1;
-            c = src[p];
-        }
-    }
-    if (p != src.len - 1) {
-        ast.fail(null, 0, ast.cat([][]u8 { m.path, " contains a NUL byte" }));
-    }
-    m.lines = ast.texts(lines);
-}
-
 // Letters, digits and _
 var name_chars: [256]bool;
 
@@ -389,7 +388,6 @@ pub fn lex(m: *ast.Module) {
     var lx = Lexer { m: m, source: m.source, line: 1, buffer: str.builder(64) };
     var src = m.source;
 
-    split_lines(m);
     if (!name_chars['_']) {
         for (var i = 0; i < 256; i += 1) {
             name_chars[i] = is_alnum(i as u8);
@@ -402,6 +400,12 @@ pub fn lex(m: *ast.Module) {
         var start = lx.p;
         var c = src[start];
         if (c == 0) {
+            if (start != src.len - 1) {
+                no_nul(&lx);
+            }
+            if (lx.line_start < start) {
+                end_line(&lx, start);
+            }
             t.kind = ast.TokenKind.EOF;
             t.text = src[start:start];
             add(&lx, &t);
@@ -445,6 +449,7 @@ pub fn lex(m: *ast.Module) {
         add(&lx, &t);
     }
     m.tokens = lx.tokens[:lx.count];
+    m.lines = ast.texts(lx.lines);
     str.release(&lx.buffer);
 }
 
