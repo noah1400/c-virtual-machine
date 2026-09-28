@@ -10,9 +10,11 @@
 // blocks, each with the room that first fit sees after it and the most room anywhere below it, so the
 // lowest gap that fits is found without visiting every block. The other keeps freed blocks until their
 // space is reused, so that a second free can be told apart from a bad pointer. A guard gap that no
-// access may touch precedes every block.
+// access may touch precedes every block. Blocks and gaps come in units of 8 bytes, whose rights are
+// also kept in a byte each, so that accesses can be checked without searching.
 #define HEAP_GUARD      8u
 #define HEAP_ALIGNMENT  8u
+#define HEAP_UNIT_USED  0x80u
 
 struct HeapNode {
     uint32_t start;
@@ -43,6 +45,9 @@ void memory_cleanup(VM *vm) {
     vm->memory = NULL;
     vm->memory_size = 0;
     memory_heap_reset(vm);
+    free(vm->heap_rights);
+    vm->heap_rights = NULL;
+    vm->heap_rights_count = 0;
 }
 
 static void free_nodes(struct HeapNode *node) {
@@ -53,12 +58,29 @@ static void free_nodes(struct HeapNode *node) {
     }
 }
 
+// Without room for the rights of the heap's units, accesses are checked by searching the blocks
 void memory_heap_reset(VM *vm) {
+    uint32_t base = vm->control[CR_HEAPLO] & ~(HEAP_ALIGNMENT - 1), high = vm->control[CR_HEAPHI];
+
     free_nodes(vm->heap_blocks);
     free_nodes(vm->heap_freed);
     vm->heap_blocks = NULL;
     vm->heap_freed = NULL;
     vm->heap_last = NULL;
+    free(vm->heap_rights);
+    vm->heap_rights_base = base;
+    vm->heap_rights_count = high > base ? (uint32_t)(((uint64_t)high - base + HEAP_ALIGNMENT - 1) / HEAP_ALIGNMENT) : 0;
+    vm->heap_rights = vm->heap_rights_count ? calloc(vm->heap_rights_count, 1) : NULL;
+    if (!vm->heap_rights) {
+        vm->heap_rights_count = 0;
+    }
+}
+
+// Records the rights of a block for its units, 0 once it is freed
+static void set_rights(VM *vm, uint32_t start, uint32_t size, uint8_t rights) {
+    if (vm->heap_rights) {
+        memset(vm->heap_rights + (start - vm->heap_rights_base) / HEAP_ALIGNMENT, rights, size / HEAP_ALIGNMENT);
+    }
 }
 
 static inline int in_heap(const VM *vm, uint32_t address, uint32_t size) {
@@ -317,6 +339,16 @@ static int access_range(VM *vm, uint32_t address, uint8_t *buffer, uint32_t size
     return VM_ERROR_NONE;
 }
 
+// Whether an access of up to 8 bytes lies in one block that allows it: its first and last units have
+// the rights, and no two units of different blocks are next to each other
+static int heap_allows(const VM *vm, uint32_t address, uint32_t size, uint8_t access) {
+    uint32_t first = (address - vm->heap_rights_base) / HEAP_ALIGNMENT;
+    uint32_t last = (address + size - 1 - vm->heap_rights_base) / HEAP_ALIGNMENT;
+    uint8_t needed = (uint8_t)(HEAP_UNIT_USED | access);
+    return address >= vm->heap_rights_base && last < vm->heap_rights_count &&
+           (vm->heap_rights[first] & vm->heap_rights[last] & needed) == needed;
+}
+
 // The host address of an access that needs no translation and that the heap rules allow, or NULL when
 // memory_read or memory_write would translate or fault
 uint8_t *memory_direct(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
@@ -324,6 +356,9 @@ uint8_t *memory_direct(VM *vm, uint32_t address, uint32_t size, uint8_t access) 
         return NULL;
     }
     if (in_heap(vm, address, size)) {
+        if (vm->heap_rights && size <= HEAP_ALIGNMENT) {
+            return heap_allows(vm, address, size, access) ? vm->memory + address : NULL;
+        }
         const struct HeapNode *block = find_block(vm, address);
         if (!block || size > block->start + block->size - address || (block->protection & access) != access) {
             return NULL;
@@ -497,6 +532,7 @@ static int insert_block(VM *vm, uint32_t start, uint32_t size) {
         set_last_room(vm, before, block);
     }
     vm->heap_blocks = merge(merge(before, block), after);
+    set_rights(vm, start, size, HEAP_UNIT_USED | PROT_ALL);
     return 1;
 }
 
@@ -603,6 +639,7 @@ int memory_free(VM *vm, uint32_t address) {
         vm->heap_last = NULL;
     }
 
+    set_rights(vm, block->start, block->size, 0);
     block->left = block->right = NULL;
     update(block);
     split(vm->heap_freed, address, &before, &after);
@@ -619,5 +656,6 @@ int memory_protect(VM *vm, uint32_t address, uint8_t flags) {
     }
 
     block->protection = flags & PROT_ALL;
+    set_rights(vm, block->start, block->size, (uint8_t)(HEAP_UNIT_USED | block->protection));
     return VM_ERROR_NONE;
 }
