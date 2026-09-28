@@ -193,13 +193,19 @@ pub fn reserve(b: *Builder, count: int) {
 }
 
 pub fn append(b: *Builder, text: []u8) {
-    reserve(b, text.len);
-    mem.copy(b.bytes[b.len:], text);
+    if (b.len + text.len > b.bytes.len) {
+        reserve(b, text.len);
+    }
+    if (text.len > 0) {
+        syscall(22, b.bytes.ptr + b.len, text.ptr, text.len);
+    }
     b.len += text.len;
 }
 
 pub fn append_byte(b: *Builder, c: u8) {
-    reserve(b, 1);
+    if (b.len == b.bytes.len) {
+        reserve(b, 1);
+    }
     b.bytes[b.len] = c;
     b.len += 1;
 }
