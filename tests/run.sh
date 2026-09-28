@@ -266,10 +266,13 @@ for src in "$root"/tests/errors/*.asm; do
     expected=$(expectation "$src" expect-error)
     asm_args=$(expectation "$src" asm-args)
 
-    if "$asm" $asm_args "$src" -o "$tmp/$name.bin" 2> "$tmp/$name.log"; then
+    if (cd "$root" && "$asm" $asm_args "tests/errors/$name.asm" -o "$tmp/$name.bin" 2> "$tmp/$name.log"); then
         fail "$name" "assembled although it should not"
     elif ! grep -qF -- "$expected" "$tmp/$name.log"; then
         fail "$name" "expected '$expected', got: $(head -n 1 "$tmp/$name.log")"
+    elif [ -f "${src%.asm}.err" ] && ! cmp -s "${src%.asm}.err" "$tmp/$name.log"; then
+        fail "$name" "unexpected stderr"
+        diff "${src%.asm}.err" "$tmp/$name.log" | head -n 20
     else
         passed=$((passed + 1))
     fi

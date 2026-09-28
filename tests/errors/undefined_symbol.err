@@ -1,0 +1,2 @@
+tests/errors/undefined_symbol.asm:4: error: undefined symbol 'nowhere'
+tests/errors/undefined_symbol.asm:5: error: undefined symbol 'elsewhere'
