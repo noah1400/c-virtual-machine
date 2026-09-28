@@ -24,6 +24,7 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 - [Debugger](#debugger)
 - [Binary format](#binary-format)
 - [Tests](#tests)
+- [Benchmarks](#benchmarks)
 - [Source layout](#source-layout)
 
 ## Building
@@ -1167,6 +1168,10 @@ A file `NAME.x` next to a test holds [debugger](#debugger) commands, which the p
 
 Programs run inside a temporary directory, so any files they create are discarded. They also run with a limit of 10 million instructions, so a program stuck in a loop fails instead of hanging the suite. The `example_*` tests include the programs from `assembler/examples`.
 
+## Benchmarks
+
+`bench` holds the same small programs written in C, Java, Ore and Python: recursive Fibonacci, a prime sieve, quicksort, matrix multiplication, a hash table and a text scanner. `python3 bench/run.py` builds them, checks that all languages print the same output and shows how long each takes. It skips a language whose tools are missing, and `-n`, `-k` and `-l` set the number of runs, the programs and the languages.
+
 ## Source layout
 
 | Path | Contents |
@@ -1187,6 +1192,7 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `ore/lib/` | The runtime that compiled Ore programs start from, and the standard library in `std/` |
 | `ore/tests/` | Ore test programs, and the modules and assembly they use |
 | `ore/minidos/` | MiniDos, and in `programs/` the programs on its disk |
+| `bench/` | The same programs in C, Java, Ore and Python, and the script that compares them |
 | `docs/language.md` | The Ore language |
 | `docs/minidos.md` | MiniDos |
 | `include/` | Headers |
