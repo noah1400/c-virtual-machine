@@ -1805,6 +1805,18 @@ fn set_register(g: *Gen, register: []u8, operand: []u8) {
     }
 }
 
+// Computes x op y of type t in a register when neither x nor y needs code and y is not that register;
+// tells whether it did
+fn compute_into(g: *Gen, e: *ast.Expr, t: *ast.Type, register: []u8) bool {
+    if (e.kind != ast.ExprKind.BINARY || !is_arithmetic(e.op) || e.type != t || t.kind != ast.TypeKind.INT ||
+        e.is_const || !is_operand(e.left) || !is_operand(e.right) || ast.same(register_of(e.right), register)) {
+        return false;
+    }
+    set_register(g, register, gen_operand(g, e.left));
+    arithmetic_on(g, register, e.op, t, gen_operand(g, e.right));
+    return true;
+}
+
 // An assignment to a variable in a register, where x op= y and x = x op y work on the register
 fn gen_register_assign(g: *Gen, s: *ast.Stmt, register: []u8) {
     var t = s.target.type;
@@ -1824,7 +1836,7 @@ fn gen_register_assign(g: *Gen, s: *ast.Stmt, register: []u8) {
     if (op == ast.TokenKind.ASSIGN) {
         if (operand.ptr != null) {
             set_register(g, register, operand);
-        } else if (!load_value(g, value, register)) {
+        } else if (!load_value(g, value, register) && !compute_into(g, value, t, register)) {
             gen_expr(g, value);
             emits(g, "    MOVE %s, R0\n", [][]u8 { register });
         }
@@ -1941,7 +1953,7 @@ fn gen_declared(g: *Gen, s: *ast.Stmt) {
         }
         if (is_operand(s.value)) {
             set_register(g, register, gen_operand(g, s.value));
-        } else if (!load_value(g, s.value, register)) {
+        } else if (!load_value(g, s.value, register) && !compute_into(g, s.value, sym.type, register)) {
             gen_expr(g, s.value);
             emits(g, "    MOVE %s, R0\n", [][]u8 { register });
         }
