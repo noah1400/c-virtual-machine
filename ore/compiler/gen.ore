@@ -6,8 +6,9 @@ import "check";
 import "wide";
 
 // Scalars end up in R0, slices in R0 (pointer) and R5 (length), structs and arrays as their address in
-// R0. R6 and R7 are scratch. R8 to R14 hold the scalar locals and parameters that gain the most from a
-// register; other variables live in the frame, and a function without one reaches its parameters through SP.
+// R0. R6 and R7 are scratch. R8 to R14 hold the scalar locals and parameters, and the values kept while
+// others are computed, that gain the most from a register; other variables live in the frame, and a function
+// without one reaches its parameters through SP.
 
 struct Gen {
     program: *ast.Program;
@@ -335,9 +336,52 @@ struct Stack {
     frameless: bool;
     saved: int;
     pushed: int;
+    held: int;              // values kept while others are computed
 }
 
 var stack: Stack;
+
+// The registers that keep values while others are computed, by how many are kept around them, or 0 where
+// they go on the stack
+var temp_registers: [4]int;
+
+// Keeps R0 while more code runs; returns the register it is in, or nothing when it is on the stack
+fn hold(g: *Gen) []u8 {
+    var none: []u8;
+    var depth = stack.held;
+    stack.held += 1;
+    if (depth < temp_registers.len && temp_registers[depth] != 0) {
+        var register = register_names[temp_registers[depth]];
+        emits(g, "    MOVE %s, R0\n", [][]u8 { register });
+        return register;
+    }
+    push(g, "R0");
+    return none;
+}
+
+// Computes x and keeps it as hold does, loading it straight into its register where it can
+fn hold_value(g: *Gen, x: *ast.Expr) []u8 {
+    var depth = stack.held;
+    if (depth < temp_registers.len && temp_registers[depth] != 0) {
+        var register = register_names[temp_registers[depth]];
+        if (load_value(g, x, register)) {
+            stack.held += 1;
+            return register;
+        }
+    }
+    gen_expr(g, x);
+    return hold(g);
+}
+
+// Stops keeping a value; returns where it is: its register, or R6 after taking it off the stack
+fn release(g: *Gen, held: []u8) []u8 {
+    stack.held -= 1;
+    if (held.ptr != null) {
+        return held;
+    }
+    pop(g, "R6");
+    return "R6";
+}
 
 fn push(g: *Gen, operand: []u8) {
     emits(g, "    PUSH %s\n", [][]u8 { operand });
@@ -861,17 +905,16 @@ fn swapped(op: ast.TokenKind) ast.TokenKind {
     return op;
 }
 
-// When both operands need code, leaves the left one in R6 and the right one in R0, which suits an
-// operation that can take them either way; tells whether it did
-fn swap_operands(g: *Gen, e: *ast.Expr) bool {
+// When both operands need code, leaves the left one in the register it returns and the right one in R0,
+// which suits an operation that can take them either way; returns nothing when they do not
+fn swap_operands(g: *Gen, e: *ast.Expr) []u8 {
+    var none: []u8;
     if (is_operand(e.right) || is_left_operand(e)) {
-        return false;
+        return none;
     }
-    gen_expr(g, e.left);
-    push(g, "R0");
+    var held = hold_value(g, e.left);
     gen_expr(g, e.right);
-    pop(g, "R6");
-    return true;
+    return release(g, held);
 }
 
 // Leaves the left operand in R0 and puts the right one where the instruction can take it
@@ -1062,12 +1105,26 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
         }
         return;
     }
-    if (is_comparison(e) && swap_operands(g, e)) {
-        emits(g, "    CMP R6, R0\n    SET%s R0\n", [][]u8 { condition(e.op, left, false) });
-        return;
+    if (is_comparison(e) || swappable(e)) {
+        var held = swap_operands(g, e);
+        if (held.ptr != null && is_comparison(e)) {
+            emits(g, "    CMP %s, R0\n    SET%s R0\n", [][]u8 { held, condition(e.op, left, false) });
+            return;
+        }
+        if (held.ptr != null) {
+            arithmetic(g, e.op, e.type, held);
+            return;
+        }
     }
-    if (swappable(e) && swap_operands(g, e)) {
-        arithmetic(g, e.op, e.type, "R6");
+    // An operation that needs its operands in order works on the register that keeps the left one
+    var depth = stack.held;
+    if (!is_comparison(e) && !is_operand(e.right) && !is_left_operand(e) && depth < temp_registers.len &&
+        temp_registers[depth] != 0) {
+        var held = hold_value(g, e.left);
+        gen_expr(g, e.right);
+        release(g, held);
+        arithmetic_on(g, held, e.op, e.type, "R0");
+        emits(g, "    MOVE R0, %s\n", [][]u8 { held });
         return;
     }
     var right = operands(g, e);
@@ -1176,12 +1233,13 @@ fn float_compare(g: *Gen, e: *ast.Expr) []u8 {
         left = gen_operand(g, e.left);
         gen_expr(g, e.right);
         right = "R0";
-    } else if (swap_operands(g, e)) {
-        left = "R6";
-        right = "R0";
     } else {
-        right = operands(g, e);
-        left = "R0";
+        left = swap_operands(g, e);
+        right = "R0";
+        if (left.ptr == null) {
+            right = operands(g, e);
+            left = "R0";
+        }
     }
     var first = left;
     var second = right;
@@ -1240,12 +1298,13 @@ fn gen_test(g: *Gen, x: *ast.Expr) {
         operand = gen_operand(g, x.left);
         gen_expr(g, x.right);
         register = "R0";
-    } else if (swap_operands(g, x)) {
-        register = "R6";
-        operand = "R0";
     } else {
-        operand = operands(g, x);
-        register = "R0";
+        register = swap_operands(g, x);
+        operand = "R0";
+        if (register.ptr == null) {
+            operand = operands(g, x);
+            register = "R0";
+        }
     }
     emits(g, "    TEST %s, %s\n", [][]u8 { register, operand });
 }
@@ -1316,11 +1375,14 @@ fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
             gen_expr(g, e.right);
             emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { operand, condition(swapped(e.op), e.left.type, !when) },
                 []int { target });
-        } else if (swap_operands(g, e)) {
-            emitf(g, "    CMP R6, R0\n    J%s .L%d\n", [][]u8 { code }, []int { target });
         } else {
-            var right = operands(g, e);
-            emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, code }, []int { target });
+            var held = swap_operands(g, e);
+            if (held.ptr != null) {
+                emitf(g, "    CMP %s, R0\n    J%s .L%d\n", [][]u8 { held, code }, []int { target });
+            } else {
+                var right = operands(g, e);
+                emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, code }, []int { target });
+            }
         }
         note_not_null(g, e, !when);
         return;
@@ -2350,9 +2412,10 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
     var simple = s.op != ast.TokenKind.ASSIGN && is_operand(s.value) && (t.kind != ast.TypeKind.POINTER || s.value.is_const);
     var direct = s.op == ast.TokenKind.ASSIGN && check.is_scalar(t) && is_operand(s.value);
 
-    // An address computed in R0 moves to R6, or to the stack while code computes the value
+    // An address computed in R0 moves to R6, or is kept while code computes the value
     var target = place(s.target);
     var pushed = false;
+    var held: []u8;
     if (target.ptr == null) {
         var base: []u8;
         var offset = gen_address(g, s.target, &base);
@@ -2361,8 +2424,11 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
             if (simple) {
                 emit(g, "    MOVE R6, R0\n");
             } else {
-                push(g, "R0");
+                held = hold(g);
                 pushed = true;
+                if (held.ptr != null) {
+                    base = held;
+                }
             }
         }
         target = relative(base, offset);
@@ -2390,7 +2456,7 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
     gen_expr(g, s.value);
     if (s.op == ast.TokenKind.ASSIGN) {
         if (pushed) {
-            pop(g, "R6");
+            release(g, held);
         }
         store_to(g, t, target);
         return;
@@ -2400,7 +2466,7 @@ fn gen_store(g: *Gen, s: *ast.Stmt) {
     }
     emit(g, "    MOVE R7, R0\n");
     if (pushed) {
-        pop(g, "R6");
+        release(g, held);
     }
     load_from(g, t, target);
     arithmetic(g, compound(s.op), t, "R7");
@@ -2771,6 +2837,66 @@ fn is_through_local(e: *ast.Expr) bool {
 // returns a struct or an array, or the result of a syscall
 var makes_temporary: bool;
 
+// What a register would save at each depth of values kept while others are computed, and the depth while
+// counting
+var temp_gains: [4]int;
+var temp_depth: int;
+
+// Whether e is reached through a pointer in a local, as in_register finds it once the local has a register
+fn through_local(e: *ast.Expr) bool {
+    switch (e.kind) {
+        case ast.ExprKind.FIELD {
+            if (e.field == null) {
+                return false;
+            }
+            if (e.left.type.kind == ast.TypeKind.POINTER) {
+                return local_of(e.left) != null;
+            }
+            return through_local(e.left);
+        }
+        case ast.ExprKind.UNARY {
+            return e.op == ast.TokenKind.STAR && local_of(e.left) != null;
+        }
+        case ast.ExprKind.INDEX {
+            return e.left.type.kind == ast.TypeKind.ARRAY && e.right.is_const && through_local(e.left);
+        }
+        case ast.ExprKind.LEN, ast.ExprKind.PTR {
+            return through_local(e.left);
+        }
+    }
+    return false;
+}
+
+// Whether a value needs code before an instruction can take it, as far as counting can tell: 4 bytes at a
+// place of their own or through a pointer in a local do not
+fn needs_code(e: *ast.Expr) bool {
+    if (is_simple(e)) {
+        return false;
+    }
+    if (!check.is_scalar(e.type) || e.type.size != 4) {
+        return true;
+    }
+    var base: []u8;
+    var offset = 0;
+    return !through_local(e) && !find_place(e, &base, &offset);
+}
+
+// Whether code keeps the left operand of e while it computes the right one, as far as counting can tell
+fn holds_left(e: *ast.Expr) bool {
+    return e.kind == ast.ExprKind.BINARY && e.op != ast.TokenKind.ANDAND && e.op != ast.TokenKind.OROR &&
+        needs_code(e.right) && needs_code(e.left) && (is_comparison(e) || e.left.type.kind != ast.TypeKind.POINTER);
+}
+
+// Counts a value kept around the code of e, which a register keeps with one instruction less than the stack
+fn count_held(e: *ast.Expr, weight: int) {
+    if (temp_depth < temp_gains.len) {
+        temp_gains[temp_depth] += weight;
+    }
+    temp_depth += 1;
+    count_expr(e, weight);
+    temp_depth -= 1;
+}
+
 // Estimates what registers would save in an expression, and notes the locals whose address it takes:
 // comparing a local in a register, or reaching a field through one, takes one instruction less
 fn count_expr(e: *ast.Expr, weight: int) {
@@ -2794,7 +2920,9 @@ fn count_expr(e: *ast.Expr, weight: int) {
     if (e.left != null) {
         count_expr(e.left, weight);
     }
-    if (e.right != null) {
+    if (e.kind == ast.ExprKind.BINARY && holds_left(e)) {
+        count_held(e.right, weight);
+    } else if (e.right != null) {
         count_expr(e.right, weight);
     }
     if (e.third != null) {
@@ -2842,7 +2970,12 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
                 s.target.left.symbol.gain += 2 * weight;
             }
             count_expr(s.target, weight);
-            count_expr(value, weight);
+            // The address of an element waits while the value is computed
+            if (s.target.kind == ast.ExprKind.INDEX && needs_code(value)) {
+                count_held(value, weight);
+            } else {
+                count_expr(value, weight);
+            }
         }
         case ast.StmtKind.EXPR, ast.StmtKind.RETURN {
             // A syscall on its own leaves its result in registers
@@ -2879,18 +3012,24 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
     }
 }
 
-// Scalar locals and parameters whose address is not taken can live in R8 to R14, which calls keep. A local
-// gets one when it saves more than saving and restoring the register costs, and a parameter more than
-// loading it as well. Returns how many registers from R8 on the function uses, and tells whether a local is
-// left in memory.
+// Scalar locals and parameters whose address is not taken can live in R8 to R14, which calls keep, and so
+// can the values kept at each depth while others are computed. A local or a depth gets one when it saves
+// more than saving and restoring the register costs, and a parameter more than loading it as well. Returns
+// how many registers from R8 on the function uses, and tells whether a local is left in memory.
 fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
     var locals = ast.List {};
     makes_temporary = false;
+    for (var i = 0; i < temp_gains.len; i += 1) {
+        temp_gains[i] = 0;
+        temp_registers[i] = 0;
+    }
+    temp_depth = 0;
     for (var i = 0; i < d.params.len; i += 1) {
         d.params[i].symbol.gain = -1;
         ast.add(&locals, d.params[i].symbol as *u8);
     }
     count_stmt(d.body, 1, &locals);
+    var temps = temp_gains[0] > 2 || temp_gains[1] > 2 || temp_gains[2] > 2 || temp_gains[3] > 2;
     var count = 0;
     for (; count < 7; count += 1) {
         var best: *ast.Symbol = null;
@@ -2901,10 +3040,19 @@ fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
                 best = s;
             }
         }
-        if (best == null) {
+        var depth = -1;
+        for (var i = 0; i < temp_gains.len && temps; i += 1) {
+            if (temp_registers[i] == 0 && temp_gains[i] > 2 && (depth < 0 || temp_gains[i] > temp_gains[depth])) {
+                depth = i;
+            }
+        }
+        if (depth >= 0 && (best == null || temp_gains[depth] > best.gain)) {
+            temp_registers[depth] = 8 + count;
+        } else if (best != null) {
+            best.reg = 8 + count;
+        } else {
             break;
         }
-        best.reg = 8 + count;
     }
     *in_memory = makes_temporary;
     for (var i = d.params.len; i < locals.count; i += 1) {
@@ -2924,6 +3072,7 @@ fn gen_body(g: *Gen, d: *ast.Decl, frame: *ast.Symbol) int {
     g.range_count = 0;
     g.return_count = 0;
     stack.pushed = 0;
+    stack.held = 0;
     str.clear(&g.body);
     str.clear(&g.tables);
     if (frame != null) {
