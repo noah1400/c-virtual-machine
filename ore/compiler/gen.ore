@@ -978,17 +978,7 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
     var left = e.left.type;
 
     if (e.op == ast.TokenKind.ANDAND || e.op == ast.TokenKind.OROR) {
-        var end = label(g);
-        gen_expr(g, e.left);
-        var saved: Checked;
-        save_checked(g, &saved);
-        var jump = "JNZ";
-        if (e.op == ast.TokenKind.ANDAND) {
-            jump = "JZ";
-        }
-        emitf(g, "    CMP R0, #0\n    %s .L%d\n", [][]u8 { jump }, []int { end });
-        gen_expr(g, e.right);
-        merge_label(g, end, &saved, null, null);
+        gen_logical(g, e);
         return;
     }
     if (left.kind == ast.TypeKind.POINTER && !is_comparison(e)) {
@@ -1079,6 +1069,91 @@ fn gen_binary(g: *Gen, e: *ast.Expr) {
         return;
     }
     arithmetic(g, e.op, e.type, right);
+}
+
+fn is_logical(e: *ast.Expr) bool {
+    return e.kind == ast.ExprKind.BINARY && (e.op == ast.TokenKind.ANDAND || e.op == ast.TokenKind.OROR);
+}
+
+// Whether gen_condition branches on the value of e in R0, which is then 0 or 1
+fn tests_value(e: *ast.Expr) bool {
+    return !e.is_const && !(e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.BANG) && !is_logical(e) &&
+        !is_comparison(e) && tested_bits(e) == null && register_of(e).ptr == null;
+}
+
+// Where the operands of && and || that a value is made of branch to
+struct Logical {
+    yes: int;
+    no: int;
+    end: int;
+    to_yes: bool;
+    to_no: bool;
+    first: bool;
+    saved: Checked;         // what holds wherever the value is made
+}
+
+// Makes 0 or 1 of && and ||. The operands before the last one branch as in a condition, where the value is
+// known, and the last one gives it otherwise.
+fn gen_logical(g: *Gen, e: *ast.Expr) {
+    var l = Logical { yes: label(g), no: label(g), end: label(g), first: true };
+    save_checked(g, &l.saved);
+    var x = e;
+    while (is_logical(x)) {
+        branch_operand(g, &l, x.left, x.op);
+        x = x.right;
+    }
+    gen_expr(g, x);
+    if (l.to_yes || l.to_no) {
+        emitd(g, "    JMP .L%d\n", []int { l.end });
+    }
+    if (l.to_yes) {
+        emitd(g, ".L%d:\n    LOAD R0, #1\n", []int { l.yes });
+    }
+    if (l.to_yes && l.to_no) {
+        emitd(g, "    JMP .L%d\n", []int { l.end });
+    }
+    if (l.to_no) {
+        emitd(g, ".L%d:\n    LOAD R0, #0\n", []int { l.no });
+    }
+    merge_label(g, l.end, &l.saved, null, null);
+}
+
+// Branches on an operand of op that is not the last one, where it decides the value
+fn branch_operand(g: *Gen, l: *Logical, e: *ast.Expr, op: ast.TokenKind) {
+    if (e.kind == ast.ExprKind.BINARY && e.op == op) {
+        branch_operand(g, l, e.left, op);
+        branch_operand(g, l, e.right, op);
+        return;
+    }
+    var when = op == ast.TokenKind.OROR;
+    var fact = null_fact(e, !when);
+    var known = fact != null && is_checked(g, fact);
+    if (tests_value(e)) {
+        // The value in R0 is already the one to make
+        var jump = "JZ";
+        if (when) {
+            jump = "JNZ";
+        }
+        gen_expr(g, e);
+        emitf(g, "    CMP R0, #0\n    %s .L%d\n", [][]u8 { jump }, []int { l.end });
+    } else if (when) {
+        gen_condition(g, e, l.yes, true);
+        l.to_yes = true;
+    } else {
+        gen_condition(g, e, l.no, false);
+        l.to_no = true;
+    }
+    // What the first operand checked before it branched holds wherever the value is made
+    if (l.first && jumps_once(e)) {
+        save_checked(g, &l.saved);
+        for (var i = 0; i < l.saved.count && fact != null && !known; i += 1) {
+            if (l.saved.items[i] == fact as *u8) {
+                l.saved.count -= 1;
+                l.saved.items[i] = l.saved.items[l.saved.count];
+            }
+        }
+    }
+    l.first = false;
 }
 
 // Compares two f32s so that the unsigned condition it returns holds when the comparison does; == and !=

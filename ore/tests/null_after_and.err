@@ -1,0 +1,5 @@
+vm: error: null pointer
+vm: at 0x0190 <null_after_and.get.L11+44> ore/tests/null_after_and.ore:12: CALL rt.null_error
+vm: #1 0x0220 <null_after_and.main+128> ore/tests/null_after_and.ore:20: CALL null_after_and.get
+vm: #2 0x0078 <main> ore/tests/null_after_and.ore:15: CALL null_after_and.main
+vm: #3 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main
