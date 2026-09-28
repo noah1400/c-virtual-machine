@@ -1309,6 +1309,8 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
 
     int section = as->section;
     uint32_t start = current(as)->pc;
+    uint32_t planned = result->section == section ? result->size : 0;
+    int errors = as->errors;
     as->statement_address = start;
     result->section = -1;
 
@@ -1323,6 +1325,12 @@ static void assemble_line(Assembler *as, size_t index, int labels_only) {
         asm_error(as, "expected an instruction or directive");
     }
 
+    // A statement that fails in the final pass keeps the room the layout gave it, so that the labels
+    // after it stay where they are
+    if (as->pass == PASS_EMIT && as->errors > errors && as->section == section &&
+        current(as)->pc < start + planned) {
+        emit(as, NULL, start + planned - current(as)->pc);
+    }
     if (as->section == section && as->sections[section].pc > start) {
         result->section = section;
         result->address = start;
