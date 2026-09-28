@@ -92,7 +92,7 @@ typedef struct {
     struct HeapNode *heap_freed;   // freed heap blocks whose space is not reused yet
     struct HeapNode *heap_last;    // the block of the latest heap access
     uint32_t heap_seed;            // for the priorities that shape the heap treaps
-    uint8_t *heap_rights;          // for every 8 bytes of the heap, the rights of the block they belong to
+    uint8_t *heap_rights;          // for every 8 bytes of the heap up to the blocks so far, the rights of their block
     uint32_t heap_rights_base;     // the address of the first 8 bytes
     uint32_t heap_rights_count;
     FILE *files[VM_MAX_FILES];

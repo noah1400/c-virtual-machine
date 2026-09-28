@@ -44,9 +44,6 @@ void memory_cleanup(VM *vm) {
     vm->memory = NULL;
     vm->memory_size = 0;
     memory_heap_reset(vm);
-    free(vm->heap_rights);
-    vm->heap_rights = NULL;
-    vm->heap_rights_count = 0;
 }
 
 static void free_nodes(struct HeapNode *node) {
@@ -57,28 +54,37 @@ static void free_nodes(struct HeapNode *node) {
     }
 }
 
-// Without room for the rights of the heap's units, accesses are checked by searching the blocks
 void memory_heap_reset(VM *vm) {
-    uint32_t base = vm->control[CR_HEAPLO] & ~(HEAP_ALIGNMENT - 1), high = vm->control[CR_HEAPHI];
-
     free_nodes(vm->heap_blocks);
     free_nodes(vm->heap_freed);
     vm->heap_blocks = NULL;
     vm->heap_freed = NULL;
     vm->heap_last = NULL;
     free(vm->heap_rights);
-    vm->heap_rights_base = base;
-    vm->heap_rights_count = high > base ? (uint32_t)(((uint64_t)high - base + HEAP_ALIGNMENT - 1) / HEAP_ALIGNMENT) : 0;
-    vm->heap_rights = vm->heap_rights_count ? calloc(vm->heap_rights_count, 1) : NULL;
-    if (!vm->heap_rights) {
-        vm->heap_rights_count = 0;
-    }
+    vm->heap_rights = NULL;
+    vm->heap_rights_base = vm->control[CR_HEAPLO] & ~(HEAP_UNIT - 1);
+    vm->heap_rights_count = 0;
 }
 
-// Records the rights of a block for its units, 0 once it is freed
+// Records the rights of a block for its units, 0 once it is freed. The record grows to reach them; units that
+// it cannot reach for lack of host memory are checked by searching the blocks instead.
 static void set_rights(VM *vm, uint32_t start, uint32_t size, uint8_t rights) {
-    if (vm->heap_rights) {
-        memset(vm->heap_rights + (start - vm->heap_rights_base) / HEAP_ALIGNMENT, rights, size / HEAP_ALIGNMENT);
+    uint32_t first = (start - vm->heap_rights_base) / HEAP_UNIT, units = size / HEAP_UNIT;
+    if (first + units > vm->heap_rights_count) {
+        uint32_t count = vm->heap_rights_count ? vm->heap_rights_count : 4096;
+        while (count < first + units) {
+            count *= 2;
+        }
+        uint8_t *grown = realloc(vm->heap_rights, count);
+        if (grown) {
+            memset(grown + vm->heap_rights_count, 0, count - vm->heap_rights_count);
+            vm->heap_rights = grown;
+            vm->heap_rights_count = count;
+        }
+    }
+    if (first < vm->heap_rights_count) {
+        uint32_t reached = vm->heap_rights_count - first;
+        memset(vm->heap_rights + first, rights, units < reached ? units : reached);
     }
 }
 
