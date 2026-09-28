@@ -885,7 +885,7 @@ $ ./vm primes.bin
 Usage: vmc [options] program.ore [file.asm...]
   -o FILE   write the binary to FILE (default: the program with .bin)
   -S        write the assembly instead, to FILE or the program with .asm
-  -g0       leave out the .loc lines that tie the code to Ore source lines
+  -g0       leave out the .loc lines and the binary's debug information
   -b ADDR   put the program at ADDR instead of 0, as vmasm -b does
   -I DIR    look for imported modules in DIR as well
   -L DIR    take the runtime and the standard library from DIR
@@ -898,7 +898,7 @@ Two compilers take these options:
 
 - **How it compiles:** the compiler writes the whole program as one assembly file, with only the functions and globals that `main` reaches, directly or through others, and those that the program's assembly names: a program that calls `io.write` gets that function and not the rest of `std/io`. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler.
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
-- **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines. `-g0` leaves them out, which makes the assembly easier to read; the binary then names lines of the assembly instead.
+- **Source lines:** every statement carries a `.loc` line, so fault reports, backtraces, the debugger and coverage listings show Ore source lines. `-g0` leaves them out, and with them the symbols and source lines of the binary, which then holds only its code and data at a tenth of the size or less. Faults in it are reported by address only.
 - **Runtime errors**, such as an index out of bounds, a `null` pointer or a failed `assert`, stop the program with a message, reported at the Ore line that failed. For the `digits.ore` example in the language description:
 
 ```console
@@ -925,8 +925,8 @@ A:\>DIR /W
  Directory of A:\
 
 FIND.EXE        SORT.EXE
-        2 file(s)        143,211 bytes
-        0 dir(s)       4,017,152 bytes free
+        2 file(s)          8,015 bytes
+        0 dir(s)       4,151,808 bytes free
 ```
 
 ## Syscalls
@@ -1115,7 +1115,7 @@ Code and data symbols hold offsets into their section. A relocation stores the a
 - Checks that every file in `tests/errors` fails to assemble with the expected message.
 - Compiles and runs every Ore program in `ore/tests` the same way. Their comment lines start with `//` instead of `;`, and `// vmc-args:` gives `vmc0` more arguments.
 - Checks that every file in `ore/tests/errors` fails to compile with the expected message.
-- Builds every Ore test with `vmc` as well, and that build has to meet the same expectations. Since the two compilers write different code, runtime errors are compared by message and Ore lines, and debugger scripts only run against the `vmc` build. `vmc1.bin` has to write the same assembly as `vmc.bin`, all three compilers the same compile errors, and the test named `vmc` checks that `vmc` compiles itself into `vmc.bin`.
+- Builds every Ore test with `vmc` as well, and that build has to meet the same expectations. Since the two compilers write different code, runtime errors are compared by message and Ore lines, and debugger scripts only run against the `vmc` build. `vmc1.bin` has to write the same assembly as `vmc.bin`, all three compilers the same compile errors, the test named `vmc` checks that `vmc` compiles itself into `vmc.bin`, and `no_debug` that `-g0` leaves the debug information out of the binaries of `vmc` and `vmc0`.
 - Boots MiniDos on an empty disk for every session in `tests/minidos`, which types `NAME.in` and has to show `NAME.out`, with the programs of `ore/minidos/programs` and `tests/minidos` built for it to import. The test is named `minidos_NAME`.
 
 Comment lines in a test adjust the checks:

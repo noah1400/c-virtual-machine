@@ -86,15 +86,15 @@ A program's syscalls cannot reach the VM from user mode; they arrive at MiniDos 
 
 A fault ends the program with a message, such as `Divide overflow` or `Stack overflow`, and status 255; so does any other privileged instruction. `HALT` ends it with status 0. Memory is not protected, as under DOS: a program that writes outside its own memory can damage MiniDos.
 
-`ore/minidos/programs` holds the programs `make` puts on `minidos.img`:
+`ore/minidos/programs` holds the programs `make` puts on `minidos.img`, built with `vmc -g0`, since MiniDos has no use for debug information:
 
 - `SORT [/R] < file` writes the lines of its input in order, ignoring case, or in reverse order with `/R`.
 - `FIND [/V] [/C] [/I] "text" [file]` writes the lines that contain text, with `/V` those that do not, with `/C` only how many, and with `/I` ignoring case. It ends with status 1 when no line matched.
 
-A new program is any Ore program that reads and writes with `std/io`:
+A new program is any Ore program that reads and writes with `std/io`, best built with `-g0` as well:
 
 ```console
-$ ./vmc hello.ore
+$ ./vmc -g0 hello.ore
 $ ./vm -m 4096 -b minidos.img minidos.bin
 A:\>IMPORT hello.bin HELLO.EXE
 A:\>HELLO
