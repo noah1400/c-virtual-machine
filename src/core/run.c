@@ -179,21 +179,27 @@ INLINE uint8_t *reach(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
     return memory_direct(vm, address, size, access);
 }
 
-// The stack lies between SLO and SHI
-INLINE uint8_t *push_slot(VM *vm, uint32_t sp) {
+// The stack lies between SLO and SHI. When it lies in memory above the heap, which only instructions that
+// cpu_run leaves to vm_step can change, its slots need no other check.
+static int plain_stack(const VM *vm) {
+    uint32_t low = vm->control[CR_SLO], high = vm->control[CR_SHI];
+    return low >= vm->control[CR_HEAPHI] && low <= high && high <= vm->memory_size;
+}
+
+INLINE uint8_t *push_slot(VM *vm, uint32_t sp, int plain) {
     uint32_t low = vm->control[CR_SLO];
     if (sp < low || sp > vm->control[CR_SHI] || sp - low < 4) {
         return NULL;
     }
-    return reach(vm, sp - 4, 4, PROT_WRITE);
+    return plain ? vm->memory + sp - 4 : reach(vm, sp - 4, 4, PROT_WRITE);
 }
 
-INLINE uint8_t *pop_slot(VM *vm, uint32_t sp) {
+INLINE uint8_t *pop_slot(VM *vm, uint32_t sp, int plain) {
     uint32_t high = vm->control[CR_SHI];
     if (sp < vm->control[CR_SLO] || sp > high || high - sp < 4) {
         return NULL;
     }
-    return reach(vm, sp, 4, PROT_READ);
+    return plain ? vm->memory + sp : reach(vm, sp, 4, PROT_READ);
 }
 
 // The number of words below the heap and the end of memory that start an instruction whose extension word
@@ -471,8 +477,8 @@ INLINE int load(VM *vm, uint32_t address, uint32_t width, uint32_t *value) {
 }
 
 // Pushes a value; returns 0 if pushing it would fault
-INLINE int push(VM *vm, uint32_t value) {
-    uint8_t *slot = push_slot(vm, vm->registers[R2_SP]);
+INLINE int push(VM *vm, uint32_t value, int plain) {
+    uint8_t *slot = push_slot(vm, vm->registers[R2_SP], plain);
     if (!slot) {
         return 0;
     }
@@ -483,9 +489,9 @@ INLINE int push(VM *vm, uint32_t value) {
 }
 
 // Pushes the address after a call and notes the call for backtraces; returns 0 if pushing would fault
-INLINE int call(VM *vm, const Decoded *code, const Decoded *d) {
+INLINE int call(VM *vm, const Decoded *code, const Decoded *d, int plain) {
     uint32_t site = (uint32_t)(d - code) * 4, back = site + d->len * 4u;
-    if (!push(vm, back)) {
+    if (!push(vm, back, plain)) {
         return 0;
     }
     cpu_push_frame(vm, site, back, -1);
@@ -567,6 +573,7 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
 #endif
     Decoded *code = vm->decoded, *d = code + index, *next = d + d->len;
     uint8_t *slot;
+    int plain = plain_stack(vm);
 dispatch:
     switch (d->kind) {
         TARGET(D_DECODE):
@@ -761,30 +768,30 @@ dispatch:
             }
             NEXT();
         TARGET(D_CALL):
-            if (!call(vm, code, d)) {
+            if (!call(vm, code, d, plain)) {
                 goto stop;
             }
             next = code + d->imm;
             NEXT();
         TARGET(D_CALL_OUT):
-            if (!call(vm, code, d)) {
+            if (!call(vm, code, d, plain)) {
                 goto stop;
             }
             value = d->imm;
             goto leave;
         TARGET(D_CALL_V):
             value = operand(r, d);
-            if (!call(vm, code, d)) {
+            if (!call(vm, code, d, plain)) {
                 goto stop;
             }
             goto go;
         TARGET(D_CALL_M):
-            if (!load(vm, operand(r, d), 4, &value) || !call(vm, code, d)) {
+            if (!load(vm, operand(r, d), 4, &value) || !call(vm, code, d, plain)) {
                 goto stop;
             }
             goto go;
         TARGET(D_RET):
-            if (!(slot = pop_slot(vm, r[R2_SP]))) {
+            if (!(slot = pop_slot(vm, r[R2_SP], plain))) {
                 goto stop;
             }
             value = read_le32(slot);
@@ -803,17 +810,17 @@ dispatch:
             }
             NEXT();
         TARGET(D_PUSH_V):
-            if (!push(vm, operand(r, d))) {
+            if (!push(vm, operand(r, d), plain)) {
                 goto stop;
             }
             NEXT();
         TARGET(D_PUSH_M):
-            if (!load(vm, operand(r, d), 4, &value) || !push(vm, value)) {
+            if (!load(vm, operand(r, d), 4, &value) || !push(vm, value, plain)) {
                 goto stop;
             }
             NEXT();
         TARGET(D_POP):
-            if (!(slot = pop_slot(vm, r[R2_SP]))) {
+            if (!(slot = pop_slot(vm, r[R2_SP], plain))) {
                 goto stop;
             }
             r[R2_SP] += 4;
@@ -821,7 +828,7 @@ dispatch:
             NEXT();
         TARGET(D_ENTER): {
             uint32_t sp = r[R2_SP];
-            if (!(slot = push_slot(vm, sp)) || d->imm > sp - 4 - vm->control[CR_SLO]) {
+            if (!(slot = push_slot(vm, sp, plain)) || d->imm > sp - 4 - vm->control[CR_SLO]) {
                 goto stop;
             }
             write_le32(slot, r[R1_BP]);
@@ -831,7 +838,7 @@ dispatch:
             NEXT();
         }
         TARGET(D_LEAVE):
-            if (!(slot = pop_slot(vm, r[R1_BP]))) {
+            if (!(slot = pop_slot(vm, r[R1_BP], plain))) {
                 goto stop;
             }
             r[R2_SP] = r[R1_BP] + 4;
