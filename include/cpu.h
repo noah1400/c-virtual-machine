@@ -52,17 +52,19 @@ static inline void cpu_push_frame(VM *vm, uint32_t site, uint32_t resume, int ve
 // A return drops the calls whose return address now lies below SP; an interrupt return also
 // drops the innermost interrupt, as it may switch to another stack
 static inline void cpu_pop_frames(VM *vm, int interrupt_return) {
-    while (vm->call_depth > 0) {
-        const CallFrame *top = &vm->call_frames[vm->call_depth - 1];
+    uint32_t depth = vm->call_depth, sp = vm->registers[R2_SP];
+    while (depth > 0) {
+        const CallFrame *top = &vm->call_frames[depth - 1];
         if (top->vector >= 0) {
-            vm->call_depth -= interrupt_return != 0;
-            return;
+            depth -= interrupt_return != 0;
+            break;
         }
-        if (!interrupt_return && top->slot >= vm->registers[R2_SP]) {
-            return;
+        if (!interrupt_return && top->slot >= sp) {
+            break;
         }
-        vm->call_depth--;
+        depth--;
     }
+    vm->call_depth = depth;
 }
 uint32_t cpu_unwind_calls(VM *vm, uint32_t count, uint32_t pc);
 
