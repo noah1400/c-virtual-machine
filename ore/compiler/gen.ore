@@ -3016,8 +3016,12 @@ fn count_expr(e: *ast.Expr, weight: int) {
     if (e == null) {
         return;
     }
+    // Reading a scalar from a register spares a memory operand, which counts as a quarter of an instruction
     if (e.kind == ast.ExprKind.NAME && e.symbol != null && e.symbol.kind == ast.SymbolKind.LOCAL) {
         touch(e.symbol);
+        if (check.is_scalar(e.type)) {
+            e.symbol.gain += weight / 4;
+        }
     }
     if (e.kind == ast.ExprKind.STRUCT || e.kind == ast.ExprKind.ARRAY ||
         e.kind == ast.ExprKind.CALL && (e.builtin == ast.Builtin.SYSCALL || is_aggregate(e.type))) {
@@ -3095,7 +3099,11 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
             } else if (is_through_local(s.target)) {
                 s.target.left.symbol.gain += 2 * weight;
             }
-            count_expr(s.target, weight);
+            if (target != null) {
+                touch(target);
+            } else {
+                count_expr(s.target, weight);
+            }
             // The address of an element waits while the value is computed
             if (s.target.kind == ast.ExprKind.INDEX && needs_code(value)) {
                 count_held(value, weight);
