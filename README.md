@@ -603,6 +603,8 @@ A *target* can be:
 | `POPA` | 0x85 | Restores the registers saved by `PUSHA`, except SP and PC |
 | `ENTER #n` | 0x86 | Pushes BP, sets BP = SP, then reserves *n* bytes |
 | `LEAVE` | 0x87 | Sets SP = BP, then pops BP |
+| `PUSHM Ra, Rb` | 0x88 | Pushes Rb down to Ra as `PUSHA` does, so `[SP + 4*(n−a)]` holds R*n*. `vmasm` wants Ra first |
+| `POPM Ra, Rb` | 0x89 | Restores the registers saved by `PUSHM Ra, Rb`, except SP and PC |
 
 After `CALL` and `ENTER`, `[BP+4]` is the return address and `[BP+8]` is the last argument pushed before the call.
 

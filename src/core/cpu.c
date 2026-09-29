@@ -94,18 +94,18 @@ void cpu_leave_frame(VM *vm) {
     }
 }
 
-// Pushes R15 down to R0 so that [SP + 4 * n] holds Rn, saving SP as it was before the first push
-void cpu_push_all(VM *vm) {
+// Pushes last down to first so that [SP + 4 * (n - first)] holds Rn, saving SP as it was before the first push
+void cpu_push_registers(VM *vm, uint32_t first, uint32_t last) {
     uint32_t original_sp = vm->registers[R2_SP];
 
-    for (int i = 15; i >= 0 && vm->last_error == VM_ERROR_NONE; i--) {
+    for (uint32_t i = last + 1; i-- > first && vm->last_error == VM_ERROR_NONE;) {
         cpu_stack_push(vm, i == R2_SP ? original_sp : vm->registers[i]);
     }
 }
 
-// Pops registers saved by cpu_push_all, discarding the saved SP and PC
-void cpu_pop_all(VM *vm) {
-    for (int i = 0; i < 16 && vm->last_error == VM_ERROR_NONE; i++) {
+// Pops registers saved by cpu_push_registers, discarding the saved SP and PC
+void cpu_pop_registers(VM *vm, uint32_t first, uint32_t last) {
+    for (uint32_t i = first; i <= last && vm->last_error == VM_ERROR_NONE; i++) {
         uint32_t value = cpu_stack_pop(vm);
         if (vm->last_error == VM_ERROR_NONE && i != R2_SP && i != R3_PC) {
             vm->registers[i] = value;

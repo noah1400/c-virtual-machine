@@ -103,6 +103,8 @@
 #define POPA_OP     (uint8_t)0x85 // POPA | - | Pop all registers | None
 #define ENTER_OP    (uint8_t)0x86 // ENTER | Size | Create stack frame | None
 #define LEAVE_OP    (uint8_t)0x87 // LEAVE | - | Destroy stack frame | None
+#define PUSHM_OP    (uint8_t)0x88 // PUSHM | Reg1, Reg2 | Push Reg2 down to Reg1 | None
+#define POPM_OP     (uint8_t)0x89 // POPM | Reg1, Reg2 | Pop Reg1 up to Reg2 | None
 
 // System Instructions (0xA0-0xBF)
 #define HALT_OP     (uint8_t)0xA0 // HALT | - | Halt execution | None

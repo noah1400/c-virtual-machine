@@ -1169,7 +1169,14 @@ static int encode(Assembler *as, const InstructionInfo *info, const Operand *ops
             in->mode = REG_MODE;
             in->reg1 = ops[0].reg;
             in->reg2 = ops[1].reg;
-            return expect_register(as, info, &ops[0], 1) && expect_register(as, info, &ops[1], 2);
+            if (!expect_register(as, info, &ops[0], 1) || !expect_register(as, info, &ops[1], 2)) {
+                return 0;
+            }
+            if ((info->opcode == PUSHM_OP || info->opcode == POPM_OP) && in->reg1 > in->reg2) {
+                asm_error(as, "%s takes the lower register first", info->mnemonic);
+                return 0;
+            }
+            return 1;
         case FMT_REG_CTRL:
             in->reg1 = ops[0].reg;
             return expect_register(as, info, &ops[0], 1) && expect_control_register(as, &ops[1], in);

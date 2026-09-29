@@ -74,10 +74,25 @@ static uint16_t operand_uses(const Instruction *in, int reg) {
     return in->mode == REG_MODE || in->mode == REGM_MODE || in->mode == IDX_MODE ? bit(reg) : 0;
 }
 
+// The registers from first to last
+static uint16_t register_range(int first, int last) {
+    uint16_t range = 0;
+    for (int r = first; r <= last; r++) {
+        range |= bit(r);
+    }
+    return range;
+}
+
 // The registers an instruction other than a call or syscall reads and writes, SP included
 static void effects(const Instruction *in, uint16_t *uses, uint16_t *defs) {
     const InstructionInfo *info = isa_by_opcode(in->opcode);
     uint16_t u = 0, d = 0;
+
+    if (in->opcode == PUSHM_OP || in->opcode == POPM_OP) {
+        *uses = in->opcode == PUSHM_OP ? register_range(in->reg1, in->reg2) : 0;
+        *defs = in->opcode == POPM_OP ? register_range(in->reg1, in->reg2) & TRACKED : 0;
+        return;
+    }
 
     switch (info ? info->format : FMT_NONE) {
         case FMT_REG_OPERAND:
@@ -443,7 +458,8 @@ static void step_routine(Checker *c, RoutineWalk *w, size_t self, size_t i) {
             }
             break;
         case PUSHA_OP:
-            for (int r = 15; r >= 0; r--) {
+        case PUSHM_OP:
+            for (int r = in->opcode == PUSHA_OP ? 15 : in->reg2; r >= (in->opcode == PUSHA_OP ? 0 : in->reg1); r--) {
                 if (!push_slot(&s, s.held[r], r)) {
                     w->opaque = 1;
                     return;
@@ -451,7 +467,8 @@ static void step_routine(Checker *c, RoutineWalk *w, size_t self, size_t i) {
             }
             break;
         case POPA_OP:
-            for (int r = 0; r < 16; r++) {
+        case POPM_OP:
+            for (int r = in->opcode == POPA_OP ? 0 : in->reg1; r <= (in->opcode == POPA_OP ? 15 : in->reg2); r++) {
                 if (s.depth == 0) {
                     w->opaque = 1;
                     return;
@@ -691,7 +708,7 @@ static void check_from(Checker *c, size_t start, Tracking *states, size_t *work)
             stop = in->immediate == 30;
         } else if (in->opcode == INT_OP) {
             forget_values(&t);
-        } else if (in->opcode != PUSHA_OP) {
+        } else if (in->opcode != PUSHA_OP && in->opcode != PUSHM_OP) {
             effects(in, &uses, &defs);
             read_values(c, &t, uses, i);
             write_values(&t, defs, i, 1);

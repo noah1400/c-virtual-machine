@@ -45,6 +45,8 @@ enum {
     RUN_POP,
     RUN_ENTER,
     RUN_LEAVE,
+    RUN_PUSHM,
+    RUN_POPM,
     RUN_MEMCPY,
     RUN_MEMSET,
     RUN_SYSCALL,
@@ -68,8 +70,8 @@ static const uint8_t runs[256] = {
     [JBE_OP] = RUN_JUMP,      [JA_OP] = RUN_JUMP,       [JL_OP] = RUN_JUMP,       [JGE_OP] = RUN_JUMP,
     [JLE_OP] = RUN_JUMP,      [JG_OP] = RUN_JUMP,       [JAE_OP] = RUN_JUMP,      [CALL_OP] = RUN_CALL,
     [RET_OP] = RUN_RET,       [LOOP_OP] = RUN_LOOP,     [PUSH_OP] = RUN_PUSH,     [POP_OP] = RUN_POP,
-    [ENTER_OP] = RUN_ENTER,   [LEAVE_OP] = RUN_LEAVE,   [MEMCPY_OP] = RUN_MEMCPY, [MEMSET_OP] = RUN_MEMSET,
-    [SYSCALL_OP] = RUN_SYSCALL,
+    [ENTER_OP] = RUN_ENTER,   [LEAVE_OP] = RUN_LEAVE,   [PUSHM_OP] = RUN_PUSHM,   [POPM_OP] = RUN_POPM,
+    [MEMCPY_OP] = RUN_MEMCPY, [MEMSET_OP] = RUN_MEMSET, [SYSCALL_OP] = RUN_SYSCALL,
 };
 
 #define EXTENDED_BIT (MODE_EXTENDED << 20)
@@ -128,7 +130,7 @@ enum {
     D_JUMP, D_JUMP_OUT, D_JUMP_V, D_JUMP_M,
     D_CALL, D_CALL_OUT, D_CALL_V, D_CALL_M, D_RET,
     D_LOOP, D_LOOP_OUT,
-    D_PUSH_V, D_PUSH_M, D_POP, D_ENTER, D_LEAVE, D_MEMCPY, D_MEMSET, D_SYSCALL,
+    D_PUSH_V, D_PUSH_M, D_POP, D_ENTER, D_LEAVE, D_PUSHM, D_POPM, D_MEMCPY, D_MEMSET, D_SYSCALL,
 };
 
 // An instruction as cpu_run runs it. Its operand, or the address of its operand, is (r[b] & mask) + imm.
@@ -460,6 +462,15 @@ static void decode(VM *vm, Decoded *d, uint32_t index, uint32_t words) {
         case RUN_LEAVE:
             d->kind = D_LEAVE;
             break;
+        case RUN_PUSHM:
+        case RUN_POPM:
+            // Ranges with SP, PC or SR in them are left to vm_step. The operand is the number of bytes.
+            d->b = (uint8_t)((w >> REG2) & 0x0F);
+            d->imm = 4 * (d->b - a + 1);
+            if (a <= d->b && (a > R4_SR || d->b < R2_SP)) {
+                d->kind = run == RUN_PUSHM ? D_PUSHM : D_POPM;
+            }
+            break;
         case RUN_MEMCPY:
         case RUN_MEMSET:
             // The size is an immediate or the register in the lowest bits
@@ -589,8 +600,8 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
         [D_CALL_V] = &&run_D_CALL_V,         [D_CALL_M] = &&run_D_CALL_M,         [D_RET] = &&run_D_RET,
         [D_LOOP] = &&run_D_LOOP,             [D_LOOP_OUT] = &&run_D_LOOP_OUT,     [D_PUSH_V] = &&run_D_PUSH_V,
         [D_PUSH_M] = &&run_D_PUSH_M,         [D_POP] = &&run_D_POP,               [D_ENTER] = &&run_D_ENTER,
-        [D_LEAVE] = &&run_D_LEAVE,           [D_MEMCPY] = &&run_D_MEMCPY,         [D_MEMSET] = &&run_D_MEMSET,
-        [D_SYSCALL] = &&run_D_SYSCALL,
+        [D_LEAVE] = &&run_D_LEAVE,           [D_PUSHM] = &&run_D_PUSHM,           [D_POPM] = &&run_D_POPM,
+        [D_MEMCPY] = &&run_D_MEMCPY,         [D_MEMSET] = &&run_D_MEMSET,         [D_SYSCALL] = &&run_D_SYSCALL,
     };
 #endif
     Decoded *code = vm->decoded, *d = code + index, *next = d + d->len;
@@ -867,6 +878,101 @@ dispatch:
             r[R2_SP] = r[R1_BP] + 4;
             r[R1_BP] = read_le32(slot);
             NEXT();
+        TARGET(D_PUSHM): {
+            // Ra to Rb go to consecutive words from the new SP up; a stack that needs other checks stops
+            uint32_t sp = r[R2_SP], base = sp - d->imm;
+            const uint32_t *from = r + d->a;
+            if (base - vm->control[CR_SLO] >= vm->stack_span || sp > vm->control[CR_SHI]) {
+                goto stop;
+            }
+            slot = vm->memory + base;
+            switch (d->imm / 4) {
+                case 11:
+                    write_le32(slot + 40, from[10]);
+                    // fall through
+                case 10:
+                    write_le32(slot + 36, from[9]);
+                    // fall through
+                case 9:
+                    write_le32(slot + 32, from[8]);
+                    // fall through
+                case 8:
+                    write_le32(slot + 28, from[7]);
+                    // fall through
+                case 7:
+                    write_le32(slot + 24, from[6]);
+                    // fall through
+                case 6:
+                    write_le32(slot + 20, from[5]);
+                    // fall through
+                case 5:
+                    write_le32(slot + 16, from[4]);
+                    // fall through
+                case 4:
+                    write_le32(slot + 12, from[3]);
+                    // fall through
+                case 3:
+                    write_le32(slot + 8, from[2]);
+                    // fall through
+                case 2:
+                    write_le32(slot + 4, from[1]);
+                    // fall through
+                case 1:
+                    write_le32(slot + 0, from[0]);
+                    // fall through
+                default:
+                    break;
+            }
+            r[R2_SP] = base;
+            NEXT();
+        }
+        TARGET(D_POPM): {
+            uint32_t sp = r[R2_SP];
+            uint32_t *to = r + d->a;
+            if (sp - vm->control[CR_SLO] >= vm->stack_span || sp + d->imm > vm->control[CR_SHI]) {
+                goto stop;
+            }
+            slot = vm->memory + sp;
+            switch (d->imm / 4) {
+                case 11:
+                    to[10] = read_le32(slot + 40);
+                    // fall through
+                case 10:
+                    to[9] = read_le32(slot + 36);
+                    // fall through
+                case 9:
+                    to[8] = read_le32(slot + 32);
+                    // fall through
+                case 8:
+                    to[7] = read_le32(slot + 28);
+                    // fall through
+                case 7:
+                    to[6] = read_le32(slot + 24);
+                    // fall through
+                case 6:
+                    to[5] = read_le32(slot + 20);
+                    // fall through
+                case 5:
+                    to[4] = read_le32(slot + 16);
+                    // fall through
+                case 4:
+                    to[3] = read_le32(slot + 12);
+                    // fall through
+                case 3:
+                    to[2] = read_le32(slot + 8);
+                    // fall through
+                case 2:
+                    to[1] = read_le32(slot + 4);
+                    // fall through
+                case 1:
+                    to[0] = read_le32(slot + 0);
+                    // fall through
+                default:
+                    break;
+            }
+            r[R2_SP] = sp + d->imm;
+            NEXT();
+        }
         TARGET(D_MEMCPY):
         TARGET(D_MEMSET): {
             uint32_t size = (r[d->op] & d->mask) + d->imm, from = r[d->b], to = r[d->a];

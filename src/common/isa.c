@@ -82,6 +82,8 @@ static const InstructionInfo instruction_table[] = {
     { "POPA",    POPA_OP,    FMT_NONE,         0,                  0 },
     { "ENTER",   ENTER_OP,   FMT_IMM,          MODE_BIT(IMM_MODE), 0 },
     { "LEAVE",   LEAVE_OP,   FMT_NONE,         0,                  0 },
+    { "PUSHM",   PUSHM_OP,   FMT_REG_REG,      MODE_BIT(REG_MODE), 0 },
+    { "POPM",    POPM_OP,    FMT_REG_REG,      MODE_BIT(REG_MODE), 0 },
 
     { "HALT",    HALT_OP,    FMT_NONE,         0,                  1 },
     { "INT",     INT_OP,     FMT_IMM,          MODE_BIT(IMM_MODE), 0 },

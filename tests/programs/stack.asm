@@ -1,4 +1,4 @@
-; Recursion with stack frames, flag saving and PUSHA/POPA
+; Recursion with stack frames, flag saving, PUSHA/POPA and PUSHM/POPM
 
 .text
     PUSH #6
@@ -30,6 +30,27 @@
     LOAD R8, [SP+36]
     CALL print_int
     POPA
+
+    ; PUSHM and POPM save and restore a range of registers the same way
+    LOAD R8, #33
+    LOAD R9, #44
+    LOAD R10, #55
+    PUSHM R8, R10
+    LOAD R8, #0
+    LOAD R9, #0
+    LOAD R10, #0
+    POPM R8, R10
+    CALL print_int
+    MOVE R8, R9
+    CALL print_int
+    MOVE R8, R10
+    CALL print_int
+
+    ; PUSHM leaves Rn at [SP + 4 * (n - first)]
+    PUSHM R9, R10
+    LOAD R8, [SP+4]
+    CALL print_int
+    POPM R9, R10
 
     MOVE R8, SP
     CALL print_hex

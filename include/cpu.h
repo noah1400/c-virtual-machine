@@ -28,8 +28,8 @@ void cpu_stack_push(VM *vm, uint32_t value);
 uint32_t cpu_stack_pop(VM *vm);
 void cpu_enter_frame(VM *vm, uint32_t locals_size);
 void cpu_leave_frame(VM *vm);
-void cpu_push_all(VM *vm);
-void cpu_pop_all(VM *vm);
+void cpu_push_registers(VM *vm, uint32_t first, uint32_t last);
+void cpu_pop_registers(VM *vm, uint32_t first, uint32_t last);
 
 void cpu_interrupt(VM *vm, uint8_t vector);
 int cpu_exception(VM *vm);

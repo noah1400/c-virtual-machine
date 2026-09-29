@@ -193,10 +193,16 @@ static int execute_stack(VM *vm, const Instruction *instr) {
             break;
         }
         case PUSHA_OP:
-            cpu_push_all(vm);
+            cpu_push_registers(vm, 0, 15);
             break;
         case POPA_OP:
-            cpu_pop_all(vm);
+            cpu_pop_registers(vm, 0, 15);
+            break;
+        case PUSHM_OP:
+            cpu_push_registers(vm, instr->reg1, instr->reg2);
+            break;
+        case POPM_OP:
+            cpu_pop_registers(vm, instr->reg1, instr->reg2);
             break;
         case ENTER_OP:
             cpu_enter_frame(vm, instr->immediate);
