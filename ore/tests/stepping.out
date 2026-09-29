@@ -11,13 +11,13 @@ SR  0x00000046   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000001   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
 Flags: [-NC---S-]
-Instructions executed: 11, last: ENTER #4
+Instructions executed: 10, last: ENTER #4
 0x001C <stepping.square+4>
   ore/tests/stepping.ore:3: var result = x * x;
 Next instruction: LOAD R0, [BP+8]
 > bt
 #0 0x001C <stepping.square+4> ore/tests/stepping.ore:3: LOAD R0, [BP+8]
-#1 0x0050 <stepping.main.L1+4> ore/tests/stepping.ore:10: CALL stepping.square
+#1 0x004C <stepping.main.L1+4> ore/tests/stepping.ore:10: CALL stepping.square
 #2 0x000C <main> ore/tests/stepping.ore:7: CALL stepping.main
 #3 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main
 > n
@@ -26,7 +26,7 @@ SR  0x00000044   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000001   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
 Flags: [--C---S-]
-Instructions executed: 14, last: STORE R0, [BP-4]
+Instructions executed: 13, last: STORE R0, [BP-4]
 0x0028 <stepping.square+16>
   ore/tests/stepping.ore:4: return result;
 Next instruction: LOAD R0, [BP-4]
@@ -36,33 +36,33 @@ SR  0x00000044   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000001   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
 Flags: [--C---S-]
-Instructions executed: 15, last: LOAD R0, [BP-4]
+Instructions executed: 14, last: LOAD R0, [BP-4]
 0x002C <stepping.square.ret>
   ore/tests/stepping.ore:5: }
 Next instruction: LEAVE
 > n
-R0  0x00000001   BP  0x00100000   SP  0x000FFFF0   PC  0x00000054
+R0  0x00000001   BP  0x00100000   SP  0x000FFFF0   PC  0x00000050
 SR  0x00000044   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000001   R9  0x00000000   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
 Flags: [--C---S-]
-Instructions executed: 17, last: RET #4
-0x0054 <stepping.main.L1+8>
+Instructions executed: 16, last: RET #4
+0x0050 <stepping.main.L1+8>
   ore/tests/stepping.ore:10: total += square(i);
 Next instruction: ADD R9, R0
 > d 1
 Deleted breakpoint 1
 > b stepping.ore:12
-Breakpoint 1 at 0x0064 <stepping.main.L3>
+Breakpoint 1 at 0x0060 <stepping.main.L3>
 > c
-Breakpoint 1 at 0x0064
-R0  0x00000009   BP  0x00100000   SP  0x000FFFF0   PC  0x00000064
+Breakpoint 1 at 0x0060
+R0  0x00000009   BP  0x00100000   SP  0x000FFFF0   PC  0x00000060
 SR  0x00000040   R5  0x00000000   R6  0x00000000   R7  0x00000000
 R8  0x00000004   R9  0x0000000E   R10 0x00000000   R11 0x00000000
 R12 0x00000000   R13 0x00000000   R14 0x00000000   LR  0x00000000
 Flags: [------S-]
-Instructions executed: 47, last: JLE stepping.main.L1
-0x0064 <stepping.main.L3>
+Instructions executed: 46, last: JLE stepping.main.L1
+0x0060 <stepping.main.L3>
   ore/tests/stepping.ore:12: print(total, "\n");
 Next instruction: MOVE R0, R9
 > q

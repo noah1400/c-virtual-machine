@@ -3368,8 +3368,10 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     if (!stack.frameless) {
         format(&g.text, "    ENTER #%d\n", [][]u8 {}, []int { g.frame });
     }
-    for (var i = 0; i < saved; i += 1) {
-        format(&g.text, "    PUSH %s\n", [][]u8 { register_names[8 + i] }, []int {});
+    if (saved == 1) {
+        str.append(&g.text, "    PUSH R8\n");
+    } else if (saved > 1) {
+        format(&g.text, "    PUSHM R8, %s\n", [][]u8 { register_names[7 + saved] }, []int {});
     }
     if (frame != null && frame.reg != 0) {
         format(&g.text, "    LEA %s, [BP+4]\n", [][]u8 { register_names[frame.reg] }, []int {});
@@ -3397,8 +3399,10 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
         }
     }
     var epilogue = str.builder(64);
-    for (var i = saved - 1; i >= 0; i -= 1) {
-        format(&epilogue, "    POP %s\n", [][]u8 { register_names[8 + i] }, []int {});
+    if (saved == 1) {
+        str.append(&epilogue, "    POP R8\n");
+    } else if (saved > 1) {
+        format(&epilogue, "    POPM R8, %s\n", [][]u8 { register_names[7 + saved] }, []int {});
     }
     if (!stack.frameless) {
         str.append(&epilogue, "    LEAVE\n");
@@ -3411,9 +3415,9 @@ fn gen_function(g: *Gen, d: *ast.Decl) {
     } else {
         str.append(&epilogue, "    RET\n");
     }
-    // Returns before the end leave through a copy of a short epilogue instead of jumping to it
+    // Returns before the end leave through a copy of the epilogue instead of jumping to it
     var rest = start;
-    for (var i = 0; i < g.return_count && saved <= 3; i += 1) {
+    for (var i = 0; i < g.return_count; i += 1) {
         str.append(&g.text, body[rest:g.returns[i]]);
         str.append(&g.text, str.text(&epilogue));
         rest = g.returns[i] + 13;
