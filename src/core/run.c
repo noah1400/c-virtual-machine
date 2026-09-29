@@ -171,14 +171,16 @@ INLINE int writes_special(uint32_t reg) {
     return reg == R3_PC || reg == R4_SR;
 }
 
-// The host address of size bytes at address if accessing them needs no fault; cpu_run runs without paging
-INLINE uint8_t *reach(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
+// Finds the host address of size bytes at address; returns 0 if accessing them would fault. cpu_run runs
+// without paging.
+INLINE int reach(VM *vm, uint32_t address, uint32_t size, uint8_t access, uint8_t **host) {
     uint64_t end = (uint64_t)address + size;
+    *host = vm->memory + address;
     if (end <= vm->memory_size && (end <= vm->control[CR_HEAPLO] || address >= vm->control[CR_HEAPHI] ||
                                    (size <= HEAP_UNIT && memory_heap_allows(vm, address, size, access)))) {
-        return vm->memory + address;
+        return 1;
     }
-    return memory_direct(vm, address, size, access);
+    return (*host = memory_direct(vm, address, size, access)) != NULL;
 }
 
 // The stack lies between SLO and SHI. When it lies in memory above the heap and the decoded words, which only
@@ -205,10 +207,11 @@ OUTLINE uint8_t *push_slot(VM *vm, uint32_t sp) {
     if (sp < low || sp > vm->control[CR_SHI] || sp - low < 4) {
         return NULL;
     }
-    uint8_t *slot = reach(vm, sp - 4, 4, PROT_WRITE);
-    if (slot) {
-        written(vm, sp - 4, 4);
+    uint8_t *slot;
+    if (!reach(vm, sp - 4, 4, PROT_WRITE, &slot)) {
+        return NULL;
     }
+    written(vm, sp - 4, 4);
     return slot;
 }
 
@@ -217,7 +220,8 @@ OUTLINE uint8_t *pop_slot(VM *vm, uint32_t sp) {
     if (sp < vm->control[CR_SLO] || sp > high || high - sp < 4) {
         return NULL;
     }
-    return reach(vm, sp, 4, PROT_READ);
+    uint8_t *slot;
+    return reach(vm, sp, 4, PROT_READ, &slot) ? slot : NULL;
 }
 
 // The number of words below the heap and the end of memory that start an instruction whose extension word
@@ -480,8 +484,8 @@ INLINE uint32_t operand(const uint32_t *r, const Decoded *d) {
 
 // Reads width bytes at address into value; returns 0 if reading them would fault
 INLINE int load(VM *vm, uint32_t address, uint32_t width, uint32_t *value) {
-    const uint8_t *bytes = reach(vm, address, width, PROT_READ);
-    if (!bytes) {
+    uint8_t *bytes;
+    if (!reach(vm, address, width, PROT_READ, &bytes)) {
         return 0;
     }
     *value = width == 4 ? read_le32(bytes) : width == 2 ? read_le16(bytes) : bytes[0];
@@ -629,7 +633,7 @@ dispatch:
             NEXT();
         TARGET(D_STORE):
             value = operand(r, d);
-            if (!(slot = reach(vm, value, 4, PROT_WRITE))) {
+            if (!reach(vm, value, 4, PROT_WRITE, &slot)) {
                 goto stop;
             }
             write_le32(slot, r[d->a]);
@@ -637,7 +641,7 @@ dispatch:
             NEXT();
         TARGET(D_STOREB):
             value = operand(r, d);
-            if (!(slot = reach(vm, value, 1, PROT_WRITE))) {
+            if (!reach(vm, value, 1, PROT_WRITE, &slot)) {
                 goto stop;
             }
             slot[0] = (uint8_t)r[d->a];
@@ -645,7 +649,7 @@ dispatch:
             NEXT();
         TARGET(D_STOREW):
             value = operand(r, d);
-            if (!(slot = reach(vm, value, 2, PROT_WRITE))) {
+            if (!reach(vm, value, 2, PROT_WRITE, &slot)) {
                 goto stop;
             }
             write_le16(slot, (uint16_t)r[d->a]);
@@ -866,15 +870,15 @@ dispatch:
         TARGET(D_MEMCPY):
         TARGET(D_MEMSET): {
             uint32_t size = (r[d->op] & d->mask) + d->imm, from = r[d->b], to = r[d->a];
-            const uint8_t *source = NULL;
+            uint8_t *source = NULL;
             if (size == 0) {
                 NEXT();
             }
-            if (!(slot = reach(vm, to, size, PROT_WRITE)) ||
-                (d->kind == D_MEMCPY && !(source = reach(vm, from, size, PROT_READ)))) {
+            if (!reach(vm, to, size, PROT_WRITE, &slot) ||
+                (d->kind == D_MEMCPY && !reach(vm, from, size, PROT_READ, &source))) {
                 goto stop;
             }
-            if (source) {
+            if (d->kind == D_MEMCPY) {
                 memmove(slot, source, size);
             } else {
                 memset(slot, (uint8_t)from, size);
