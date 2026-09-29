@@ -1,0 +1,92 @@
+// Locals that live at different times, which share registers
+
+// a is not needed after the first statement, so the locals after it can take its register
+fn early(a: int, b: int) int {
+    var sum = a * 2;
+    var x = 0;
+    for (var i = 0; i < b; i += 1) {
+        x += i;
+    }
+    var y = x + sum;
+    return y;
+}
+
+fn branches(n: int) int {
+    var result = 0;
+    if (n > 5) {
+        var big = n * 3;
+        var more = big + 1;
+        result = more;
+    } else {
+        var small = n - 1;
+        var less = small * 2;
+        result = less;
+    }
+    switch (n % 3) {
+        case 0 {
+            var z = n + 100;
+            result += z;
+        }
+        case 1 {
+            var w = n + 200;
+            result += w;
+        }
+        default {
+            var v = n + 300;
+            result += v;
+        }
+    }
+    return result;
+}
+
+// total lives across all the loops, while each counter lives only in its own
+fn loops(n: int) int {
+    var total = 0;
+    for (var i = 0; i < n; i += 1) {
+        var square = i * i;
+        total += square;
+    }
+    for (var j = 0; j < n; j += 1) {
+        var cube = j * j * j;
+        total += cube;
+        var k = 0;
+        while (k < j) {
+            var step = k + j;
+            total += step;
+            k += 1;
+        }
+    }
+    // A local from before a loop that only the loop changes, and one that it only reads
+    var last = -1;
+    var limit = n / 2;
+    for (var i = 0; i < n; i += 1) {
+        if (i < limit) {
+            last = i;
+        }
+    }
+    return total + last;
+}
+
+fn strings(words: [][]u8) int {
+    var letters = 0;
+    for (var i = 0; i < words.len; i += 1) {
+        var word = words[i];
+        for (var j = 0; j < word.len; j += 1) {
+            letters += word[j] as int;
+        }
+    }
+    var first = words[0];
+    var count = first.len;
+    return letters + count;
+}
+
+fn main() int {
+    print(early(21, 10), "\n");
+    for (var n = 0; n < 8; n += 1) {
+        print(branches(n), " ");
+    }
+    print("\n", loops(12), "\n");
+    var words = [3][]u8 { "one", "three", "seven" };
+    print(strings(words[:]), "\n");
+    return 0;
+}

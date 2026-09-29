@@ -2935,6 +2935,26 @@ var makes_temporary: bool;
 var temp_gains: [4]int;
 var temp_depth: int;
 
+// Where counting has got to in the function: a number that grows with each statement
+var position: int;
+
+// Notes that code reads or writes a local here, which therefore keeps its register until here
+fn touch(s: *ast.Symbol) {
+    if (s.live_to < position) {
+        s.live_to = position;
+    }
+}
+
+// The locals from before a loop that it reads or writes stay live to its end, since each round comes back to them
+fn live_through(start: int, locals: *ast.List) {
+    for (var i = 0; i < locals.count; i += 1) {
+        var s = locals.items[i] as *ast.Symbol;
+        if (s.live_from < start && s.live_to >= start) {
+            s.live_to = position;
+        }
+    }
+}
+
 // Whether e is reached through a pointer in a local, as in_register finds it once the local has a register
 fn through_local(e: *ast.Expr) bool {
     switch (e.kind) {
@@ -2996,6 +3016,9 @@ fn count_expr(e: *ast.Expr, weight: int) {
     if (e == null) {
         return;
     }
+    if (e.kind == ast.ExprKind.NAME && e.symbol != null && e.symbol.kind == ast.SymbolKind.LOCAL) {
+        touch(e.symbol);
+    }
     if (e.kind == ast.ExprKind.STRUCT || e.kind == ast.ExprKind.ARRAY ||
         e.kind == ast.ExprKind.CALL && (e.builtin == ast.Builtin.SYSCALL || is_aggregate(e.type))) {
         makes_temporary = true;
@@ -3043,6 +3066,7 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
     if (weight < 4096) {
         inner = weight * 8;
     }
+    position += 1;
     switch (s.kind) {
         case ast.StmtKind.BLOCK {
             for (var i = 0; i < s.body.len; i += 1) {
@@ -3054,6 +3078,8 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
             if (s.value == null || is_simple(s.value)) {
                 s.symbol.gain += weight;
             }
+            s.symbol.live_from = position;
+            s.symbol.live_to = position;
             ast.add(locals, s.symbol as *u8);
         }
         case ast.StmtKind.ASSIGN {
@@ -3093,14 +3119,20 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
             count_stmt(s.otherwise, weight, locals);
         }
         case ast.StmtKind.WHILE {
+            position += 1;
+            var start = position;
             count_expr(s.cond, inner);
             count_stmt(s.then, inner, locals);
+            live_through(start, locals);
         }
         case ast.StmtKind.FOR {
             count_stmt(s.init, weight, locals);
+            position += 1;
+            var start = position;
             count_expr(s.cond, inner);
             count_stmt(s.step, inner, locals);
             count_stmt(s.then, inner, locals);
+            live_through(start, locals);
         }
         case ast.StmtKind.SWITCH {
             count_expr(s.cond, weight);
@@ -3112,11 +3144,72 @@ fn count_stmt(s: *ast.Stmt, weight: int, locals: *ast.List) {
     }
 }
 
+// The locals that each of R8 to R15 holds, and the registers that values kept while others are computed take
+var holders: [8]ast.List;
+var kept: [8]bool;
+
+// Whether a local can have R8 + r: the locals already there live at other times
+fn fits(s: *ast.Symbol, r: int) bool {
+    if (r >= 8 || kept[r]) {
+        return false;
+    }
+    for (var i = 0; i < holders[r].count; i += 1) {
+        var other = holders[r].items[i] as *ast.Symbol;
+        if (other.live_from <= s.live_to && s.live_from <= other.live_to) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// What a local gains from each register it takes, where it can have one
+fn priority(s: *ast.Symbol) int {
+    if (s.address_taken || s.gain <= 0) {
+        return 0;
+    }
+    if (check.is_scalar(s.type)) {
+        return s.gain;
+    }
+    if (s.type.kind == ast.TypeKind.SLICE) {
+        return s.gain / 2;
+    }
+    return 0;
+}
+
+// Gives a local the lowest register, or pair of them for a slice, whose locals live at other times, as long
+// as what it gains pays for saving and restoring the registers it opens; returns how many are open
+fn place_local(s: *ast.Symbol, count: int) int {
+    var size = 1;
+    if (s.type.kind == ast.TypeKind.SLICE) {
+        size = 2;
+    }
+    var r = 0;
+    while (r + size <= 8 && (!fits(s, r) || size == 2 && !fits(s, r + 1))) {
+        r += 1;
+    }
+    var opened = r + size - count;
+    if (opened < 0) {
+        opened = 0;
+    }
+    if (r + size > 8 || s.gain <= 2 * opened) {
+        return count;
+    }
+    s.reg = 8 + r;
+    for (var i = 0; i < size; i += 1) {
+        ast.add(&holders[r + i], s as *u8);
+    }
+    if (r + size > count) {
+        return r + size;
+    }
+    return count;
+}
+
 // Scalar locals and parameters whose address is not taken can live in R8 to R15, which calls keep, and so
-// can the values kept at each depth while others are computed. A local or a depth gets one when it saves
-// more than saving and restoring the register costs, and a parameter more than loading it as well. A slice
-// takes two, which count half its gain each.
-// Returns how many registers from R8 on the function uses, and tells whether a local is left in memory.
+// can the values kept at each depth while others are computed. Locals that live at different times share a
+// register. A local gets one when it gains from it, and opens a register when it saves more than saving and
+// restoring the register costs, and a parameter more than loading it as well. A slice takes two, which count
+// half its gain each; a depth takes a register of its own. Returns how many registers from R8 on the
+// function uses, and tells whether a local is left in memory.
 fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
     var locals = ast.List {};
     makes_temporary = false;
@@ -3125,53 +3218,67 @@ fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
         temp_registers[i] = 0;
     }
     temp_depth = 0;
+    position = 0;
     for (var i = 0; i < d.params.len; i += 1) {
-        d.params[i].symbol.gain = -1;
-        if (d.params[i].symbol.type.kind == ast.TypeKind.SLICE) {
-            d.params[i].symbol.gain = -2;
+        var param = d.params[i].symbol;
+        param.gain = -1;
+        if (param.type.kind == ast.TypeKind.SLICE) {
+            param.gain = -2;
         }
-        ast.add(&locals, d.params[i].symbol as *u8);
+        param.live_from = 0;
+        param.live_to = 0;
+        ast.add(&locals, param as *u8);
     }
     count_stmt(d.body, 1, &locals);
-    var temps = temp_gains[0] > 2 || temp_gains[1] > 2 || temp_gains[2] > 2 || temp_gains[3] > 2;
-    var count = 0;
-    while (count < 8) {
-        var best: *ast.Symbol = null;
-        var priority = 0;
-        for (var i = 0; i < locals.count; i += 1) {
-            var s = locals.items[i] as *ast.Symbol;
-            var p = 0;
-            if (s.reg != 0 || s.address_taken) {
-                continue;
+
+    // The locals that gain from a register, the most first
+    var order = ast.List {};
+    for (var i = 0; i < locals.count; i += 1) {
+        var s = locals.items[i] as *ast.Symbol;
+        if (priority(s) > 0) {
+            ast.add(&order, s as *u8);
+            var at = order.count - 1;
+            while (at > 0 && priority(order.items[at - 1] as *ast.Symbol) < priority(s)) {
+                order.items[at] = order.items[at - 1];
+                at -= 1;
             }
-            if (check.is_scalar(s.type) && s.gain > 2) {
-                p = s.gain;
-            } else if (s.type.kind == ast.TypeKind.SLICE && s.gain > 4 && count < 7) {
-                p = s.gain / 2;
-            }
-            if (p > 0 && (best == null || p > priority)) {
-                best = s;
-                priority = p;
-            }
+            order.items[at] = s as *u8;
         }
+    }
+    for (var r = 0; r < 8; r += 1) {
+        holders[r].count = 0;
+        kept[r] = false;
+    }
+    var temps = temp_gains[0] > 2 || temp_gains[1] > 2 || temp_gains[2] > 2 || temp_gains[3] > 2;
+    var decided: [4]bool;
+    var count = 0;
+    var next = 0;
+    while (true) {
         var depth = -1;
         for (var i = 0; i < temp_gains.len && temps; i += 1) {
-            if (temp_registers[i] == 0 && temp_gains[i] > 2 && (depth < 0 || temp_gains[i] > temp_gains[depth])) {
+            if (!decided[i] && temp_gains[i] > 2 && (depth < 0 || temp_gains[i] > temp_gains[depth])) {
                 depth = i;
             }
         }
-        if (depth >= 0 && (best == null || temp_gains[depth] > priority)) {
-            temp_registers[depth] = 8 + count;
-        } else if (best != null) {
-            best.reg = 8 + count;
-            if (best.type.kind == ast.TypeKind.SLICE) {
+        var s: *ast.Symbol = null;
+        if (next < order.count) {
+            s = order.items[next] as *ast.Symbol;
+        }
+        if (depth >= 0 && (s == null || temp_gains[depth] > priority(s))) {
+            decided[depth] = true;
+            if (count < 8) {
+                temp_registers[depth] = 8 + count;
+                kept[count] = true;
                 count += 1;
             }
+        } else if (s != null) {
+            next += 1;
+            count = place_local(s, count);
         } else {
             break;
         }
-        count += 1;
     }
+    free(order.items);
     *in_memory = makes_temporary;
     for (var i = d.params.len; i < locals.count; i += 1) {
         if ((locals.items[i] as *ast.Symbol).reg == 0) {
