@@ -318,9 +318,11 @@ fn main() {
 ```console
 $ ./vm digits.bin
 vm: error: index 10 is out of bounds for length 10
-vm: at 0x0040 <digits.digit+16> digits.ore:2: CALL rt.index_error
-vm: #1 0x0084 <digits.main+12> digits.ore:6: CALL digits.digit
+vm: at 0x00EC <digits.main+32> digits.ore:2: CALL rt.index_error
+vm: #1 0x00D0 <digits.main+4> digits.ore:6: inlined
 ```
+
+`vmc` copies small functions such as `digit` into the code that calls them. The call still shows in the report, marked `inlined`.
 
 Integer overflow is not an error. It wraps around.
 

@@ -139,7 +139,7 @@ vm: #1 0x0008 <outer> fault.asm:11: CALL divide
 vm: #2 0x0000 <main> fault.asm:7: CALL outer
 ```
 
-The VM keeps a shadow stack of the calls and interrupts in flight for this. Frames that the program left without returning, for example by switching stacks, are left out.
+The VM keeps a shadow stack of the calls and interrupts in flight for this. Frames that the program left without returning, for example by switching stacks, are left out. A call whose code a compiler copied into the caller, and marked with [`.inline`](#directives), gets a frame of its own too.
 
 `-H COUNT` puts the last COUNT instructions before the report, with the registers each one changed:
 
@@ -710,6 +710,7 @@ Comparisons and logical operators yield 1 or 0. Strings and characters accept th
 | `.include "file"` | Insert a file. It is searched for next to the including file, then in `-I` directories |
 | `.incbin "file"[, offset[, length]]` | Insert the bytes of a file, found like an include, or *length* of them from *offset* on |
 | `.loc "file", line[, "text"]` | Attribute the code and labels that follow to a line of another source file (see below) |
+| `.inline "file", line` ... `.endinline` | Mark code copied from a function into a call of it at a line of another source file (see below) |
 | `.macro` ... `.endm` | Define a macro |
 | `.if`, `.ifdef`, `.ifndef`, `.else`, `.endif` | Conditional assembly |
 | `.library` | Make the rest of the file a [library](#libraries), of which a program only gets what it uses |
@@ -735,6 +736,28 @@ vm: at 0x0024 <fact+24> fact.c:3: DIV R5, R0
 ```
 
 The file name is recorded as written. Without the text, vmasm takes the line from the file when it can read it. The text is what coverage listings show, and what the debugger shows when it cannot open the file.
+
+`.inline` and `.endinline` enclose code that a compiler copied from a function into a call of it, and name the line of the call. Fault reports, backtraces and the debugger's `bt` show that call as a frame, marked `inlined`, at the start of the copy and below the frames of what the copy holds. Copies nest up to 16 deep:
+
+```asm
+    .inline "shapes.c", 10
+    .inline "shapes.c", 5
+    .loc "shapes.c", 2, "    return a / b;"
+    MOVE R6, R0
+    DIV R6, R5
+    .endinline
+    .loc "shapes.c", 5, "    return ratio(a, b) * a;"
+    MUL R6, R0
+    .endinline
+```
+
+```console
+vm: error: Division by zero
+vm: at 0x0024 <area+16> shapes.c:2: DIV R6, R5
+vm: #1 0x0020 <area+12> shapes.c:5: inlined
+vm: #2 0x0020 <area+12> shapes.c:10: inlined
+vm: #3 0x0008 <main+8> main.asm:10: CALL area
+```
 
 ### Structures
 
@@ -921,8 +944,8 @@ Usage: vmc [options] program.ore [file.asm...]
 
 Two compilers take these options:
 
-- **`vmc`** is written in Ore, in `ore/compiler`, and optimizes. It keeps scalar locals and parameters, the pointer and length of slices, and values that wait while another is computed in registers where that saves more than it costs, with locals that live at different times sharing one, uses variables, fields and slice lengths as operands where instructions can take them, checks a pointer for `null` once until something changes it, and not at all for a pointer parameter that every call passes an address, new memory or another such pointer. It leaves out the bounds checks of indexes that a counting loop or their type keeps in range, and of a local index that an earlier check against the same slice or array already covers while neither changed, branches on conditions without first making values of them, makes the value of `&&` and `||` once, after branching on their operands, tests the condition of a loop after each round instead of jumping back to it, computes arithmetic that a loop does not change in front of it, keeps a multiple of the counter of a loop in a local that steps along with the counter instead of multiplying, and gives a function that keeps no locals in memory no frame. A function saves the registers it uses with one `PUSHM` and restores them with one `POPM` in each of its returns, and a local that a comparison loaded into R0 is not loaded again right after it. Unsigned division and remainder by a power of two become a shift and a mask, `x & y` and `x % 2^k` compared with 0 test bits instead of computing a value, and a `switch` with at least four values close together jumps through a table of addresses. Its code executes less than half as many instructions as `vmc0`'s and is two fifths smaller. `make` builds it in two stages: `vmc0` compiles it into `vmc1.bin`, which compiles it again into `vmc.bin`, and `vmc.bin` compiles itself into the very same file. The `vmc` script runs `vmc.bin` on the VM with 256 MB of memory and an 8 MB stack and assembles the program it writes with `vmasm`.
-- **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. Its code keeps every local in the frame. It runs natively, so it compiles much faster: `vmc` takes 0.3 seconds to turn its own 6,800 lines into assembly, `vmc0` 0.03 seconds.
+- **`vmc`** is written in Ore, in `ore/compiler`, and optimizes. It copies the body of a function into its calls where the call costs about as much as the body, where the call runs in a loop and the body is small, and where it is the only call, which leaves the function unused; a backtrace still shows such a call. It keeps scalar locals and parameters, the pointer and length of slices, and values that wait while another is computed in registers where that saves more than it costs, with locals that live at different times sharing one, uses variables, fields and slice lengths as operands where instructions can take them, checks a pointer for `null` once until something changes it, and not at all for a pointer parameter that every call passes an address, new memory or another such pointer. It leaves out the bounds checks of indexes that a counting loop or their type keeps in range, and of a local index that an earlier check against the same slice or array already covers while neither changed, branches on conditions without first making values of them, makes the value of `&&` and `||` once, after branching on their operands, tests the condition of a loop after each round instead of jumping back to it, computes arithmetic that a loop does not change in front of it, keeps a multiple of the counter of a loop in a local that steps along with the counter instead of multiplying, and gives a function that keeps no locals in memory no frame. A function saves the registers it uses with one `PUSHM` and restores them with one `POPM` in each of its returns, and a local that a comparison loaded into R0 is not loaded again right after it. Unsigned division and remainder by a power of two become a shift and a mask, `x & y` and `x % 2^k` compared with 0 test bits instead of computing a value, and a `switch` with at least four values close together jumps through a table of addresses. Its code executes less than half as many instructions as `vmc0`'s and is a third smaller. `make` builds it in two stages: `vmc0` compiles it into `vmc1.bin`, which compiles it again into `vmc.bin`, and `vmc.bin` compiles itself into the very same file. The `vmc` script runs `vmc.bin` on the VM with 256 MB of memory and an 8 MB stack and assembles the program it writes with `vmasm`.
+- **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. Its code keeps every local in the frame. It runs natively, so it compiles much faster: `vmc` takes half a second to turn its own 9,300 lines into assembly, `vmc0` 0.06 seconds.
 
 - **How it compiles:** the compiler writes the whole program as one assembly file, with only the functions and globals that `main` reaches, directly or through others, and those that the program's assembly names: a program that calls `io.write` gets that function and not the rest of `std/io`. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler, which leaves out the routines of the runtime and `std/cpu` that the program does not use, since they are [libraries](#libraries).
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
@@ -932,9 +955,11 @@ Two compilers take these options:
 ```console
 $ ./vm digits.bin
 vm: error: index 10 is out of bounds for length 10
-vm: at 0x0040 <digits.digit+16> digits.ore:2: CALL rt.index_error
-vm: #1 0x0084 <digits.main+12> digits.ore:6: CALL digits.digit
+vm: at 0x00EC <digits.main+32> digits.ore:2: CALL rt.index_error
+vm: #1 0x00D0 <digits.main+4> digits.ore:6: inlined
 ```
+
+`vmc` copied `digit` into `main`, so the call shows as `inlined`; a build of `vmc0` shows `CALL digits.digit` there instead.
 
 The error messages of both compilers name the file and line of the first problem, and compiling stops there.
 
@@ -1070,7 +1095,7 @@ These codes appear in R5 after syscalls and in `CPUID` function 4. Codes 1 to 14
 | `x`, `disas [ADDR] [N]` | Disassemble N instructions (default: 8 at PC) |
 | `m`, `memory ADDR [N]` | Dump N bytes (default 16) |
 | `stack [N]` | Show N words from the top of the stack (default 8) |
-| `bt`, `backtrace` | Show the calls and interrupts that led to the current instruction |
+| `bt`, `backtrace` | Show the calls and interrupts that led to the current instruction, inlined calls too |
 | `r`, `registers` | Show registers and flags |
 | `cr` | Show control registers |
 | `h`, `help` | Show help |
@@ -1113,14 +1138,18 @@ All fields are little-endian.
 
 The VM loads code and data at their bases, which must leave room for the stack at the top of memory. It rejects other major versions, since their instruction encoding differs.
 
-The debug information holds the symbols, then the source lines. Each string is stored as a 16-bit length followed by its bytes:
+The debug information holds the symbols, then the source lines, then the code that `.inline` marked, which files from before inlining leave out. Each string is stored as a 16-bit length followed by its bytes:
 
 ```
 u32 symbol count
     string name, u32 value, u8 kind (0 code, 1 data, 2 constant), u32 line, string file
 u32 line count
     u32 address, u32 line, string source text, string file
+u32 inlined count
+    u32 start address, u32 end address, u32 line of the call, string file
 ```
+
+A copy comes before the copies inside it.
 
 Object files from `vmasm -c` start with `VMOB` and hold both sections, the symbols, the places the linker fills in and the source lines:
 
@@ -1133,6 +1162,8 @@ u32 relocation count
     u8 section (0 code, 1 data), u8 type, u32 offset, u32 target, u32 addend
 u32 line count
     u8 section, u32 offset, u32 line, string source text, string file
+u32 inlined count
+    u8 section, u32 start offset, u32 end offset, u32 line of the call, string file
 ```
 
 Code and data symbols hold offsets into their section. A relocation stores the address of its target plus the addend at the offset. For type 1 it stores that minus the address of the word after it, as jumps expect. The target is the file's own code (0) or data (1), or 2 plus the index of a symbol.
