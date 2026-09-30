@@ -278,11 +278,26 @@ static int frame_live(const VM *vm, const CallFrame *frame) {
     return memory_peek(vm, check, saved, sizeof(saved)) == sizeof(saved) && read_le32(saved) == frame->resume;
 }
 
-// Lists the calls and interrupts that execution is nested in, innermost first, folding repeats of
-// the same call. A frame whose return address is gone from the stack was left without returning.
-void cpu_print_backtrace(const VM *vm, FILE *out, const char *prefix) {
+// Numbers a frame for each call that a compiler copied the code at an address into, innermost first
+static void print_inlined(const VM *vm, FILE *out, const char *prefix, uint32_t address, uint32_t *number) {
+    const InlinedCall *calls[16];
+    uint32_t count = debug_inlined_at(vm->debug_info, address, calls, 16);
+    for (uint32_t i = 0; i < count; i++) {
+        char text[160];
+        debug_describe(vm->debug_info, calls[i]->start, text, sizeof(text));
+        fprintf(out, "%s#%u 0x%04X%s%s %s:%u: inlined\n", prefix, ++*number, calls[i]->start, text[0] ? " " : "", text,
+                calls[i]->source_file ? calls[i]->source_file : "?", calls[i]->line_num);
+    }
+}
+
+// Lists the calls and interrupts that execution at pc is nested in, innermost first, folding repeats of
+// the same call. A frame whose return address is gone from the stack was left without returning, and
+// calls that the compiler inlined count as frames too.
+void cpu_print_backtrace(const VM *vm, FILE *out, const char *prefix, uint32_t pc) {
     const CallFrame *shown = NULL;
     uint32_t number = 0, repeats = 0;
+
+    print_inlined(vm, out, prefix, pc, &number);
 
     for (uint32_t i = vm->call_depth; i-- > 0;) {
         const CallFrame *frame = &vm->call_frames[i];
@@ -304,6 +319,7 @@ void cpu_print_backtrace(const VM *vm, FILE *out, const char *prefix) {
             fprintf(out, " (interrupt %d)", frame->vector);
         }
         fprintf(out, "\n");
+        print_inlined(vm, out, prefix, frame->site, &number);
         shown = frame;
     }
     if (repeats) {

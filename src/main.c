@@ -177,7 +177,7 @@ static void report_fault(const VM *vm) {
     fprintf(stderr, "vm: at ");
     cpu_print_location(vm, stderr, vm->error_pc);
     fprintf(stderr, "\n");
-    cpu_print_backtrace(vm, stderr, "vm: ");
+    cpu_print_backtrace(vm, stderr, "vm: ", vm->error_pc);
 }
 
 int main(int argc, char *argv[]) {

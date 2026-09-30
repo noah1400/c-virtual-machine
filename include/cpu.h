@@ -66,6 +66,6 @@ uint32_t cpu_unwind_calls(VM *vm, uint32_t count, uint32_t pc);
 
 void cpu_dump_registers(VM *vm);
 void cpu_print_location(const VM *vm, FILE *out, uint32_t address);
-void cpu_print_backtrace(const VM *vm, FILE *out, const char *prefix);
+void cpu_print_backtrace(const VM *vm, FILE *out, const char *prefix, uint32_t pc);
 
 #endif // _CPU_H_

@@ -28,6 +28,29 @@ static void parse_lines(DebugInfo *info, Reader *r, uint32_t size) {
     }
 }
 
+static void parse_inlined(DebugInfo *info, Reader *r, uint32_t size) {
+    uint32_t count = reader_uint(r, 4);
+    if (!r->ok || count > size / 14) {
+        return;
+    }
+    info->inlined = calloc(count ? count : 1, sizeof(InlinedCall));
+    if (!info->inlined) {
+        return;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        InlinedCall *call = &info->inlined[i];
+        call->start = reader_uint(r, 4);
+        call->end = reader_uint(r, 4);
+        call->line_num = reader_uint(r, 4);
+        call->source_file = reader_string(r);
+        if (!r->ok) {
+            free(call->source_file);
+            return;
+        }
+        info->inlined_count = i + 1;
+    }
+}
+
 static int compare_addresses(const void *a, const void *b) {
     const SourceLine *x = *(const SourceLine *const *)a;
     const SourceLine *y = *(const SourceLine *const *)b;
@@ -83,6 +106,9 @@ DebugInfo *debug_info_parse(const uint8_t *data, uint32_t size) {
 
     parse_lines(info, &r, size);
     index_lines(info);
+    if (r.ok && r.ptr < r.end) {
+        parse_inlined(info, &r, size);
+    }
     return info;
 }
 
@@ -98,9 +124,13 @@ void debug_info_free(DebugInfo *info) {
         free(info->source_lines[i].source);
         free(info->source_lines[i].source_file);
     }
+    for (uint32_t i = 0; i < info->inlined_count; i++) {
+        free(info->inlined[i].source_file);
+    }
     free(info->symbols);
     free(info->source_lines);
     free(info->lines_by_address);
+    free(info->inlined);
     free(info);
 }
 
@@ -169,4 +199,22 @@ void debug_describe(const DebugInfo *info, uint32_t address, char *out, size_t s
     } else {
         snprintf(out, size, "<%s+%u>", sym->name, address - sym->address);
     }
+}
+
+// Copies nest, so the smaller of two that hold an address is the inner one, and of two alike the later one,
+// since the table lists an outer copy before those inside it
+uint32_t debug_inlined_at(const DebugInfo *info, uint32_t address, const InlinedCall **calls, uint32_t max) {
+    uint32_t count = 0;
+    for (uint32_t i = 0; info && i < info->inlined_count && count < max; i++) {
+        const InlinedCall *call = &info->inlined[i];
+        if (call->start <= address && address < call->end) {
+            uint32_t at = count++;
+            while (at > 0 && calls[at - 1]->end - calls[at - 1]->start >= call->end - call->start) {
+                calls[at] = calls[at - 1];
+                at--;
+            }
+            calls[at] = call;
+        }
+    }
+    return count;
 }

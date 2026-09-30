@@ -40,6 +40,13 @@ void vm32_write_line(Buffer *b, uint32_t address, uint32_t line, const char *tex
     buffer_string(b, file);
 }
 
+void vm32_write_inlined(Buffer *b, uint32_t start, uint32_t end, uint32_t line, const char *file) {
+    buffer_u32(b, start);
+    buffer_u32(b, end);
+    buffer_u32(b, line);
+    buffer_string(b, file);
+}
+
 int vm32_is_image(const uint8_t *image, uint32_t size) {
     return size >= 4 && memcmp(image, VM32_MAGIC, 4) == 0;
 }

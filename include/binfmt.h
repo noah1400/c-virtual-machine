@@ -53,10 +53,12 @@ void vm32_write_header(struct Buffer *b, uint32_t code_base, uint32_t code_size,
                        uint32_t data_size, uint32_t entry);
 void vm32_finish(struct Buffer *b, size_t symbols_start);
 
-// The symbol table holds a count of symbols, the symbols, a count of source lines and the lines
+// The symbol table holds a count of symbols, the symbols, a count of source lines and the lines, and then a
+// count of inlined calls and the calls, which older binaries leave out
 void vm32_write_symbol(struct Buffer *b, const char *name, uint32_t address, uint8_t type, uint32_t line,
                        const char *file);
 void vm32_write_line(struct Buffer *b, uint32_t address, uint32_t line, const char *text, const char *file);
+void vm32_write_inlined(struct Buffer *b, uint32_t start, uint32_t end, uint32_t line, const char *file);
 
 int vm32_is_image(const uint8_t *image, uint32_t size);
 int vm32_is_object(const uint8_t *image, uint32_t size);

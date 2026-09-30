@@ -547,10 +547,11 @@ static void cmd_stack(const Debugger *dbg, int argc, char **argv) {
 
 static void cmd_backtrace(const Debugger *dbg) {
     const VM *vm = dbg->vm;
+    uint32_t pc = vm->last_error != VM_ERROR_NONE ? vm->error_pc : vm->registers[R3_PC];
     printf("#0 ");
-    cpu_print_location(vm, stdout, vm->last_error != VM_ERROR_NONE ? vm->error_pc : vm->registers[R3_PC]);
+    cpu_print_location(vm, stdout, pc);
     printf("\n");
-    cpu_print_backtrace(vm, stdout, "");
+    cpu_print_backtrace(vm, stdout, "", pc);
 }
 
 static void cmd_control_registers(const Debugger *dbg) {
