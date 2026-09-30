@@ -92,20 +92,20 @@ static inline uint32_t alu_divide(uint8_t opcode, uint32_t a, uint32_t b, FlagUp
 }
 
 // The result of an instruction with a register and an operand and the flags it sets, where ADDC and SUBC add
-// the carry; CMP and TEST only set the flags. Every one of them sets Z and N from its result.
-static inline uint32_t alu_result(uint8_t opcode, uint32_t a, uint32_t b, uint32_t carry, FlagUpdate *f) {
+// the carry in flags; CMP and TEST only set the flags. Every one of them sets Z and N from its result.
+static inline uint32_t alu_result(uint8_t opcode, uint32_t a, uint32_t b, uint32_t flags, FlagUpdate *f) {
     uint32_t count = b & 0x1F, result;
 
     switch (opcode) {
         case ADD_OP:
             return alu_add(a, b, 0, f);
         case ADDC_OP:
-            return alu_add(a, b, carry, f);
+            return alu_add(a, b, (flags & CARRY_FLAG) != 0, f);
         case SUB_OP:
         case CMP_OP:
             return alu_sub(a, b, 0, f);
         case SUBC_OP:
-            return alu_sub(a, b, carry, f);
+            return alu_sub(a, b, (flags & CARRY_FLAG) != 0, f);
         case MUL_OP:
             return alu_mul(a, b, f);
         case DIV_OP:
@@ -144,7 +144,7 @@ static inline uint32_t alu_result(uint8_t opcode, uint32_t a, uint32_t b, uint32
 
 static inline uint32_t alu_binary(uint8_t opcode, uint32_t *sr, uint32_t a, uint32_t b) {
     FlagUpdate f;
-    uint32_t result = alu_result(opcode, a, b, (*sr & CARRY_FLAG) != 0, &f);
+    uint32_t result = alu_result(opcode, a, b, *sr, &f);
     set_flags(sr, f.changed, f.bits);
     return result;
 }

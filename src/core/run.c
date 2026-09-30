@@ -691,8 +691,8 @@ INLINE uint32_t binary(uint8_t opcode, const uint32_t *r, uint32_t x, uint32_t y
         p->kind = FLAGS_ADD;
         return p->a;
     }
-    uint32_t carry = (opcode == ADDC_OP || opcode == SUBC_OP) && (flag_bits(r[R4_SR], p) & CARRY_FLAG);
-    return partial(alu_result(opcode, x, y, carry, &f), &f, p);
+    uint32_t flags = opcode == ADDC_OP || opcode == SUBC_OP ? flag_bits(r[R4_SR], p) : 0;
+    return partial(alu_result(opcode, x, y, flags, &f), &f, p);
 }
 
 #ifdef __GNUC__
