@@ -199,16 +199,29 @@ fn quoted(out: *str.Builder, text: []u8) {
 }
 
 fn loc(g: *Gen, line: int) {
-    if (g.program.no_loc || g.loc_module == g.m && g.loc_line == line) {
+    loc_in(g, g.m, line);
+}
+
+// The location of a statement, which may come from a function of another module
+fn loc_of(g: *Gen, s: *ast.Stmt) {
+    if (s.module != null) {
+        loc_in(g, s.module, s.line);
+    } else {
+        loc_in(g, g.m, s.line);
+    }
+}
+
+fn loc_in(g: *Gen, m: *ast.Module, line: int) {
+    if (g.program.no_loc || g.loc_module == m && g.loc_line == line) {
         return;
     }
-    if (g.loc_module != g.m) {
-        var path = str.builder(g.m.path.len + 2);
-        quoted(&path, g.m.path);
+    if (g.loc_module != m) {
+        var path = str.builder(m.path.len + 2);
+        quoted(&path, m.path);
         g.loc_path = ast.clone(str.text(&path));
         str.release(&path);
     }
-    g.loc_module = g.m;
+    g.loc_module = m;
     g.loc_line = line;
     // A location changes no register
     var r0 = g.r0;
@@ -221,13 +234,31 @@ fn loc(g: *Gen, line: int) {
         return;
     }
     var text = "";
-    if (line >= 1 && line <= g.m.lines.len) {
-        text = g.m.lines[line - 1];
+    if (line >= 1 && line <= m.lines.len) {
+        text = m.lines[line - 1];
     }
     emitd(g, ", %d, ", []int { line });
     quoted(&g.body, text);
     emit(g, "\n");
     g.r0 = r0;
+}
+
+// Code copied into a call is marked for backtraces, which then show the call
+fn mark_inlined(g: *Gen, s: *ast.Stmt, begin: bool) {
+    if (g.program.no_loc) {
+        return;
+    }
+    if (!begin) {
+        emit(g, "    .endinline\n");
+        return;
+    }
+    var m = g.m;
+    if (s.module != null) {
+        m = s.module;
+    }
+    emit(g, "    .inline ");
+    quoted(&g.body, m.path);
+    emitd(g, ", %d\n", []int { s.line });
 }
 
 // Small integers are kept zero- or sign-extended to 32 bits
@@ -2767,7 +2798,7 @@ fn gen_loop(g: *Gen, s: *ast.Stmt) {
     // way into the body, the condition after each round finds as well
     keep_checked(g, &saved, s.then, s.step);
     if (s.cond != null) {
-        loc(g, s.line);
+        loc_of(g, s);
         gen_branch(g, s.cond, end);
     }
     emitd(g, ".L%d:\n", []int { top });
@@ -2790,7 +2821,7 @@ fn gen_loop(g: *Gen, s: *ast.Stmt) {
         gen_stmt(g, s.step);
     }
     if (s.cond != null) {
-        loc(g, s.line);
+        loc_of(g, s);
         gen_condition(g, s.cond, top, true);
     } else {
         emitd(g, "    JMP .L%d\n", []int { top });
@@ -2839,11 +2870,17 @@ fn breaks(s: *ast.Stmt) bool {
 
 fn gen_stmt(g: *Gen, s: *ast.Stmt) {
     if (s.kind != ast.StmtKind.BLOCK) {
-        loc(g, s.line);
+        loc_of(g, s);
     }
     switch (s.kind) {
         case ast.StmtKind.BLOCK {
+            if (s.inlined) {
+                mark_inlined(g, s, true);
+            }
             gen_block(g, s);
+            if (s.inlined) {
+                mark_inlined(g, s, false);
+            }
         }
         case ast.StmtKind.VAR, ast.StmtKind.CONST {
             gen_variable(g, s);

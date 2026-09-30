@@ -148,6 +148,8 @@ pub struct Stmt {
     cases: []*Case;
     fallback: *Stmt;        // default block of a switch
     symbol: *Symbol;        // declared variable or constant
+    module: *Module;        // where a statement copied into another function comes from, or null
+    inlined: bool;          // a block copied from a function into a call at the block's line and module
 }
 
 pub struct Param {
