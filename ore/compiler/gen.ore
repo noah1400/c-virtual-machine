@@ -36,6 +36,7 @@ struct Gen {
     range_count: int;
     returns: [256]int;      // where the body jumps to the epilogue, as far as they fit
     return_count: int;
+    r0: *ast.Symbol;        // the local that a comparison left in R0, until more code comes
 }
 
 // An index that a loop keeps from 0 up to below the length of a slice, or below a limit when there is no
@@ -109,20 +110,24 @@ fn format(out: *str.Builder, pattern: []u8, texts: [][]u8, numbers: []int) {
 }
 
 fn emit(g: *Gen, text: []u8) {
+    g.r0 = null;
     str.append(&g.body, text);
 }
 
 fn emitd(g: *Gen, pattern: []u8, numbers: []int) {
     var none: [][]u8;
+    g.r0 = null;
     format(&g.body, pattern, none, numbers);
 }
 
 fn emits(g: *Gen, pattern: []u8, texts: [][]u8) {
     var none: []int;
+    g.r0 = null;
     format(&g.body, pattern, texts, none);
 }
 
 fn emitf(g: *Gen, pattern: []u8, texts: [][]u8, numbers: []int) {
+    g.r0 = null;
     format(&g.body, pattern, texts, numbers);
 }
 
@@ -205,11 +210,14 @@ fn loc(g: *Gen, line: int) {
     }
     g.loc_module = g.m;
     g.loc_line = line;
+    // A location changes no register
+    var r0 = g.r0;
     emit(g, "    .loc ");
     emit(g, g.loc_path);
     // vmasm takes the text of the line from the file when it is left out
     if (!g.program.loc_texts) {
         emitd(g, ", %d\n", []int { line });
+        g.r0 = r0;
         return;
     }
     var text = "";
@@ -219,6 +227,7 @@ fn loc(g: *Gen, line: int) {
     emitd(g, ", %d, ", []int { line });
     quoted(&g.body, text);
     emit(g, "\n");
+    g.r0 = r0;
 }
 
 // Small integers are kept zero- or sign-extended to 32 bits
@@ -1408,6 +1417,11 @@ fn gen_condition(g: *Gen, e: *ast.Expr, target: int, when: bool) {
             } else {
                 var right = operands(g, e);
                 emitf(g, "    CMP R0, %s\n    J%s .L%d\n", [][]u8 { right, code }, []int { target });
+                // A local on the left stays in R0 on both ways
+                if (is_operand(e.right) && e.left.kind == ast.ExprKind.NAME && e.left.symbol.kind == ast.SymbolKind.LOCAL &&
+                    e.left.symbol.reg == 0) {
+                    g.r0 = e.left.symbol;
+                }
             }
         }
         note_not_null(g, e, !when);
@@ -2260,7 +2274,7 @@ fn gen_expr(g: *Gen, e: *ast.Expr) {
                 gen_string(g, e);
             } else if (e.symbol.kind == ast.SymbolKind.FN) {
                 emits(g, "    LOAD R0, %s\n", [][]u8 { symbol_name(e.symbol) });
-            } else {
+            } else if (g.r0 != e.symbol) {
                 load_from(g, t, place(e));
             }
         }
@@ -2845,6 +2859,7 @@ fn gen_stmt(g: *Gen, s: *ast.Stmt) {
             var fact = null_fact(s.cond, true);
             var known = fact != null && is_checked(g, fact);
             gen_branch(g, s.cond, otherwise);
+            var r0 = g.r0;
             // What a condition that jumps once checked holds on both of its ways
             if (jumps_once(s.cond)) {
                 save_checked(g, &saved);
@@ -2863,6 +2878,9 @@ fn gen_stmt(g: *Gen, s: *ast.Stmt) {
                 // Only the condition leads there
                 merge_label(g, otherwise, &saved, null, null);
                 note_not_null(g, s.cond, false);
+                if (jumps_once(s.cond)) {
+                    g.r0 = r0;
+                }
             } else {
                 merge_label(g, otherwise, &saved, s.then, null);
             }
@@ -3301,6 +3319,7 @@ fn assign_registers(d: *ast.Decl, in_memory: *bool) int {
 // end of
 fn gen_body(g: *Gen, d: *ast.Decl, frame: *ast.Symbol) int {
     g.frame = 0;
+    g.r0 = null;
     g.checked.count = 0;
     g.range_count = 0;
     g.return_count = 0;
