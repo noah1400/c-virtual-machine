@@ -146,6 +146,7 @@ enum {
     D_MUL, D_AND, D_OR, D_XOR, D_SHL, D_SHR, D_SAR,
     D_UNARY, D_FLOAT_SIGN, D_SET,
     D_JUMP, D_JUMP_OUT, D_JUMP_V, D_JUMP_M,
+    D_GOTO, D_JZ, D_JNZ, D_JC, D_JAE, D_JBE, D_JA, D_JL, D_JGE, D_JLE, D_JG,
     D_CALL, D_CALL_OUT, D_CALL_V, D_CALL_M, D_RET,
     D_LOOP, D_LOOP_OUT,
     D_PUSH_V, D_PUSH_M, D_POP, D_ENTER, D_LEAVE, D_PUSHM, D_POPM, D_MEMCPY, D_MEMSET, D_SYSCALL,
@@ -326,6 +327,37 @@ static void decode_target(Decoded *d, uint32_t target, uint32_t words, uint8_t i
     d->imm = index < words ? index : target;
 }
 
+// The kind of a jump to a word where cpu_run runs: JMP and the jumps whose condition a compare decides have
+// their own
+static uint8_t jump_kind(uint8_t opcode) {
+    switch (opcode) {
+        case JMP_OP:
+            return D_GOTO;
+        case JZ_OP:
+            return D_JZ;
+        case JNZ_OP:
+            return D_JNZ;
+        case JC_OP:
+            return D_JC;
+        case JAE_OP:
+            return D_JAE;
+        case JBE_OP:
+            return D_JBE;
+        case JA_OP:
+            return D_JA;
+        case JL_OP:
+            return D_JL;
+        case JGE_OP:
+            return D_JGE;
+        case JLE_OP:
+            return D_JLE;
+        case JG_OP:
+            return D_JG;
+        default:
+            return D_JUMP;
+    }
+}
+
 // The kind of a binary instruction whose operand is a value: its own for the common ones
 static uint8_t value_kind(uint8_t opcode) {
     switch (opcode) {
@@ -448,7 +480,7 @@ static void decode(VM *vm, Decoded *d, uint32_t index, uint32_t words) {
             memory = decode_operand(d, w, code, REG1, next);
             d->cond = conditions[d->op];
             if (((w >> 20) & 7) == IMM_MODE && run == RUN_JUMP) {
-                decode_target(d, next + d->imm, words, D_JUMP, D_JUMP_OUT);
+                decode_target(d, next + d->imm, words, jump_kind(d->op), D_JUMP_OUT);
             } else if (((w >> 20) & 7) == IMM_MODE) {
                 decode_target(d, next + d->imm, words, D_CALL, D_CALL_OUT);
             } else {
@@ -725,6 +757,10 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
         [D_AND] = &&run_D_AND,               [D_OR] = &&run_D_OR,                 [D_XOR] = &&run_D_XOR,
         [D_SHL] = &&run_D_SHL,               [D_SHR] = &&run_D_SHR,               [D_SAR] = &&run_D_SAR,
         [D_UNARY] = &&run_D_UNARY,           [D_FLOAT_SIGN] = &&run_D_FLOAT_SIGN, [D_SET] = &&run_D_SET,
+        [D_GOTO] = &&run_D_GOTO,             [D_JZ] = &&run_D_JZ,                 [D_JNZ] = &&run_D_JNZ,
+        [D_JC] = &&run_D_JC,                 [D_JAE] = &&run_D_JAE,               [D_JBE] = &&run_D_JBE,
+        [D_JA] = &&run_D_JA,                 [D_JL] = &&run_D_JL,                 [D_JGE] = &&run_D_JGE,
+        [D_JLE] = &&run_D_JLE,               [D_JG] = &&run_D_JG,
         [D_JUMP] = &&run_D_JUMP,             [D_JUMP_OUT] = &&run_D_JUMP_OUT,     [D_JUMP_V] = &&run_D_JUMP_V,
         [D_JUMP_M] = &&run_D_JUMP_M,         [D_CALL] = &&run_D_CALL,             [D_CALL_OUT] = &&run_D_CALL_OUT,
         [D_CALL_V] = &&run_D_CALL_V,         [D_CALL_M] = &&run_D_CALL_M,         [D_RET] = &&run_D_RET,
@@ -943,6 +979,28 @@ dispatch:
                 next = code + d->imm;
             }
             NEXT();
+        TARGET(D_GOTO):
+            next = code + d->imm;
+            NEXT();
+        // A jump after a compare decides its condition from what was compared, and after TEST or a sum Z from
+        // the sum
+#define JUMP_IF(jump, compared, summed)                                                                         \
+        TARGET(jump):                                                                                             \
+            if (flags.kind == FLAGS_SUB ? (compared) : flags.kind == FLAGS_ADD ? (summed) : jumps(r, d, &flags)) { \
+                next = code + d->imm;                                                                             \
+            }                                                                                                     \
+            NEXT();
+        JUMP_IF(D_JZ, flags.a == flags.b, flags.a + flags.b == 0)
+        JUMP_IF(D_JNZ, flags.a != flags.b, flags.a + flags.b != 0)
+        JUMP_IF(D_JC, flags.a < flags.b, jumps(r, d, &flags))
+        JUMP_IF(D_JAE, flags.a >= flags.b, jumps(r, d, &flags))
+        JUMP_IF(D_JBE, flags.a <= flags.b, jumps(r, d, &flags))
+        JUMP_IF(D_JA, flags.a > flags.b, jumps(r, d, &flags))
+        JUMP_IF(D_JL, (int32_t)flags.a < (int32_t)flags.b, jumps(r, d, &flags))
+        JUMP_IF(D_JGE, (int32_t)flags.a >= (int32_t)flags.b, jumps(r, d, &flags))
+        JUMP_IF(D_JLE, (int32_t)flags.a <= (int32_t)flags.b, jumps(r, d, &flags))
+        JUMP_IF(D_JG, (int32_t)flags.a > (int32_t)flags.b, jumps(r, d, &flags))
+#undef JUMP_IF
         TARGET(D_JUMP_OUT):
             if (jumps(r, d, &flags)) {
                 value = d->imm;
