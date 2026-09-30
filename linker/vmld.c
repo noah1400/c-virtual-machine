@@ -27,6 +27,12 @@ typedef struct {
 } ObjLine;
 
 typedef struct {
+    uint8_t section;
+    uint32_t start, end, line;
+    char *file;
+} ObjInlined;
+
+typedef struct {
     const char *path;
     uint8_t *bytes;
     int has_entry;
@@ -39,6 +45,8 @@ typedef struct {
     uint32_t relocation_count;
     ObjLine *lines;
     uint32_t line_count;
+    ObjInlined *inlined;
+    uint32_t inlined_count;
 } Object;
 
 typedef struct {
@@ -67,9 +75,13 @@ static void free_object(Object *o) {
         free(o->lines[i].text);
         free(o->lines[i].file);
     }
+    for (uint32_t i = 0; o->inlined && i < o->inlined_count; i++) {
+        free(o->inlined[i].file);
+    }
     free(o->symbols);
     free(o->relocations);
     free(o->lines);
+    free(o->inlined);
     free(o->bytes);
 }
 
@@ -159,6 +171,26 @@ static const char *parse_object(Object *o, uint8_t *bytes, uint32_t size) {
 
     if (!o->symbols || !o->relocations || !o->lines) {
         return "out of memory";
+    }
+
+    // Object files from before inlined calls end with the lines
+    if (r.ok && r.ptr < r.end) {
+        o->inlined_count = read_count(&r, 15);
+        o->inlined = calloc(o->inlined_count ? o->inlined_count : 1, sizeof(ObjInlined));
+        if (!o->inlined) {
+            return "out of memory";
+        }
+        for (uint32_t i = 0; r.ok && i < o->inlined_count; i++) {
+            ObjInlined *copy = &o->inlined[i];
+            copy->section = (uint8_t)reader_uint(&r, 1);
+            copy->start = reader_uint(&r, 4);
+            copy->end = reader_uint(&r, 4);
+            copy->line = reader_uint(&r, 4);
+            copy->file = reader_string(&r);
+            if (r.ok && (copy->section > VMO_DATA || copy->start > copy->end || copy->end > o->sizes[copy->section])) {
+                return "invalid inlined call";
+            }
+        }
     }
     return r.ok ? NULL : "truncated object file";
 }
@@ -329,6 +361,20 @@ static void write_debug_info(const Linker *ld, Buffer *b) {
         for (uint32_t k = 0; k < o->line_count; k++) {
             const ObjLine *line = &o->lines[k];
             vm32_write_line(b, o->bases[line->section] + line->offset, line->line, line->text, line->file);
+        }
+    }
+
+    uint32_t inlined = 0;
+    for (int i = 0; i < ld->count; i++) {
+        inlined += ld->objects[i].inlined_count;
+    }
+    buffer_u32(b, inlined);
+    for (int i = 0; i < ld->count; i++) {
+        const Object *o = &ld->objects[i];
+        for (uint32_t k = 0; k < o->inlined_count; k++) {
+            const ObjInlined *copy = &o->inlined[k];
+            uint32_t base = o->bases[copy->section];
+            vm32_write_inlined(b, base + copy->start, base + copy->end, copy->line, copy->file);
         }
     }
 }

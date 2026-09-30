@@ -1,0 +1,5 @@
+vm: error: Division by zero
+vm: at 0x0024 <area+16> shapes.c:2: DIV R6, R5
+vm: #1 0x0020 <area+12> shapes.c:5: inlined
+vm: #2 0x0020 <area+12> shapes.c:10: inlined
+vm: #3 0x0008 <main+8> tests/programs/inline_link.asm:10: CALL area
