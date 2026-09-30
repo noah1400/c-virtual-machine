@@ -14,6 +14,10 @@
 //
 // It decodes an instruction the first time it runs at an address below the heap and keeps what it found
 // until something writes to the words of the instruction.
+//
+// The Z, N, C and O flags wait until something reads them: instructions keep the operands of their sum or
+// difference, or the result they set Z and N from. The flags are in SR whenever cpu_run stops or makes a
+// syscall, so vm_step, the debugger and the monitor always find them there.
 
 enum {
     STOP,
@@ -93,8 +97,10 @@ static const uint8_t runs[256] = {
 // word; the instructions and modes that vm_step would refuse stop
 static uint8_t kinds[4096];
 
-// For each jump opcode, one bit for each value of the Z, N, C and O flags under which it jumps
+// For each jump opcode, one bit for each value of the Z, N, C and O flags under which it jumps, and for those
+// that only depend on Z, C and whether N and O differ, 0x100 and one bit for each value of those three
 static uint16_t conditions[256];
+static uint16_t quick_conditions[256];
 
 static void prepare(void) {
     for (uint32_t key = 0; key < 4096; key++) {
@@ -108,9 +114,21 @@ static void prepare(void) {
         kinds[key] = runs[key >> 4];
     }
     for (uint32_t opcode = 0; opcode < 256; opcode++) {
+        int seen[8] = { -1, -1, -1, -1, -1, -1, -1, -1 }, quick = 1;
         for (uint32_t flags = 0; flags < 16; flags++) {
-            conditions[opcode] |= (uint16_t)(alu_condition(flags, (uint8_t)opcode) << flags);
+            int holds = alu_condition(flags, (uint8_t)opcode);
+            uint32_t zero = (flags & ZERO_FLAG) != 0, carry = (flags & CARRY_FLAG) != 0;
+            uint32_t less = ((flags & NEG_FLAG) != 0) != ((flags & OVER_FLAG) != 0);
+            uint32_t index = zero | carry << 1 | less << 2;
+            conditions[opcode] |= (uint16_t)(holds << flags);
+            quick &= seen[index] < 0 || seen[index] == holds;
+            seen[index] = holds;
         }
+        uint32_t table = 0x100;
+        for (uint32_t index = 0; index < 8; index++) {
+            table |= (uint32_t)(seen[index] > 0) << index;
+        }
+        quick_conditions[opcode] = quick ? (uint16_t)table : 0;
     }
 }
 
@@ -487,6 +505,16 @@ static void decode(VM *vm, Decoded *d, uint32_t index, uint32_t words) {
             d->kind = D_SYSCALL;
             break;
     }
+    // SR read as a register needs the flags that cpu_run keeps apart, which vm_step finds in SR
+    int reads_sr = d->mask && d->b == R4_SR;
+    if (run == RUN_STORE || run == RUN_STOREB || run == RUN_STOREW || run == RUN_CMP || run == RUN_TEST) {
+        reads_sr |= a == R4_SR;
+    } else if (run == RUN_MEMCPY || run == RUN_MEMSET) {
+        reads_sr = a == R4_SR || d->b == R4_SR || (d->mask && d->op == R4_SR);
+    }
+    if (reads_sr) {
+        d->kind = D_STOP;
+    }
 }
 
 INLINE uint32_t operand(const uint32_t *r, const Decoded *d) {
@@ -531,14 +559,108 @@ INLINE int call(VM *vm, const Decoded *code, const Decoded *d) {
     return 1;
 }
 
-INLINE int holds(const uint32_t *r, const Decoded *d) {
-    return (d->cond >> (r[R4_SR] & 0x0F)) & 1;
+// How the flags follow from what the instructions that set them kept: they are in SR; they are those of
+// a + b, which a logic result keeps as a + 0, or of a - b; or Z and N are those of a, the C and O flags that
+// the high half of b names are in its low half, and the others are those of the sum or difference in source,
+// sa and sb, which the instructions since did not change
+enum { FLAGS_SET, FLAGS_ADD, FLAGS_SUB, FLAGS_NZ };
+
+typedef struct {
+    uint32_t kind, a, b;
+    uint32_t source, sa, sb;
+} Flags;
+
+// The C and O flags of a + b or a - b, or those in SR
+INLINE uint32_t carry_over(uint32_t sr, uint32_t kind, uint32_t a, uint32_t b) {
+    uint32_t result;
+    switch (kind) {
+        case FLAGS_ADD:
+            result = a + b;
+            return (result < a ? CARRY_FLAG : 0) | (((a ^ result) & (b ^ result)) >> 31 ? OVER_FLAG : 0);
+        case FLAGS_SUB:
+            result = a - b;
+            return (a < b ? CARRY_FLAG : 0) | (((a ^ b) & (a ^ result)) >> 31 ? OVER_FLAG : 0);
+        default:
+            return sr & (CARRY_FLAG | OVER_FLAG);
+    }
 }
 
-// Puts the flags that f changes in SR and returns the result
-INLINE uint32_t flagged(uint32_t *r, const FlagUpdate *f, uint32_t result) {
-    set_flags(&r[R4_SR], f->changed, f->bits);
+INLINE uint32_t flag_bits(uint32_t sr, const Flags *p) {
+    uint32_t known;
+    switch (p->kind) {
+        case FLAGS_SET:
+            return sr & ALU_FLAGS;
+        case FLAGS_ADD:
+            return zero_negative(p->a + p->b) | carry_over(sr, FLAGS_ADD, p->a, p->b);
+        case FLAGS_SUB:
+            return zero_negative(p->a - p->b) | carry_over(sr, FLAGS_SUB, p->a, p->b);
+        default:
+            known = p->b >> 16;
+            return zero_negative(p->a) | (p->b & 0xFFFF) |
+                   (known == (CARRY_FLAG | OVER_FLAG) ? 0 : carry_over(sr, p->source, p->sa, p->sb) & ~known);
+    }
+}
+
+// Puts the flags in SR for what reads them there
+INLINE void settle(uint32_t *r, Flags *p) {
+    if (p->kind != FLAGS_SET) {
+        r[R4_SR] = (r[R4_SR] & ~(uint32_t)ALU_FLAGS) | flag_bits(r[R4_SR], p);
+        p->kind = FLAGS_SET;
+    }
+}
+
+INLINE int holds(const uint32_t *r, uint16_t cond, const Flags *p) {
+    return (cond >> flag_bits(r[R4_SR], p)) & 1;
+}
+
+// Whether a jump jumps. After a compare or sum, most conditions follow from whether the result is 0, whether
+// it carried and whether it is less than 0 in signed terms.
+INLINE int jumps(const uint32_t *r, const Decoded *d, const Flags *p) {
+    if (d->cond == 0xFFFF) {
+        return 1;
+    }
+    uint32_t quick = quick_conditions[d->op], index;
+    if (p->kind == FLAGS_SUB && quick) {
+        index = (p->a == p->b) | (p->a < p->b) << 1 | ((int32_t)p->a < (int32_t)p->b) << 2;
+        return (quick >> index) & 1;
+    }
+    if (p->kind == FLAGS_ADD && quick) {
+        uint32_t sum = p->a + p->b;
+        index = (sum == 0) | (sum < p->a) << 1 | ((int64_t)(int32_t)p->a + (int32_t)p->b < 0) << 2;
+        return (quick >> index) & 1;
+    }
+    return holds(r, d->cond, p);
+}
+
+// An instruction that sets Z and N from its result and C and O as f says. The C and O flags that it leaves
+// alone come from the sum or difference before, which it keeps unless one before it already did.
+INLINE uint32_t partial(uint32_t result, FlagUpdate f, Flags *p) {
+    uint32_t changed = f.changed & (CARRY_FLAG | OVER_FLAG), bits = f.bits & (CARRY_FLAG | OVER_FLAG);
+    if (p->kind == FLAGS_NZ) {
+        p->b = ((p->b >> 16) | changed) << 16 | (p->b & 0xFFFF & ~changed) | bits;
+    } else {
+        p->source = p->kind;
+        p->sa = p->a;
+        p->sb = p->b;
+        p->b = changed << 16 | bits;
+        p->kind = FLAGS_NZ;
+    }
+    p->a = result;
     return result;
+}
+
+// A binary instruction on a register and a value: AND, OR and XOR keep their result for the flags, and ADDC
+// and SUBC add the carry
+INLINE uint32_t binary(uint8_t opcode, const uint32_t *r, uint32_t x, uint32_t y, Flags *p) {
+    FlagUpdate f;
+    if (opcode == AND_OP || opcode == OR_OP || opcode == XOR_OP) {
+        p->a = opcode == AND_OP ? x & y : opcode == OR_OP ? x | y : x ^ y;
+        p->b = 0;
+        p->kind = FLAGS_ADD;
+        return p->a;
+    }
+    uint32_t carry = (opcode == ADDC_OP || opcode == SUBC_OP) && (flag_bits(r[R4_SR], p) & CARRY_FLAG);
+    return partial(alu_result(opcode, x, y, carry, &f), f, p);
 }
 
 #ifdef __GNUC__
@@ -569,6 +691,7 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
     static int prepared;
     uint32_t *r = vm->registers;
     uint32_t left = limit, words = fetch_words(vm), index = word_index(r[R3_PC]), value;
+    Flags flags = { FLAGS_SET, 0, 0, FLAGS_SET, 0, 0 };
     FlagUpdate f;
 
     if (!prepared) {
@@ -677,125 +800,158 @@ dispatch:
             r[d->a] = operand(r, d);
             NEXT();
         TARGET(D_ADD_V):
-            r[d->a] = flagged(r, &f, alu_add(r[d->a], operand(r, d), 0, &f));
-            NEXT();
+            value = operand(r, d);
+            goto add;
         TARGET(D_ADD_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            r[d->a] = flagged(r, &f, alu_add(r[d->a], value, 0, &f));
+        add:
+            flags.a = r[d->a];
+            flags.b = value;
+            flags.kind = FLAGS_ADD;
+            r[d->a] = flags.a + flags.b;
             NEXT();
         TARGET(D_SUB_V):
-            r[d->a] = flagged(r, &f, alu_sub(r[d->a], operand(r, d), 0, &f));
-            NEXT();
+            value = operand(r, d);
+            goto sub;
         TARGET(D_SUB_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            r[d->a] = flagged(r, &f, alu_sub(r[d->a], value, 0, &f));
+        sub:
+            flags.a = r[d->a];
+            flags.b = value;
+            flags.kind = FLAGS_SUB;
+            r[d->a] = flags.a - flags.b;
             NEXT();
         TARGET(D_CMP_V):
-            flagged(r, &f, alu_sub(r[d->a], operand(r, d), 0, &f));
+            flags.b = operand(r, d);
+            flags.a = r[d->a];
+            flags.kind = FLAGS_SUB;
             NEXT();
         TARGET(D_CMP_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            flagged(r, &f, alu_sub(r[d->a], value, 0, &f));
+            flags.a = r[d->a];
+            flags.b = value;
+            flags.kind = FLAGS_SUB;
             NEXT();
         TARGET(D_TEST_V):
-            flagged(r, &f, alu_logic(r[d->a] & operand(r, d), &f));
+            flags.a = r[d->a] & operand(r, d);
+            flags.b = 0;
+            flags.kind = FLAGS_ADD;
             NEXT();
         TARGET(D_TEST_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            flagged(r, &f, alu_logic(r[d->a] & value, &f));
+            flags.a = r[d->a] & value;
+            flags.b = 0;
+            flags.kind = FLAGS_ADD;
             NEXT();
         TARGET(D_BINARY_V):
-            r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], operand(r, d));
+            r[d->a] = binary(d->op, r, r[d->a], operand(r, d), &flags);
             NEXT();
         TARGET(D_BINARY_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], value);
+            r[d->a] = binary(d->op, r, r[d->a], value, &flags);
             NEXT();
         TARGET(D_DIVIDE_V):
             value = operand(r, d);
             if (!alu_divides(d->op, r[d->a], value)) {
                 goto stop;
             }
-            r[d->a] = flagged(r, &f, alu_divide(d->op, r[d->a], value, &f));
+            value = alu_divide(d->op, r[d->a], value, &f);
+            r[d->a] = partial(value, f, &flags);
             NEXT();
         TARGET(D_DIVIDE_M):
             if (!load(vm, operand(r, d), 4, &value) || !alu_divides(d->op, r[d->a], value)) {
                 goto stop;
             }
-            r[d->a] = flagged(r, &f, alu_divide(d->op, r[d->a], value, &f));
+            value = alu_divide(d->op, r[d->a], value, &f);
+            r[d->a] = partial(value, f, &flags);
             NEXT();
         TARGET(D_MUL):
-            r[d->a] = flagged(r, &f, alu_mul(r[d->a], operand(r, d), &f));
+            value = alu_mul(r[d->a], operand(r, d), &f);
+            r[d->a] = partial(value, f, &flags);
             NEXT();
         TARGET(D_AND):
-            r[d->a] = flagged(r, &f, alu_logic(r[d->a] & operand(r, d), &f));
-            NEXT();
+            flags.a = r[d->a] & operand(r, d);
+            goto logic;
         TARGET(D_OR):
-            r[d->a] = flagged(r, &f, alu_logic(r[d->a] | operand(r, d), &f));
-            NEXT();
+            flags.a = r[d->a] | operand(r, d);
+            goto logic;
         TARGET(D_XOR):
-            r[d->a] = flagged(r, &f, alu_logic(r[d->a] ^ operand(r, d), &f));
+            flags.a = r[d->a] ^ operand(r, d);
+        logic:
+            flags.b = 0;
+            flags.kind = FLAGS_ADD;
+            r[d->a] = flags.a;
             NEXT();
         TARGET(D_SHL):
-            r[d->a] = flagged(r, &f, alu_shl(r[d->a], operand(r, d), &f));
+            value = alu_shl(r[d->a], operand(r, d), &f);
+            r[d->a] = partial(value, f, &flags);
             NEXT();
         TARGET(D_SHR):
-            r[d->a] = flagged(r, &f, alu_shr(r[d->a], operand(r, d), &f));
+            value = alu_shr(r[d->a], operand(r, d), &f);
+            r[d->a] = partial(value, f, &flags);
             NEXT();
         TARGET(D_SAR):
-            r[d->a] = flagged(r, &f, alu_sar(r[d->a], operand(r, d), &f));
+            value = alu_sar(r[d->a], operand(r, d), &f);
+            r[d->a] = partial(value, f, &flags);
             NEXT();
+        // COUNT and the float instructions set all four flags in SR
         TARGET(D_COUNT_V):
+            flags.kind = FLAGS_SET;
             r[d->a] = alu_count(d->op, &r[R4_SR], operand(r, d));
             NEXT();
         TARGET(D_COUNT_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
+            flags.kind = FLAGS_SET;
             r[d->a] = alu_count(d->op, &r[R4_SR], value);
             NEXT();
         TARGET(D_FLOAT_V):
+            flags.kind = FLAGS_SET;
             alu_float(d->op, &r[R4_SR], &r[d->a], operand(r, d));
             NEXT();
         TARGET(D_FLOAT_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
+            flags.kind = FLAGS_SET;
             alu_float(d->op, &r[R4_SR], &r[d->a], value);
             NEXT();
         TARGET(D_UNARY):
-            r[d->a] = alu_unary(d->op, &r[R4_SR], r[d->a]);
+            value = alu_unary_result(d->op, r[d->a], &f);
+            r[d->a] = partial(value, f, &flags);
             NEXT();
         TARGET(D_FLOAT_SIGN):
+            flags.kind = FLAGS_SET;
             alu_float(d->op, &r[R4_SR], &r[d->a], 0);
             NEXT();
         TARGET(D_SET):
-            r[d->a] = holds(r, d);
+            r[d->a] = holds(r, d->cond, &flags);
             NEXT();
         TARGET(D_JUMP):
-            if (holds(r, d)) {
+            if (jumps(r, d, &flags)) {
                 next = code + d->imm;
             }
             NEXT();
         TARGET(D_JUMP_OUT):
-            if (holds(r, d)) {
+            if (jumps(r, d, &flags)) {
                 value = d->imm;
                 goto leave;
             }
             NEXT();
         TARGET(D_JUMP_V):
             value = operand(r, d);
-            if (holds(r, d)) {
+            if (jumps(r, d, &flags)) {
                 goto go;
             }
             NEXT();
@@ -803,7 +959,7 @@ dispatch:
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            if (holds(r, d)) {
+            if (jumps(r, d, &flags)) {
                 goto go;
             }
             NEXT();
@@ -1006,6 +1162,7 @@ dispatch:
             }
             vm->error_pc = (uint32_t)(d - code) * 4;
             r[R3_PC] = vm->error_pc + d->len * 4u;
+            settle(r, &flags);
             syscall_dispatch(vm, d->imm);
             NEXT();
     }
@@ -1019,12 +1176,14 @@ go:
     NEXT();
 stop:
     r[R3_PC] = (uint32_t)(d - code) * 4;
+    settle(r, &flags);
     vm->instruction_count += limit - left;
     return limit - left;
 leave:
     // The instruction ran and goes where cpu_run does not
     left--;
     r[R3_PC] = value;
+    settle(r, &flags);
     vm->instruction_count += limit - left;
     return limit - left;
 }
