@@ -54,7 +54,7 @@ static inline void cpu_push_frame(VM *vm, uint32_t site, uint32_t resume, int ve
 static inline void cpu_pop_frames(VM *vm, int interrupt_return) {
     const CallFrame *first = vm->call_frames, *top = first + vm->call_depth;
     uint32_t sp = vm->registers[R2_SP];
-    while (top > first && top[-1].vector < 0 && (interrupt_return || top[-1].slot < sp)) {
+    while (top > first && (interrupt_return || top[-1].slot < sp) && top[-1].vector < 0) {
         top--;
     }
     if (interrupt_return && top > first) {
