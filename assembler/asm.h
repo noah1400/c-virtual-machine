@@ -9,6 +9,7 @@
 #define ASM_MAX_INCLUDE_DIRS  16
 #define ASM_MAX_DEFINES       32
 #define ASM_MAX_CONDITIONS    32
+#define ASM_MAX_INLINE_DEPTH  16
 #define ASM_MAX_ERRORS        50
 #define ASM_MAX_SECTION_SIZE  (16u * 1024 * 1024)
 
@@ -146,6 +147,14 @@ typedef struct {
     char *text;
 } Location;
 
+// Code that a compiler copied from a function into a call of it at a line, from .inline to .endinline
+typedef struct {
+    int section;
+    uint32_t start, end;
+    char *file;
+    int line;
+} Inlined;
+
 // A file that .loc names without the text of the line, read for its lines
 typedef struct {
     char *path;
@@ -217,6 +226,12 @@ typedef struct {
     LocatedFile *located_files;
     size_t located_file_count;
     size_t location;    // 1 + index of the .loc in effect, 0 before any
+    Inlined *inlined;   // the copies of calls that the final pass found
+    size_t inlined_count;
+    size_t inlined_capacity;
+    size_t inline_open[ASM_MAX_INLINE_DEPTH];       // the copies not ended yet, innermost last
+    const SourceLine *inline_lines[ASM_MAX_INLINE_DEPTH];
+    int inline_depth;
     int changed;        // a layout pass moved a label, changed a constant or widened an instruction
     int64_t entry;
     const SourceLine *entry_line;   // the .entry directive, if any

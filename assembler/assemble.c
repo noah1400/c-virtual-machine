@@ -77,6 +77,10 @@ void asm_free(Assembler *as) {
         free(as->locations[i].text);
     }
     free(as->locations);
+    for (size_t i = 0; i < as->inlined_count; i++) {
+        free(as->inlined[i].file);
+    }
+    free(as->inlined);
     for (size_t i = 0; i < as->located_file_count; i++) {
         free(as->located_files[i].path);
         free(as->located_files[i].text);
@@ -717,6 +721,71 @@ static void directive_loc(Assembler *as, Parser *p) {
     as->location = result->location;
 }
 
+// .inline "file", line: the code up to the matching .endinline was copied from a function into a call of it
+// at that line, which backtraces then show
+static void directive_inline(Assembler *as, Parser *p) {
+    Token *file = peek(p);
+    int64_t line;
+
+    if (file->kind != TOK_STRING || file->length == 0) {
+        asm_error(as, "expected a file name in quotes");
+        return;
+    }
+    p->pos++;
+    if (!accept(p, ',')) {
+        asm_error(as, "expected a line number after the file name");
+        return;
+    }
+    if (!eval_now(p, &line, "the line number") || !expect_end(p)) {
+        return;
+    }
+    if (line < 1 || line > INT32_MAX) {
+        asm_error(as, "invalid line number %lld", (long long)line);
+        return;
+    }
+    if (as->inline_depth == ASM_MAX_INLINE_DEPTH) {
+        asm_error(as, ".inline nests more than %d deep", ASM_MAX_INLINE_DEPTH);
+        return;
+    }
+    size_t index = 0;
+    if (as->pass == PASS_EMIT) {
+        if (as->inlined_count == as->inlined_capacity) {
+            size_t capacity = as->inlined_capacity ? as->inlined_capacity * 2 : 64;
+            Inlined *larger = realloc(as->inlined, capacity * sizeof(Inlined));
+            if (!larger) {
+                asm_error(as, "out of memory");
+                return;
+            }
+            as->inlined = larger;
+            as->inlined_capacity = capacity;
+        }
+        index = as->inlined_count++;
+        as->inlined[index] = (Inlined){ as->section, as->statement_address, as->statement_address, strdup(file->text),
+                                        (int)line };
+    }
+    as->inline_lines[as->inline_depth] = as->line;
+    as->inline_open[as->inline_depth++] = index;
+}
+
+static void directive_endinline(Assembler *as, Parser *p) {
+    if (!expect_end(p)) {
+        return;
+    }
+    if (as->inline_depth == 0) {
+        asm_error(as, ".endinline without .inline");
+        return;
+    }
+    size_t index = as->inline_open[--as->inline_depth];
+    if (as->pass != PASS_EMIT) {
+        return;
+    }
+    if (as->inlined[index].section != as->section) {
+        asm_error(as, ".inline and .endinline are in different sections");
+    } else {
+        as->inlined[index].end = as->statement_address;
+    }
+}
+
 static void directive_struct(Assembler *as, Parser *p) {
     Token *t = peek(p);
 
@@ -906,6 +975,10 @@ static void directive(Assembler *as, Parser *p) {
         directive_incbin(as, p);
     } else if (name_equals(name, ".loc")) {
         directive_loc(as, p);
+    } else if (name_equals(name, ".inline")) {
+        directive_inline(as, p);
+    } else if (name_equals(name, ".endinline")) {
+        directive_endinline(as, p);
     } else if (name_equals(name, ".global") || name_equals(name, ".extern")) {
         directive_symbols(as, p, name_equals(name, ".extern"));
     } else if (name_equals(name, ".error")) {
@@ -1617,6 +1690,7 @@ static void run_pass(Assembler *as, int pass) {
     as->scope[0] = '\0';
     as->structure[0] = '\0';
     as->location = 0;
+    as->inline_depth = 0;
     memset(as->library.current, 0, sizeof(as->library.current));
     as->library.last_code = -1;
     as->library.runs_on = 0;
@@ -1647,6 +1721,11 @@ static void run_pass(Assembler *as, int pass) {
     if (as->structure[0] && pass == PASS_DEFINE) {
         as->line = as->structure_line;
         asm_error(as, "structure %s is missing .ends", as->structure);
+        as->line = NULL;
+    }
+    if (as->inline_depth > 0 && pass == PASS_DEFINE) {
+        as->line = as->inline_lines[as->inline_depth - 1];
+        asm_error(as, ".inline is missing .endinline");
         as->line = NULL;
     }
 

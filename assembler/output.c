@@ -57,6 +57,12 @@ static void write_debug_info(Assembler *as, Buffer *b) {
             vm32_write_line(b, r->address, o.number, trim(o.text, text, sizeof(text)), o.file);
         }
     }
+
+    buffer_u32(b, (uint32_t)as->inlined_count);
+    for (size_t i = 0; i < as->inlined_count; i++) {
+        const Inlined *copy = &as->inlined[i];
+        vm32_write_inlined(b, copy->start, copy->end, (uint32_t)copy->line, copy->file);
+    }
 }
 
 int output_binary(Assembler *as, const char *path, int with_debug) {
@@ -156,6 +162,16 @@ int output_object(Assembler *as, const char *path) {
             buffer_string(&b, trim(o.text, line_text, sizeof(line_text)));
             buffer_string(&b, o.file);
         }
+    }
+
+    buffer_u32(&b, (uint32_t)as->inlined_count);
+    for (size_t i = 0; i < as->inlined_count; i++) {
+        const Inlined *copy = &as->inlined[i];
+        buffer_u8(&b, copy->section == SECTION_TEXT ? VMO_TEXT : VMO_DATA);
+        buffer_u32(&b, copy->start);
+        buffer_u32(&b, copy->end);
+        buffer_u32(&b, (uint32_t)copy->line);
+        buffer_string(&b, copy->file);
     }
 
     int ok = buffer_save(&b, path);
