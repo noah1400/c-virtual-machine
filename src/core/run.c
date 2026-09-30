@@ -535,6 +535,12 @@ INLINE int holds(const uint32_t *r, const Decoded *d) {
     return (d->cond >> (r[R4_SR] & 0x0F)) & 1;
 }
 
+// Puts the flags that f changes in SR and returns the result
+INLINE uint32_t flagged(uint32_t *r, const FlagUpdate *f, uint32_t result) {
+    set_flags(&r[R4_SR], f->changed, f->bits);
+    return result;
+}
+
 #ifdef __GNUC__
 // The instructions go to the code for the next through a table of labels, which spares the range check and
 // the offset arithmetic of the switch
@@ -563,6 +569,7 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
     static int prepared;
     uint32_t *r = vm->registers;
     uint32_t left = limit, words = fetch_words(vm), index = word_index(r[R3_PC]), value;
+    FlagUpdate f;
 
     if (!prepared) {
         prepare();
@@ -670,40 +677,40 @@ dispatch:
             r[d->a] = operand(r, d);
             NEXT();
         TARGET(D_ADD_V):
-            r[d->a] = alu_add(&r[R4_SR], r[d->a], operand(r, d), 0);
+            r[d->a] = flagged(r, &f, alu_add(r[d->a], operand(r, d), 0, &f));
             NEXT();
         TARGET(D_ADD_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            r[d->a] = alu_add(&r[R4_SR], r[d->a], value, 0);
+            r[d->a] = flagged(r, &f, alu_add(r[d->a], value, 0, &f));
             NEXT();
         TARGET(D_SUB_V):
-            r[d->a] = alu_sub(&r[R4_SR], r[d->a], operand(r, d), 0);
+            r[d->a] = flagged(r, &f, alu_sub(r[d->a], operand(r, d), 0, &f));
             NEXT();
         TARGET(D_SUB_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            r[d->a] = alu_sub(&r[R4_SR], r[d->a], value, 0);
+            r[d->a] = flagged(r, &f, alu_sub(r[d->a], value, 0, &f));
             NEXT();
         TARGET(D_CMP_V):
-            alu_sub(&r[R4_SR], r[d->a], operand(r, d), 0);
+            flagged(r, &f, alu_sub(r[d->a], operand(r, d), 0, &f));
             NEXT();
         TARGET(D_CMP_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            alu_sub(&r[R4_SR], r[d->a], value, 0);
+            flagged(r, &f, alu_sub(r[d->a], value, 0, &f));
             NEXT();
         TARGET(D_TEST_V):
-            alu_logic(&r[R4_SR], r[d->a] & operand(r, d));
+            flagged(r, &f, alu_logic(r[d->a] & operand(r, d), &f));
             NEXT();
         TARGET(D_TEST_M):
             if (!load(vm, operand(r, d), 4, &value)) {
                 goto stop;
             }
-            alu_logic(&r[R4_SR], r[d->a] & value);
+            flagged(r, &f, alu_logic(r[d->a] & value, &f));
             NEXT();
         TARGET(D_BINARY_V):
             r[d->a] = alu_binary(d->op, &r[R4_SR], r[d->a], operand(r, d));
@@ -719,34 +726,34 @@ dispatch:
             if (!alu_divides(d->op, r[d->a], value)) {
                 goto stop;
             }
-            r[d->a] = alu_divide(d->op, &r[R4_SR], r[d->a], value);
+            r[d->a] = flagged(r, &f, alu_divide(d->op, r[d->a], value, &f));
             NEXT();
         TARGET(D_DIVIDE_M):
             if (!load(vm, operand(r, d), 4, &value) || !alu_divides(d->op, r[d->a], value)) {
                 goto stop;
             }
-            r[d->a] = alu_divide(d->op, &r[R4_SR], r[d->a], value);
+            r[d->a] = flagged(r, &f, alu_divide(d->op, r[d->a], value, &f));
             NEXT();
         TARGET(D_MUL):
-            r[d->a] = alu_mul(&r[R4_SR], r[d->a], operand(r, d));
+            r[d->a] = flagged(r, &f, alu_mul(r[d->a], operand(r, d), &f));
             NEXT();
         TARGET(D_AND):
-            r[d->a] = alu_logic(&r[R4_SR], r[d->a] & operand(r, d));
+            r[d->a] = flagged(r, &f, alu_logic(r[d->a] & operand(r, d), &f));
             NEXT();
         TARGET(D_OR):
-            r[d->a] = alu_logic(&r[R4_SR], r[d->a] | operand(r, d));
+            r[d->a] = flagged(r, &f, alu_logic(r[d->a] | operand(r, d), &f));
             NEXT();
         TARGET(D_XOR):
-            r[d->a] = alu_logic(&r[R4_SR], r[d->a] ^ operand(r, d));
+            r[d->a] = flagged(r, &f, alu_logic(r[d->a] ^ operand(r, d), &f));
             NEXT();
         TARGET(D_SHL):
-            r[d->a] = alu_shl(&r[R4_SR], r[d->a], operand(r, d));
+            r[d->a] = flagged(r, &f, alu_shl(r[d->a], operand(r, d), &f));
             NEXT();
         TARGET(D_SHR):
-            r[d->a] = alu_shr(&r[R4_SR], r[d->a], operand(r, d));
+            r[d->a] = flagged(r, &f, alu_shr(r[d->a], operand(r, d), &f));
             NEXT();
         TARGET(D_SAR):
-            r[d->a] = alu_sar(&r[R4_SR], r[d->a], operand(r, d));
+            r[d->a] = flagged(r, &f, alu_sar(r[d->a], operand(r, d), &f));
             NEXT();
         TARGET(D_COUNT_V):
             r[d->a] = alu_count(d->op, &r[R4_SR], operand(r, d));

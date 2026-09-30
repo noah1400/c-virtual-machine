@@ -19,19 +19,29 @@ static inline uint32_t zero_negative(uint32_t result) {
     return (result == 0 ? ZERO_FLAG : 0) | (result >> 31 ? NEG_FLAG : 0);
 }
 
-static inline uint32_t alu_add(uint32_t *sr, uint32_t a, uint32_t b, uint32_t carry) {
-    uint64_t wide = (uint64_t)a + b + carry;
-    uint32_t result = (uint32_t)wide;
-    set_flags(sr, ALU_FLAGS, zero_negative(result) | (wide >> 32 ? CARRY_FLAG : 0) |
-                                 (((a ^ result) & (b ^ result)) >> 31 ? OVER_FLAG : 0));
+// The flags that an instruction changes, and in bits the values it gives them
+typedef struct {
+    uint32_t changed;
+    uint32_t bits;
+} FlagUpdate;
+
+static inline uint32_t updated(FlagUpdate *f, uint32_t changed, uint32_t bits, uint32_t result) {
+    f->changed = changed;
+    f->bits = bits;
     return result;
 }
 
-static inline uint32_t alu_sub(uint32_t *sr, uint32_t a, uint32_t b, uint32_t borrow) {
+static inline uint32_t alu_add(uint32_t a, uint32_t b, uint32_t carry, FlagUpdate *f) {
+    uint64_t wide = (uint64_t)a + b + carry;
+    uint32_t result = (uint32_t)wide;
+    return updated(f, ALU_FLAGS, zero_negative(result) | (wide >> 32 ? CARRY_FLAG : 0) |
+                                     (((a ^ result) & (b ^ result)) >> 31 ? OVER_FLAG : 0), result);
+}
+
+static inline uint32_t alu_sub(uint32_t a, uint32_t b, uint32_t borrow, FlagUpdate *f) {
     uint32_t result = a - b - borrow;
-    set_flags(sr, ALU_FLAGS, zero_negative(result) | ((uint64_t)a < (uint64_t)b + borrow ? CARRY_FLAG : 0) |
-                                 (((a ^ b) & (a ^ result)) >> 31 ? OVER_FLAG : 0));
-    return result;
+    return updated(f, ALU_FLAGS, zero_negative(result) | ((uint64_t)a < (uint64_t)b + borrow ? CARRY_FLAG : 0) |
+                                     (((a ^ b) & (a ^ result)) >> 31 ? OVER_FLAG : 0), result);
 }
 
 // Whether DIV, MOD, IDIV or IMOD can divide a by b instead of faulting
@@ -39,71 +49,70 @@ static inline int alu_divides(uint8_t opcode, uint32_t a, uint32_t b) {
     return b != 0 && (opcode == DIV_OP || opcode == MOD_OP || a != 0x80000000u || b != 0xFFFFFFFFu);
 }
 
-static inline uint32_t alu_mul(uint32_t *sr, uint32_t a, uint32_t b) {
+static inline uint32_t alu_mul(uint32_t a, uint32_t b, FlagUpdate *f) {
     uint32_t result = a * b;
-    set_flags(sr, ZERO_FLAG | NEG_FLAG | OVER_FLAG, zero_negative(result) | (((uint64_t)a * b) >> 32 ? OVER_FLAG : 0));
-    return result;
+    return updated(f, ZERO_FLAG | NEG_FLAG | OVER_FLAG,
+                   zero_negative(result) | (((uint64_t)a * b) >> 32 ? OVER_FLAG : 0), result);
 }
 
 // AND, OR, XOR and TEST leave no carry or overflow behind
-static inline uint32_t alu_logic(uint32_t *sr, uint32_t result) {
-    set_flags(sr, ALU_FLAGS, zero_negative(result));
-    return result;
+static inline uint32_t alu_logic(uint32_t result, FlagUpdate *f) {
+    return updated(f, ALU_FLAGS, zero_negative(result), result);
 }
 
 // Shifts and rotations set C to the last bit that went out when the count is not zero
-static inline uint32_t alu_shift(uint32_t *sr, uint32_t result, uint32_t count, uint32_t carry) {
-    set_flags(sr, (count ? CARRY_FLAG : 0) | ZERO_FLAG | NEG_FLAG, (count && carry ? CARRY_FLAG : 0) | zero_negative(result));
-    return result;
+static inline uint32_t alu_shift(uint32_t result, uint32_t count, uint32_t carry, FlagUpdate *f) {
+    return updated(f, (count ? CARRY_FLAG : 0) | ZERO_FLAG | NEG_FLAG,
+                   (count && carry ? CARRY_FLAG : 0) | zero_negative(result), result);
 }
 
-static inline uint32_t alu_shl(uint32_t *sr, uint32_t a, uint32_t b) {
+static inline uint32_t alu_shl(uint32_t a, uint32_t b, FlagUpdate *f) {
     uint32_t count = b & 0x1F;
-    return alu_shift(sr, a << count, count, count && (a >> (32 - count)) & 1);
+    return alu_shift(a << count, count, count && (a >> (32 - count)) & 1, f);
 }
 
-static inline uint32_t alu_shr(uint32_t *sr, uint32_t a, uint32_t b) {
+static inline uint32_t alu_shr(uint32_t a, uint32_t b, FlagUpdate *f) {
     uint32_t count = b & 0x1F;
-    return alu_shift(sr, a >> count, count, count && (a >> (count - 1)) & 1);
+    return alu_shift(a >> count, count, count && (a >> (count - 1)) & 1, f);
 }
 
-static inline uint32_t alu_sar(uint32_t *sr, uint32_t a, uint32_t b) {
+static inline uint32_t alu_sar(uint32_t a, uint32_t b, FlagUpdate *f) {
     uint32_t count = b & 0x1F;
     uint32_t result = (a & 0x80000000) && count ? (a >> count) | (0xFFFFFFFFu << (32 - count)) : a >> count;
-    return alu_shift(sr, result, count, count && (a >> (count - 1)) & 1);
+    return alu_shift(result, count, count && (a >> (count - 1)) & 1, f);
 }
 
 // DIV, MOD, IDIV and IMOD, once alu_divides allowed them
-static inline uint32_t alu_divide(uint8_t opcode, uint32_t *sr, uint32_t a, uint32_t b) {
+static inline uint32_t alu_divide(uint8_t opcode, uint32_t a, uint32_t b, FlagUpdate *f) {
     uint32_t result = opcode == DIV_OP    ? a / b
                       : opcode == MOD_OP  ? a % b
                       : opcode == IDIV_OP ? (uint32_t)((int32_t)a / (int32_t)b)
                                           : (uint32_t)((int32_t)a % (int32_t)b);
-    set_flags(sr, ZERO_FLAG | NEG_FLAG, zero_negative(result));
-    return result;
+    return updated(f, ZERO_FLAG | NEG_FLAG, zero_negative(result), result);
 }
 
-// The result of an instruction with a register and an operand; CMP and TEST only set the flags
-static inline uint32_t alu_binary(uint8_t opcode, uint32_t *sr, uint32_t a, uint32_t b) {
+// The result of an instruction with a register and an operand and the flags it sets, where ADDC and SUBC add
+// the carry; CMP and TEST only set the flags. Every one of them sets Z and N from its result.
+static inline uint32_t alu_result(uint8_t opcode, uint32_t a, uint32_t b, uint32_t carry, FlagUpdate *f) {
     uint32_t count = b & 0x1F, result;
 
     switch (opcode) {
         case ADD_OP:
-            return alu_add(sr, a, b, 0);
+            return alu_add(a, b, 0, f);
         case ADDC_OP:
-            return alu_add(sr, a, b, (*sr & CARRY_FLAG) != 0);
+            return alu_add(a, b, carry, f);
         case SUB_OP:
         case CMP_OP:
-            return alu_sub(sr, a, b, 0);
+            return alu_sub(a, b, 0, f);
         case SUBC_OP:
-            return alu_sub(sr, a, b, (*sr & CARRY_FLAG) != 0);
+            return alu_sub(a, b, carry, f);
         case MUL_OP:
-            return alu_mul(sr, a, b);
+            return alu_mul(a, b, f);
         case DIV_OP:
         case MOD_OP:
         case IDIV_OP:
         case IMOD_OP:
-            return alu_divide(opcode, sr, a, b);
+            return alu_divide(opcode, a, b, f);
         case MULH_OP:
             result = (uint32_t)(((int64_t)(int32_t)a * (int32_t)b) >> 32);
             break;
@@ -112,53 +121,65 @@ static inline uint32_t alu_binary(uint8_t opcode, uint32_t *sr, uint32_t a, uint
             break;
         case AND_OP:
         case TEST_OP:
-            return alu_logic(sr, a & b);
+            return alu_logic(a & b, f);
         case OR_OP:
-            return alu_logic(sr, a | b);
+            return alu_logic(a | b, f);
         case XOR_OP:
-            return alu_logic(sr, a ^ b);
+            return alu_logic(a ^ b, f);
         case SHL_OP:
-            return alu_shl(sr, a, b);
+            return alu_shl(a, b, f);
         case SHR_OP:
-            return alu_shr(sr, a, b);
+            return alu_shr(a, b, f);
         case SAR_OP:
-            return alu_sar(sr, a, b);
+            return alu_sar(a, b, f);
         case ROL_OP:
             result = count ? (a << count) | (a >> (32 - count)) : a;
-            return alu_shift(sr, result, count, result & 1);
+            return alu_shift(result, count, result & 1, f);
         default:
             result = count ? (a >> count) | (a << (32 - count)) : a;
-            return alu_shift(sr, result, count, result >> 31);
+            return alu_shift(result, count, result >> 31, f);
     }
-    set_flags(sr, ZERO_FLAG | NEG_FLAG, zero_negative(result));
+    return updated(f, ZERO_FLAG | NEG_FLAG, zero_negative(result), result);
+}
+
+static inline uint32_t alu_binary(uint8_t opcode, uint32_t *sr, uint32_t a, uint32_t b) {
+    FlagUpdate f;
+    uint32_t result = alu_result(opcode, a, b, (*sr & CARRY_FLAG) != 0, &f);
+    set_flags(sr, f.changed, f.bits);
     return result;
 }
 
 // INC, DEC, NEG, NOT and BSWAP
-static inline uint32_t alu_unary(uint8_t opcode, uint32_t *sr, uint32_t a) {
-    uint32_t result;
+static inline uint32_t alu_unary_result(uint8_t opcode, uint32_t a, FlagUpdate *f) {
+    uint32_t result, over = 0;
 
     switch (opcode) {
         case BSWAP_OP:
             result = (a >> 24) | ((a >> 8) & 0xFF00) | ((a << 8) & 0xFF0000) | (a << 24);
-            break;
+            return updated(f, ZERO_FLAG | NEG_FLAG, zero_negative(result), result);
         case INC_OP:
             result = a + 1;
-            set_flags(sr, OVER_FLAG, a == 0x7FFFFFFF ? OVER_FLAG : 0);
+            over = a == 0x7FFFFFFF;
             break;
         case DEC_OP:
             result = a - 1;
-            set_flags(sr, OVER_FLAG, a == 0x80000000 ? OVER_FLAG : 0);
+            over = a == 0x80000000;
             break;
         case NEG_OP:
             result = 0u - a;
-            set_flags(sr, OVER_FLAG, a == 0x80000000 ? OVER_FLAG : 0);
+            over = a == 0x80000000;
             break;
         default:
             result = ~a;
-            break;
+            return updated(f, ZERO_FLAG | NEG_FLAG, zero_negative(result), result);
     }
-    set_flags(sr, ZERO_FLAG | NEG_FLAG, zero_negative(result));
+    return updated(f, ZERO_FLAG | NEG_FLAG | OVER_FLAG, zero_negative(result) | (over ? OVER_FLAG : 0), result);
+}
+
+static inline uint32_t alu_unary(uint8_t opcode, uint32_t *sr, uint32_t a) {
+    FlagUpdate f;
+    uint32_t result = alu_unary_result(opcode, a, &f);
+    set_flags(sr, f.changed, f.bits);
     return result;
 }
 
