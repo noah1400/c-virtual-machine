@@ -515,6 +515,13 @@ fn relative(base: []u8, offset: int) []u8 {
     return ast.cat([][]u8 { base, sign, ast.number(offset) });
 }
 
+// Whether e indexes an array with a constant within it. The checker rejects others, but inlining a call
+// can put a constant argument where the function had an index.
+fn fixed_index(e: *ast.Expr) bool {
+    return e.left.type.kind == ast.TypeKind.ARRAY && e.right.is_const && e.right.value.hi == 0 &&
+        wide.low(e.right.value) >= 0 && wide.low(e.right.value) < e.left.type.length;
+}
+
 // Finds the variable in memory that holds e at a fixed offset: a local, whose base is BP, or a global,
 // whose base is its label
 fn find_place(e: *ast.Expr, base: *[]u8, offset: *int) bool {
@@ -538,7 +545,7 @@ fn find_place(e: *ast.Expr, base: *[]u8, offset: *int) bool {
             }
         }
         case ast.ExprKind.INDEX {
-            if (e.left.type.kind == ast.TypeKind.ARRAY && e.right.is_const && find_place(e.left, base, offset)) {
+            if (fixed_index(e) && find_place(e.left, base, offset)) {
                 *offset += wide.low(e.right.value) * e.left.type.base.size;
                 return true;
             }
@@ -1851,7 +1858,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
             emits(g, "    ADD R0, [%s]\n", [][]u8 { at });
             return 0;
         }
-        if (!e.right.is_const && !safe) {
+        if (!fixed_index(e) && !safe) {
             emitd(g, "    CMP R0, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
                 []int { t.length, ok, t.length, ok });
             note_in_range(g, e);
@@ -1875,7 +1882,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
         if (t.kind == ast.TypeKind.POINTER) {
             check_pointer(g, e.left, "R0");
         }
-        if (t.kind == ast.TypeKind.ARRAY && e.right.is_const) {
+        if (fixed_index(e)) {
             return wide.low(e.right.value) * size;
         }
         set_register(g, "R6", gen_operand(g, e.right));
@@ -1911,7 +1918,7 @@ fn gen_index(g: *Gen, e: *ast.Expr) int {
         note_in_range(g, e);
     } else if (t.kind != ast.TypeKind.SLICE) {
         pop(g, "R6");
-        if (t.kind == ast.TypeKind.ARRAY && !e.right.is_const && !safe) {
+        if (t.kind == ast.TypeKind.ARRAY && !fixed_index(e) && !safe) {
             emitd(g, "    CMP R0, #%d\n    JB .L%d\n    PUSH #%d\n    PUSH R0\n    CALL rt.index_error\n.L%d:\n",
                 []int { t.length, ok, t.length, ok });
             note_in_range(g, e);
@@ -2124,7 +2131,7 @@ fn in_register(e: *ast.Expr) bool {
             return e.op == ast.TokenKind.STAR && register_of(e.left).ptr != null;
         }
         case ast.ExprKind.INDEX {
-            return e.left.type.kind == ast.TypeKind.ARRAY && e.right.is_const && in_register(e.left);
+            return fixed_index(e) && in_register(e.left);
         }
         case ast.ExprKind.LEN, ast.ExprKind.PTR {
             return in_register(e.left);
@@ -2989,7 +2996,7 @@ fn through_local(e: *ast.Expr) bool {
             return e.op == ast.TokenKind.STAR && local_of(e.left) != null;
         }
         case ast.ExprKind.INDEX {
-            return e.left.type.kind == ast.TypeKind.ARRAY && e.right.is_const && through_local(e.left);
+            return fixed_index(e) && through_local(e.left);
         }
         case ast.ExprKind.LEN, ast.ExprKind.PTR {
             return through_local(e.left);
