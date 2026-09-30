@@ -1,0 +1,1034 @@
+// Copies the bodies of functions into the calls where that pays. A body that returns one expression that can
+// neither fail nor call anything replaces a call whose arguments cannot change. Other bodies go in front of
+// the statement with the call, in a block marked as a copy so that backtraces show the call, with locals for
+// the parameters that need them and for the result.
+import "ast";
+import "wide";
+
+// The size of a body that gets copied, in instructions: one that a call costs about as much as, one whose
+// call runs in a loop, and one whose call is the only one, which leaves nothing of the function behind
+const SMALL = 10;
+const LIMIT = 40;
+const ONCE = 400;
+
+// How statements end once their returns set the result: no return in them, a return on every way through
+// them, one on some ways at the end of the body, or one that would have to jump
+const FALLS = 0;
+const RETURNS = 1;
+const MIXED = 2;
+const FAILS = 3;
+
+// What a first look at a function finds, and what copying it takes, worked out from its body before any
+// function changes
+struct Plan {
+    decl: *ast.Decl;
+    taken: ast.List;        // the locals whose address the function takes, which calls can change
+    calls: bool;            // whether it calls anything, which copies of it then could multiply
+    recursive: bool;        // whether it names itself, which it would then copy into itself
+    body: *ast.Stmt;        // the body as the checker left it, when the function can be copied, or null
+    value: *ast.Expr;       // what the body returns when it is one return, or null
+    quiet: bool;            // whether the value can neither fail nor call anything, as copied
+    direct: []bool;         // parameters that the body neither assigns nor takes the address of
+    cost: int;              // about how many instructions the body takes
+}
+
+// The functions being copied into the one being expanded, the outermost first
+var expanding: [4]*ast.Decl;
+var depth: int;
+
+// The loops around the statement being expanded, and the copies around it of functions that other calls
+// copy as well
+var loops: int;
+var shared: int;
+
+// The locals whose address the function being expanded takes, which calls can change through a pointer
+var taken: *ast.List;
+
+// What the parameters and locals of the function being copied stand for in the copy: a local, or the
+// argument itself
+var from: ast.List;
+var to: ast.List;
+var values: ast.List;
+var module: *ast.Module;
+
+// Assignments to the result of the body being folded
+var assignments: int;
+
+fn contains(list: *ast.List, item: *u8) bool {
+    for (var i = 0; i < list.count; i += 1) {
+        if (list.items[i] == item) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn is_aggregate(t: *ast.Type) bool {
+    return t.kind == ast.TypeKind.STRUCT || t.kind == ast.TypeKind.ARRAY;
+}
+
+fn local_of(e: *ast.Expr) *ast.Symbol {
+    if (e != null && e.kind == ast.ExprKind.NAME && e.symbol != null && e.symbol.kind == ast.SymbolKind.LOCAL) {
+        return e.symbol;
+    }
+    return null;
+}
+
+// Adds the local that e, a place whose address is taken, lies in to list
+fn note_address(e: *ast.Expr, list: *ast.List) {
+    var x = e;
+    while (x.kind == ast.ExprKind.FIELD && x.left.type.kind == ast.TypeKind.STRUCT ||
+           x.kind == ast.ExprKind.INDEX && x.left.type.kind == ast.TypeKind.ARRAY) {
+        x = x.left;
+    }
+    var s = local_of(x);
+    if (s != null && !contains(list, s as *u8)) {
+        ast.add(list, s as *u8);
+    }
+}
+
+fn note_taken(e: *ast.Expr, list: *ast.List) {
+    if (e == null) {
+        return;
+    }
+    if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.AMP) {
+        note_address(e.left, list);
+    }
+    note_taken(e.left, list);
+    note_taken(e.right, list);
+    note_taken(e.third, list);
+    for (var i = 0; i < e.args.len; i += 1) {
+        note_taken(e.args[i], list);
+    }
+}
+
+fn note_taken_in(s: *ast.Stmt, list: *ast.List) {
+    if (s == null) {
+        return;
+    }
+    note_taken(s.value, list);
+    note_taken(s.target, list);
+    note_taken(s.cond, list);
+    for (var i = 0; i < s.body.len; i += 1) {
+        note_taken_in(s.body[i], list);
+    }
+    note_taken_in(s.then, list);
+    note_taken_in(s.otherwise, list);
+    note_taken_in(s.init, list);
+    note_taken_in(s.step, list);
+    for (var i = 0; i < s.cases.len; i += 1) {
+        note_taken_in(s.cases[i].body, list);
+    }
+    note_taken_in(s.fallback, list);
+}
+
+fn note_assigned(s: *ast.Stmt, list: *ast.List) {
+    if (s == null) {
+        return;
+    }
+    if (s.kind == ast.StmtKind.ASSIGN && local_of(s.target) != null) {
+        ast.add(list, s.target.symbol as *u8);
+    }
+    for (var i = 0; i < s.body.len; i += 1) {
+        note_assigned(s.body[i], list);
+    }
+    note_assigned(s.then, list);
+    note_assigned(s.otherwise, list);
+    note_assigned(s.init, list);
+    note_assigned(s.step, list);
+    for (var i = 0; i < s.cases.len; i += 1) {
+        note_assigned(s.cases[i].body, list);
+    }
+    note_assigned(s.fallback, list);
+}
+
+fn has_return(s: *ast.Stmt) bool {
+    if (s == null) {
+        return false;
+    }
+    if (s.kind == ast.StmtKind.RETURN || has_return(s.then) || has_return(s.otherwise) || has_return(s.init) ||
+        has_return(s.step) || has_return(s.fallback)) {
+        return true;
+    }
+    for (var i = 0; i < s.body.len; i += 1) {
+        if (has_return(s.body[i])) {
+            return true;
+        }
+    }
+    for (var i = 0; i < s.cases.len; i += 1) {
+        if (has_return(s.cases[i].body)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn new_stmt(kind: ast.StmtKind, line: int) *ast.Stmt {
+    var s = new(ast.Stmt);
+    s.kind = kind;
+    s.line = line;
+    s.end_line = line;
+    s.module = module;
+    return s;
+}
+
+fn name_of(s: *ast.Symbol, line: int) *ast.Expr {
+    var e = new(ast.Expr);
+    e.kind = ast.ExprKind.NAME;
+    e.line = line;
+    e.name = s.name;
+    e.symbol = s;
+    e.type = s.type;
+    return e;
+}
+
+fn declaration(s: *ast.Symbol, value: *ast.Expr, line: int) *ast.Stmt {
+    var d = new_stmt(ast.StmtKind.VAR, line);
+    d.name = s.name;
+    d.symbol = s;
+    d.value = value;
+    return d;
+}
+
+fn fresh(s: *ast.Symbol) *ast.Symbol {
+    var c = new(ast.Symbol);
+    *c = *s;
+    return c;
+}
+
+// The statements of a block, or the statement on its own
+fn statements(s: *ast.Stmt) []*ast.Stmt {
+    if (s.kind == ast.StmtKind.BLOCK) {
+        return s.body;
+    }
+    var one = new(*ast.Stmt, 1);
+    one[0] = s;
+    return one;
+}
+
+fn joined(a: []*ast.Stmt, b: []*ast.Stmt) []*ast.Stmt {
+    var list = new(*ast.Stmt, a.len + b.len);
+    for (var i = 0; i < a.len; i += 1) {
+        list[i] = a[i];
+    }
+    for (var i = 0; i < b.len; i += 1) {
+        list[a.len + i] = b[i];
+    }
+    return list;
+}
+
+fn add(list: *ast.List, s: *ast.Stmt) {
+    if (list != null) {
+        ast.add(list, s as *u8);
+    }
+}
+
+fn block(list: ast.List, line: int, m: *ast.Module) *ast.Stmt {
+    var b = new_stmt(ast.StmtKind.BLOCK, line);
+    b.module = m;
+    b.body = ast.stmts(list);
+    return b;
+}
+
+// What a return of the body leaves behind: an assignment to the result, the value on its own for what
+// else it does, or nothing
+fn returned(s: *ast.Stmt, result: *ast.Symbol, out: *ast.List) {
+    if (s.value == null || out == null) {
+        return;
+    }
+    if (result != null) {
+        var a = new_stmt(ast.StmtKind.ASSIGN, s.line);
+        a.module = s.module;
+        a.op = ast.TokenKind.ASSIGN;
+        a.target = name_of(result, s.line);
+        a.value = s.value;
+        assignments += 1;
+        add(out, a);
+    } else if (!inert(s.value)) {
+        var e = new_stmt(ast.StmtKind.EXPR, s.line);
+        e.module = s.module;
+        e.value = s.value;
+        add(out, e);
+    }
+}
+
+// Adds the statements in list from start on to out with their returns turned into assignments to result,
+// and tells how they end. A return in a branch takes the rest of the list into the other branch, which
+// must not return, so that nothing runs twice.
+fn fold(list: []*ast.Stmt, start: int, result: *ast.Symbol, out: *ast.List, top: bool) int {
+    for (var i = start; i < list.len; i += 1) {
+        var s = list[i];
+        if (!has_return(s)) {
+            add(out, s);
+            continue;
+        }
+        if (s.kind == ast.StmtKind.RETURN) {
+            returned(s, result, out);
+            return RETURNS;
+        }
+        if (s.kind == ast.StmtKind.BLOCK) {
+            return fold(joined(s.body, list[i + 1:]), 0, result, out, top);
+        }
+        if (s.kind != ast.StmtKind.IF) {
+            return FAILS;
+        }
+        var then = ast.List {};
+        var otherwise = ast.List {};
+        var into_then: *ast.List = null;
+        var into_otherwise: *ast.List = null;
+        if (out != null) {
+            into_then = &then;
+            into_otherwise = &otherwise;
+        }
+        var a = fold(statements(s.then), 0, result, into_then, false);
+        var b = FALLS;
+        if (s.otherwise != null) {
+            b = fold(statements(s.otherwise), 0, result, into_otherwise, false);
+        }
+        if (a == FAILS || b == FAILS || a == FALLS && b == FALLS) {
+            return FAILS;
+        }
+        var ending = RETURNS;
+        if (a == FALLS) {
+            ending = fold(list, i + 1, result, into_then, top);
+        } else if (b == FALLS) {
+            ending = fold(list, i + 1, result, into_otherwise, top);
+        }
+        if (ending == FAILS) {
+            return FAILS;
+        }
+        if (out != null) {
+            var branch = new(ast.Stmt);
+            *branch = *s;
+            branch.then = block(then, s.line, s.module);
+            branch.otherwise = null;
+            if (otherwise.count > 0) {
+                branch.otherwise = block(otherwise, s.line, s.module);
+            }
+            add(out, branch);
+        }
+        if (ending == RETURNS) {
+            return RETURNS;
+        }
+        if (top) {
+            return MIXED;
+        }
+        return FAILS;
+    }
+    return FALLS;
+}
+
+// What e stands for in the copy
+fn copy_expr(e: *ast.Expr) *ast.Expr {
+    if (e == null) {
+        return null;
+    }
+    var c = new(ast.Expr);
+    *c = *e;
+    if (e.kind == ast.ExprKind.NAME && e.symbol != null) {
+        for (var i = 0; i < from.count; i += 1) {
+            if (from.items[i] == e.symbol as *u8) {
+                if (values.items[i] != null) {
+                    return copy_value(values.items[i] as *ast.Expr);
+                }
+                c.symbol = to.items[i] as *ast.Symbol;
+                return c;
+            }
+        }
+    }
+    if (e.left != null) {
+        c.left = copy_expr(e.left);
+    }
+    // Going through the address of a variable reaches the variable itself
+    if (c.left != null && c.left.kind == ast.ExprKind.UNARY && c.left.op == ast.TokenKind.AMP) {
+        if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.STAR) {
+            return c.left.left;
+        }
+        if (e.kind == ast.ExprKind.FIELD && e.left.type.kind == ast.TypeKind.POINTER) {
+            c.left = c.left.left;
+        }
+    }
+    if (e.right != null) {
+        c.right = copy_expr(e.right);
+    }
+    if (e.third != null) {
+        c.third = copy_expr(e.third);
+    }
+    if (e.args.len > 0) {
+        c.args = new(*ast.Expr, e.args.len);
+        for (var i = 0; i < e.args.len; i += 1) {
+            c.args[i] = copy_expr(e.args[i]);
+        }
+    }
+    return c;
+}
+
+// An argument that stands for a parameter, which belongs to the caller and keeps its symbols
+fn copy_value(e: *ast.Expr) *ast.Expr {
+    if (e == null) {
+        return null;
+    }
+    var c = new(ast.Expr);
+    *c = *e;
+    c.left = copy_value(e.left);
+    c.right = copy_value(e.right);
+    c.third = copy_value(e.third);
+    if (e.args.len > 0) {
+        c.args = new(*ast.Expr, e.args.len);
+        for (var i = 0; i < e.args.len; i += 1) {
+            c.args[i] = copy_value(e.args[i]);
+        }
+    }
+    return c;
+}
+
+fn copy_stmt(s: *ast.Stmt) *ast.Stmt {
+    if (s == null) {
+        return null;
+    }
+    var c = new(ast.Stmt);
+    *c = *s;
+    if (c.module == null) {
+        c.module = module;
+    }
+    if (s.kind == ast.StmtKind.VAR && s.symbol != null) {
+        c.symbol = fresh(s.symbol);
+        ast.add(&from, s.symbol as *u8);
+        ast.add(&to, c.symbol as *u8);
+        ast.add(&values, null);
+    }
+    // The init of a for loop declares what its condition, step and body use
+    c.init = copy_stmt(s.init);
+    c.value = copy_expr(s.value);
+    c.target = copy_expr(s.target);
+    c.cond = copy_expr(s.cond);
+    if (s.body.len > 0) {
+        c.body = new(*ast.Stmt, s.body.len);
+        for (var i = 0; i < s.body.len; i += 1) {
+            c.body[i] = copy_stmt(s.body[i]);
+        }
+    }
+    c.then = copy_stmt(s.then);
+    c.otherwise = copy_stmt(s.otherwise);
+    c.step = copy_stmt(s.step);
+    if (s.cases.len > 0) {
+        c.cases = new(*ast.Case, s.cases.len);
+        for (var i = 0; i < s.cases.len; i += 1) {
+            var k = new(ast.Case);
+            *k = *s.cases[i];
+            k.body = copy_stmt(s.cases[i].body);
+            c.cases[i] = k;
+        }
+    }
+    c.fallback = copy_stmt(s.fallback);
+    return c;
+}
+
+// Works out whether a function can be copied and how, from its body as the checker left it
+fn plan(d: *ast.Decl) {
+    var p = d.plan as *Plan;
+    if (p == null || d.is_extern || d.is_interrupt || d.uses == 0 || p.recursive) {
+        return;
+    }
+    var t = d.symbol.type;
+    if (p.cost > LIMIT && (d.uses > 1 || p.cost > ONCE) || is_aggregate(t.base)) {
+        return;
+    }
+    for (var i = 0; i < d.params.len; i += 1) {
+        if (is_aggregate(d.params[i].symbol.type)) {
+            return;
+        }
+    }
+    var ending = fold(d.body.body, 0, null, null, true);
+    if (ending == FAILS || t.base.kind != ast.TypeKind.VOID && ending != RETURNS) {
+        return;
+    }
+    from.count = 0;
+    to.count = 0;
+    values.count = 0;
+    module = d.module;
+    // Nothing is copied into a function that calls nothing, so its body stays as it is
+    p.body = d.body;
+    if (p.calls) {
+        p.body = copy_stmt(d.body);
+    }
+    if (d.body.body.len == 1 && d.body.body[0].kind == ast.StmtKind.RETURN) {
+        p.value = p.body.body[0].value;
+        p.quiet = quiet(copy_expr(p.value));
+    }
+    var assigned = ast.List {};
+    note_assigned(d.body, &assigned);
+    p.direct = new(bool, d.params.len);
+    for (var i = 0; i < d.params.len; i += 1) {
+        var q = d.params[i].symbol as *u8;
+        p.direct[i] = !contains(&assigned, q) && !contains(&p.taken, q);
+    }
+    free(assigned.items);
+}
+
+fn plan_of(e: *ast.Expr) *Plan {
+    if (e.kind != ast.ExprKind.CALL || e.builtin != ast.Builtin.NONE || e.left.kind != ast.ExprKind.NAME ||
+        e.left.symbol == null || e.left.symbol.kind != ast.SymbolKind.FN) {
+        return null;
+    }
+    var d = e.left.symbol.decl;
+    if (d == null || d.plan == null || (d.plan as *Plan).body == null || depth == expanding.len) {
+        return null;
+    }
+    for (var i = 0; i < depth; i += 1) {
+        if (expanding[i] == d) {
+            return null;
+        }
+    }
+    return d.plan as *Plan;
+}
+
+// The plan of a call whose body pays to copy where the call is: one about as small as the call, the only
+// call to a function, whose own code then goes unused, or one in a loop. In a copy that other calls make as
+// well, only calls that call nothing themselves count as in a loop, so that copies do not multiply.
+fn copy_plan(e: *ast.Expr) *Plan {
+    var p = plan_of(e);
+    if (p == null || p.cost <= SMALL || shared == 0 && p.decl.uses == 1 ||
+        loops > 0 && p.cost <= LIMIT && (shared == 0 || !p.calls)) {
+        return p;
+    }
+    return null;
+}
+
+// A variable, or a field of a struct in one, which stays at the same address
+fn variable(e: *ast.Expr) bool {
+    var x = e;
+    while (x.kind == ast.ExprKind.FIELD && x.field != null && x.left.type.kind == ast.TypeKind.STRUCT) {
+        x = x.left;
+    }
+    return x.kind == ast.ExprKind.NAME && x.symbol != null &&
+        (x.symbol.kind == ast.SymbolKind.LOCAL || x.symbol.kind == ast.SymbolKind.GLOBAL);
+}
+
+// A value that nothing a copied body does can change: a constant, a string, a function, a local whose
+// address the function never takes or the address of a variable
+fn stable(e: *ast.Expr) bool {
+    if (e.is_const || e.kind == ast.ExprKind.NULL || e.kind == ast.ExprKind.STRING) {
+        return true;
+    }
+    if (e.kind == ast.ExprKind.UNARY && e.op == ast.TokenKind.AMP) {
+        return variable(e.left);
+    }
+    if (e.kind != ast.ExprKind.NAME || e.symbol == null) {
+        return false;
+    }
+    return e.symbol.kind == ast.SymbolKind.CONST || e.symbol.kind == ast.SymbolKind.FN ||
+        e.symbol.kind == ast.SymbolKind.LOCAL && !contains(taken, e.symbol as *u8);
+}
+
+// Whether the binary operation e is an integer division, which fails by 0, and by -1 for the smallest number
+fn risky(e: *ast.Expr) bool {
+    return (e.op == ast.TokenKind.SLASH || e.op == ast.TokenKind.PERCENT) && e.type.kind != ast.TypeKind.FLOAT &&
+        (!e.right.is_const || wide.low(e.right.value) == 0 || wide.low(e.right.value) == -1);
+}
+
+// Whether evaluating e cannot fail and has no effect that other code could see or change
+fn inert(e: *ast.Expr) bool {
+    if (e == null || stable(e) || e.kind == ast.ExprKind.SIZEOF ||
+        e.kind == ast.ExprKind.NAME && e.symbol != null && e.symbol.kind == ast.SymbolKind.BUILTIN) {
+        return true;
+    }
+    switch (e.kind) {
+        case ast.ExprKind.CONVERT, ast.ExprKind.CAST {
+            return inert(e.left);
+        }
+        case ast.ExprKind.LEN, ast.ExprKind.PTR {
+            return stable(e.left);
+        }
+        case ast.ExprKind.UNARY {
+            return (e.op == ast.TokenKind.MINUS || e.op == ast.TokenKind.TILDE || e.op == ast.TokenKind.BANG) &&
+                inert(e.left);
+        }
+        case ast.ExprKind.BINARY {
+            return !risky(e) && inert(e.left) && inert(e.right);
+        }
+    }
+    return false;
+}
+
+// Whether e can neither fail nor call anything, so that a copy of it needs no frame of its own
+fn quiet(e: *ast.Expr) bool {
+    if (e == null || e.is_const) {
+        return true;
+    }
+    switch (e.kind) {
+        case ast.ExprKind.NULL, ast.ExprKind.STRING, ast.ExprKind.SIZEOF, ast.ExprKind.NAME {
+            return true;
+        }
+        case ast.ExprKind.CONVERT, ast.ExprKind.CAST, ast.ExprKind.LEN, ast.ExprKind.PTR {
+            return quiet(e.left);
+        }
+        case ast.ExprKind.FIELD {
+            return e.left.type.kind == ast.TypeKind.STRUCT && quiet(e.left);
+        }
+        case ast.ExprKind.UNARY {
+            return e.op != ast.TokenKind.STAR && quiet(e.left);
+        }
+        case ast.ExprKind.BINARY {
+            return !risky(e) && quiet(e.left) && quiet(e.right);
+        }
+    }
+    return false;
+}
+
+// The first part of e, in the order of evaluation, that is not inert, or null. What comes after a && or ||
+// runs only sometimes, and so does not count, and print shows each value before it evaluates the next.
+fn first_effect(e: *ast.Expr) *ast.Expr {
+    if (e == null) {
+        return null;
+    }
+    var f: *ast.Expr = null;
+    switch (e.kind) {
+        case ast.ExprKind.CALL {
+            f = first_effect(e.left);
+            var count = e.args.len;
+            if (e.builtin == ast.Builtin.PRINT && count > 1) {
+                count = 1;
+            }
+            for (var i = 0; i < count && f == null; i += 1) {
+                f = first_effect(e.args[i]);
+            }
+            // A copy of the call evaluates the arguments first, in the same order
+            if (f == null || copy_plan(f) == null && copy_plan(e) != null) {
+                return e;
+            }
+            return f;
+        }
+        case ast.ExprKind.BINARY {
+            f = first_effect(e.left);
+            if (f == null && e.op != ast.TokenKind.ANDAND && e.op != ast.TokenKind.OROR) {
+                f = first_effect(e.right);
+            } else if (f == null && !inert(e.right)) {
+                return e;
+            }
+            if (f == null && risky(e)) {
+                return e;
+            }
+            return f;
+        }
+        case ast.ExprKind.INDEX, ast.ExprKind.SLICE {
+            f = first_effect(e.left);
+            if (f == null) {
+                f = first_effect(e.right);
+            }
+            if (f == null) {
+                f = first_effect(e.third);
+            }
+            if (f == null) {
+                return e;
+            }
+            return f;
+        }
+        case ast.ExprKind.UNARY {
+            if (stable(e)) {
+                return null;
+            }
+            f = first_effect(e.left);
+            if (f == null && e.op != ast.TokenKind.MINUS && e.op != ast.TokenKind.TILDE && e.op != ast.TokenKind.BANG) {
+                return e;
+            }
+            return f;
+        }
+        case ast.ExprKind.CONVERT, ast.ExprKind.CAST {
+            return first_effect(e.left);
+        }
+        case ast.ExprKind.LEN, ast.ExprKind.PTR {
+            f = first_effect(e.left);
+            if (f == null && !stable(e.left)) {
+                return e;
+            }
+            return f;
+        }
+        case ast.ExprKind.FIELD {
+            f = first_effect(e.left);
+            if (f == null) {
+                return e;
+            }
+            return f;
+        }
+    }
+    if (inert(e)) {
+        return null;
+    }
+    return e;
+}
+
+// The first part of what s evaluates before anything else that is not inert, or null
+fn first_in(s: *ast.Stmt) *ast.Expr {
+    switch (s.kind) {
+        case ast.StmtKind.EXPR, ast.StmtKind.VAR, ast.StmtKind.RETURN {
+            return first_effect(s.value);
+        }
+        case ast.StmtKind.IF, ast.StmtKind.SWITCH {
+            return first_effect(s.cond);
+        }
+        case ast.StmtKind.ASSIGN {
+            // Only a target that takes no code leaves the value first
+            var target = local_of(s.target);
+            if (s.target.kind == ast.ExprKind.NAME && (s.op == ast.TokenKind.ASSIGN || target != null && stable(s.target))) {
+                return first_effect(s.value);
+            }
+            return first_effect(s.target);
+        }
+    }
+    return null;
+}
+
+fn begin(p: *Plan, e: *ast.Expr) {
+    from.count = 0;
+    to.count = 0;
+    values.count = 0;
+    module = p.decl.module;
+    expanding[depth] = p.decl;
+    depth += 1;
+}
+
+// Replaces calls in e whose function returns one expression, with arguments that cannot change, by that
+// expression
+fn substitute(e: *ast.Expr) *ast.Expr {
+    if (e == null || e.is_const) {
+        return e;
+    }
+    if (e.left != null) {
+        e.left = substitute(e.left);
+    }
+    if (e.right != null) {
+        e.right = substitute(e.right);
+    }
+    if (e.third != null) {
+        e.third = substitute(e.third);
+    }
+    for (var i = 0; i < e.args.len; i += 1) {
+        e.args[i] = substitute(e.args[i]);
+    }
+    if (e.kind != ast.ExprKind.CALL) {
+        return e;
+    }
+    var p = plan_of(e);
+    if (p == null || p.value == null) {
+        return e;
+    }
+    // Only the address of a variable can make a copy of a value that goes through a pointer quiet
+    var through = p.quiet;
+    for (var i = 0; i < e.args.len; i += 1) {
+        if (!p.direct[i] || !stable(e.args[i])) {
+            return e;
+        }
+        through = through || e.args[i].kind == ast.ExprKind.UNARY;
+    }
+    if (!through) {
+        return e;
+    }
+    begin(p, e);
+    for (var i = 0; i < e.args.len; i += 1) {
+        ast.add(&from, p.decl.params[i].symbol as *u8);
+        ast.add(&to, null);
+        ast.add(&values, e.args[i] as *u8);
+    }
+    var x = copy_expr(p.value);
+    if (!quiet(x)) {
+        depth -= 1;
+        return e;
+    }
+    x = substitute(x);
+    depth -= 1;
+    return x;
+}
+
+// The statements that do what the call e in a statement of module m does, which then stands for the result
+fn copy_call(p: *Plan, e: *ast.Expr, m: *ast.Module) *ast.Stmt {
+    begin(p, e);
+    var d = p.decl;
+    var line = e.line;
+    var out = ast.List {};
+    for (var i = 0; i < d.params.len; i += 1) {
+        var q = d.params[i].symbol;
+        ast.add(&from, q as *u8);
+        if (p.direct[i] && stable(e.args[i])) {
+            ast.add(&to, null);
+            ast.add(&values, e.args[i] as *u8);
+        } else {
+            var local = fresh(q);
+            ast.add(&to, local as *u8);
+            ast.add(&values, null);
+            var set = declaration(local, e.args[i], line);
+            set.module = m;
+            ast.add(&out, set as *u8);
+        }
+    }
+    var result: *ast.Symbol = null;
+    var t = d.symbol.type.base;
+    if (t.kind != ast.TypeKind.VOID) {
+        result = new(ast.Symbol);
+        result.kind = ast.SymbolKind.LOCAL;
+        result.name = "$result";
+        result.type = t;
+        result.line = line;
+    }
+    var body = copy_stmt(p.body);
+    var folded = ast.List {};
+    assignments = 0;
+    fold(body.body, 0, result, &folded, true);
+    var copy = block(folded, line, m);
+    copy.inlined = true;
+    var pointed = ast.List {};
+    note_taken_in(copy, &pointed);
+    if (result != null) {
+        var last: *ast.Stmt = null;
+        if (folded.count > 0) {
+            last = folded.items[folded.count - 1] as *ast.Stmt;
+        }
+        var once = assignments == 1 && last != null && last.kind == ast.StmtKind.ASSIGN && last.target.symbol == result;
+        var v: *ast.Symbol = null;
+        if (once) {
+            v = local_of(last.value);
+        }
+        // A local of the copy that the body returns at its end stands for the result itself
+        if (v != null && contains(&to, v as *u8) && !contains(&pointed, v as *u8)) {
+            copy.body = copy.body[:copy.body.len - 1];
+            result = v;
+        } else if (once) {
+            last.kind = ast.StmtKind.VAR;
+            last.name = result.name;
+            last.symbol = result;
+            last.target = null;
+        } else {
+            var declared = declaration(result, null, line);
+            declared.module = m;
+            ast.add(&out, declared as *u8);
+        }
+    }
+    ast.add(&out, copy as *u8);
+    var b = block(out, line, m);
+    // What the arguments take the address of counts already, as part of the call
+    for (var i = 0; i < pointed.count; i += 1) {
+        if (!contains(taken, pointed.items[i])) {
+            ast.add(taken, pointed.items[i]);
+        }
+    }
+    free(pointed.items);
+    var single = d.uses == 1;
+    if (!single) {
+        shared += 1;
+    }
+    b = expand_stmt(b);
+    if (!single) {
+        shared -= 1;
+    }
+    depth -= 1;
+    if (result != null) {
+        *e = *name_of(result, line);
+    }
+    return b;
+}
+
+// Copies the calls in s and in the statements inside it, and returns what then stands for s: s itself, or
+// a block that has the copies of calls in front of it
+fn expand_stmt(s: *ast.Stmt) *ast.Stmt {
+    if (s == null) {
+        return null;
+    }
+    switch (s.kind) {
+        case ast.StmtKind.BLOCK {
+            for (var i = 0; i < s.body.len; i += 1) {
+                s.body[i] = expand_stmt(s.body[i]);
+            }
+            return s;
+        }
+        case ast.StmtKind.IF {
+            s.then = expand_stmt(s.then);
+            if (s.otherwise != null) {
+                s.otherwise = expand_stmt(s.otherwise);
+            }
+        }
+        case ast.StmtKind.WHILE, ast.StmtKind.FOR {
+            if (s.init != null) {
+                s.init = expand_stmt(s.init);
+            }
+            loops += 1;
+            s.then = expand_stmt(s.then);
+            if (s.step != null) {
+                s.step = expand_stmt(s.step);
+            }
+            loops -= 1;
+            s.cond = substitute(s.cond);
+            return s;
+        }
+        case ast.StmtKind.SWITCH {
+            for (var i = 0; i < s.cases.len; i += 1) {
+                s.cases[i].body = expand_stmt(s.cases[i].body);
+            }
+            if (s.fallback != null) {
+                s.fallback = expand_stmt(s.fallback);
+            }
+        }
+    }
+    if (s.value != null) {
+        s.value = substitute(s.value);
+    }
+    if (s.cond != null) {
+        s.cond = substitute(s.cond);
+    }
+    if (s.target != null && s.target.kind != ast.ExprKind.NAME) {
+        s.target = substitute(s.target);
+    }
+    var front = ast.List {};
+    while (true) {
+        var e = first_in(s);
+        if (e == null) {
+            break;
+        }
+        var p = copy_plan(e);
+        if (p == null) {
+            break;
+        }
+        // A call that is the whole statement leaves nothing of it
+        var whole = s.kind == ast.StmtKind.EXPR && s.value == e;
+        ast.add(&front, copy_call(p, e, s.module) as *u8);
+        if (whole) {
+            return block(front, s.line, s.module);
+        }
+    }
+    if (front.count == 0) {
+        return s;
+    }
+    ast.add(&front, s as *u8);
+    return block(front, s.line, s.module);
+}
+
+// Counts how often e names each function, notes in p, if any, what the function e lies in does, and returns
+// about how many instructions e takes: an operation one, a value that an instruction takes as an operand
+// none, and calls, checked indexes, strings and literals more
+fn survey(e: *ast.Expr, p: *Plan) int {
+    if (e == null || e.is_const) {
+        return 0;
+    }
+    var n = 1;
+    switch (e.kind) {
+        case ast.ExprKind.NAME {
+            n = 0;
+            if (e.symbol != null && e.symbol.kind == ast.SymbolKind.FN && e.symbol.decl != null) {
+                e.symbol.decl.uses += 1;
+            }
+            if (p != null && e.symbol == p.decl.symbol) {
+                p.recursive = true;
+            }
+        }
+        case ast.ExprKind.NULL, ast.ExprKind.SIZEOF, ast.ExprKind.CONVERT, ast.ExprKind.LEN, ast.ExprKind.PTR {
+            n = 0;
+        }
+        case ast.ExprKind.STRING {
+            n = 2;
+        }
+        case ast.ExprKind.NEW {
+            n = 2;
+            if (p != null) {
+                p.calls = true;
+            }
+        }
+        case ast.ExprKind.UNARY {
+            if (e.op == ast.TokenKind.AMP && p != null) {
+                note_address(e.left, &p.taken);
+            }
+        }
+        case ast.ExprKind.INDEX, ast.ExprKind.SLICE {
+            n = 5;
+        }
+        case ast.ExprKind.STRUCT, ast.ExprKind.ARRAY {
+            n = 2 + 2 * e.args.len;
+        }
+        case ast.ExprKind.CALL {
+            n = 2 + e.args.len;
+            if (e.builtin == ast.Builtin.PRINT) {
+                n = 4 * e.args.len;
+            } else if (e.builtin == ast.Builtin.NONE && p != null) {
+                p.calls = true;
+            }
+        }
+    }
+    if (e.left != null) {
+        n += survey(e.left, p);
+    }
+    if (e.right != null) {
+        n += survey(e.right, p);
+    }
+    if (e.third != null) {
+        n += survey(e.third, p);
+    }
+    for (var i = 0; i < e.args.len; i += 1) {
+        n += survey(e.args[i], p);
+    }
+    return n;
+}
+
+fn survey_stmt(s: *ast.Stmt, p: *Plan) int {
+    if (s == null) {
+        return 0;
+    }
+    var n = 1;
+    if (s.value != null) {
+        n += survey(s.value, p);
+    }
+    if (s.target != null) {
+        n += survey(s.target, p);
+    }
+    if (s.cond != null) {
+        n += survey(s.cond, p);
+    }
+    if (s.kind != ast.StmtKind.BLOCK) {
+        n += survey_stmt(s.then, p) + survey_stmt(s.otherwise, p) + survey_stmt(s.init, p) + survey_stmt(s.step, p) +
+            survey_stmt(s.fallback, p);
+    }
+    for (var i = 0; i < s.body.len; i += 1) {
+        n += survey_stmt(s.body[i], p);
+    }
+    for (var i = 0; i < s.cases.len; i += 1) {
+        n += survey_stmt(s.cases[i].body, p);
+    }
+    return n;
+}
+
+pub fn expand(program: *ast.Program) {
+    for (var i = 0; i < program.modules.count; i += 1) {
+        var decls = ast.module_at(program, i).decls;
+        for (var k = 0; k < decls.len; k += 1) {
+            var d = decls[k];
+            var p: *Plan = null;
+            if (d.kind == ast.DeclKind.FN && d.body != null && d.symbol != null) {
+                p = new(Plan);
+                p.decl = d;
+                d.plan = p as *u8;
+            }
+            survey(d.value, p);
+            var n = survey_stmt(d.body, p);
+            if (p != null) {
+                p.cost = n - 1;
+            }
+        }
+    }
+    for (var i = 0; i < program.modules.count; i += 1) {
+        var decls = ast.module_at(program, i).decls;
+        for (var k = 0; k < decls.len; k += 1) {
+            plan(decls[k]);
+        }
+    }
+    // A function that calls nothing has nothing to copy into it
+    for (var i = 0; i < program.modules.count; i += 1) {
+        var decls = ast.module_at(program, i).decls;
+        for (var k = 0; k < decls.len; k += 1) {
+            var d = decls[k];
+            var p = d.plan as *Plan;
+            if (p != null && p.calls && !d.is_extern) {
+                taken = &p.taken;
+                expanding[0] = d;
+                depth = 1;
+                d.body = expand_stmt(d.body);
+            }
+        }
+    }
+}

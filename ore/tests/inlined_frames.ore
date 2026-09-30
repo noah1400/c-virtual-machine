@@ -1,0 +1,17 @@
+// A call that vmc copies into its caller still shows in a backtrace, also where the copy starts with a copy
+// expect-exit: 1
+fn bump(p: *int, k: int) {
+    *p += k;
+}
+
+fn twice(p: *int) {
+    bump(p, 2);
+}
+
+fn main() {
+    var x = 1;
+    twice(&x);
+    print(x, "\n");
+    var none: *int = null;
+    twice(none);
+}

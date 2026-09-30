@@ -1,0 +1,6 @@
+vm: error: null pointer
+vm: at 0x0098 <inlined_frames.main+56> ore/tests/inlined_frames.ore:4: CALL rt.null_error
+vm: #1 0x0090 <inlined_frames.main+48> ore/tests/inlined_frames.ore:8: inlined
+vm: #2 0x0090 <inlined_frames.main+48> ore/tests/inlined_frames.ore:16: inlined
+vm: #3 0x0054 <main> ore/tests/inlined_frames.ore:11: CALL inlined_frames.main
+vm: #4 0x0000 <rt.start> ./ore/lib/runtime.asm:10: CALL main

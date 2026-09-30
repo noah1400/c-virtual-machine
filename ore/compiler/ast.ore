@@ -186,6 +186,8 @@ pub struct Decl {
     symbol: *Symbol;
     state: int;             // of a constant: 0 unchecked, 1 being checked, 2 checked
     used: bool;             // reached from main or named in assembly, so generated
+    uses: int;              // of a function: how often the program names it before calls are inlined
+    plan: *u8;              // of a function: how inlining copies it into calls, or null
 }
 
 pub struct Module {

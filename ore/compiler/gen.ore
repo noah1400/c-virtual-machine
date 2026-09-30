@@ -3,6 +3,7 @@ import "std/io";
 import "std/str";
 import "ast";
 import "check";
+import "inline";
 import "loops";
 import "wide";
 
@@ -3822,6 +3823,7 @@ pub fn generate(program: *ast.Program) []u8 {
         str.append(&g.text, "\n");
     }
     str.append(&g.text, "\n.text\n");
+    inline.expand(program);
     mark_used(program);
     gen_entry(&g);
     for (var i = 0; i < program.modules.count; i += 1) {
