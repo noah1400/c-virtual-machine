@@ -666,8 +666,8 @@ INLINE int jumps(const uint32_t *r, const Decoded *d, const Flags *p) {
 
 // An instruction that sets Z and N from its result and C and O as f says. The C and O flags that it leaves
 // alone come from the sum or difference before, which it keeps unless one before it already did.
-INLINE uint32_t partial(uint32_t result, FlagUpdate f, Flags *p) {
-    uint32_t changed = f.changed & (CARRY_FLAG | OVER_FLAG), bits = f.bits & (CARRY_FLAG | OVER_FLAG);
+INLINE uint32_t partial(uint32_t result, const FlagUpdate *f, Flags *p) {
+    uint32_t changed = f->changed & (CARRY_FLAG | OVER_FLAG), bits = f->bits & (CARRY_FLAG | OVER_FLAG);
     if (p->kind == FLAGS_NZ) {
         p->b = ((p->b >> 16) | changed) << 16 | (p->b & 0xFFFF & ~changed) | bits;
     } else {
@@ -692,7 +692,7 @@ INLINE uint32_t binary(uint8_t opcode, const uint32_t *r, uint32_t x, uint32_t y
         return p->a;
     }
     uint32_t carry = (opcode == ADDC_OP || opcode == SUBC_OP) && (flag_bits(r[R4_SR], p) & CARRY_FLAG);
-    return partial(alu_result(opcode, x, y, carry, &f), f, p);
+    return partial(alu_result(opcode, x, y, carry, &f), &f, p);
 }
 
 #ifdef __GNUC__
@@ -902,18 +902,18 @@ dispatch:
                 goto stop;
             }
             value = alu_divide(d->op, r[d->a], value, &f);
-            r[d->a] = partial(value, f, &flags);
+            r[d->a] = partial(value, &f, &flags);
             NEXT();
         TARGET(D_DIVIDE_M):
             if (!load(vm, operand(r, d), 4, &value) || !alu_divides(d->op, r[d->a], value)) {
                 goto stop;
             }
             value = alu_divide(d->op, r[d->a], value, &f);
-            r[d->a] = partial(value, f, &flags);
+            r[d->a] = partial(value, &f, &flags);
             NEXT();
         TARGET(D_MUL):
             value = alu_mul(r[d->a], operand(r, d), &f);
-            r[d->a] = partial(value, f, &flags);
+            r[d->a] = partial(value, &f, &flags);
             NEXT();
         TARGET(D_AND):
             flags.a = r[d->a] & operand(r, d);
@@ -930,15 +930,15 @@ dispatch:
             NEXT();
         TARGET(D_SHL):
             value = alu_shl(r[d->a], operand(r, d), &f);
-            r[d->a] = partial(value, f, &flags);
+            r[d->a] = partial(value, &f, &flags);
             NEXT();
         TARGET(D_SHR):
             value = alu_shr(r[d->a], operand(r, d), &f);
-            r[d->a] = partial(value, f, &flags);
+            r[d->a] = partial(value, &f, &flags);
             NEXT();
         TARGET(D_SAR):
             value = alu_sar(r[d->a], operand(r, d), &f);
-            r[d->a] = partial(value, f, &flags);
+            r[d->a] = partial(value, &f, &flags);
             NEXT();
         // COUNT and the float instructions set all four flags in SR
         TARGET(D_COUNT_V):
@@ -965,7 +965,7 @@ dispatch:
             NEXT();
         TARGET(D_UNARY):
             value = alu_unary_result(d->op, r[d->a], &f);
-            r[d->a] = partial(value, f, &flags);
+            r[d->a] = partial(value, &f, &flags);
             NEXT();
         TARGET(D_FLOAT_SIGN):
             flags.kind = FLAGS_SET;
