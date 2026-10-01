@@ -1,12 +1,18 @@
-// SORT [/R]: writes the lines of its input in order, ignoring case, or in reverse order with /R
+// SORT [/R] [/+n] [file]: writes the lines of a file or of its input in order, ignoring case, comparing them
+// from column n on with /+n and in reverse order with /R
 import "std/io";
 import "std/str";
 
-fn read_input() []u8 {
+const HELP = "Sorts lines of text\n\nSORT [/R] [/+n] [[drive:][path]file]\n  /R   Reverses the order\n  /+n  Compares the lines from their column n on\n";
+
+var reverse = false;
+var first = 0;              // where comparing starts in each line
+
+fn read_all(handle: int) []u8 {
     var text = str.builder(4096);
     var buffer: [512]u8;
     for (;;) {
-        var n = io.read(io.STDIN, buffer);
+        var n = io.read(handle, buffer);
         if (n <= 0) {
             break;
         }
@@ -22,21 +28,93 @@ fn upper(c: u8) u8 {
     return c;
 }
 
-// Negative, zero or positive as a sorts before, with or after b when case does not count
+// Negative, zero or positive as line a sorts before, with or after line b
 fn compare(a: []u8, b: []u8) int {
-    for (var i = 0; i < a.len && i < b.len; i += 1) {
-        var x = upper(a[i]);
-        var y = upper(b[i]);
-        if (x != y) {
-            return x as int - y as int;
-        }
+    var r = 0;
+    for (var i = first; r == 0 && i < a.len && i < b.len; i += 1) {
+        r = upper(a[i]) as int - upper(b[i]) as int;
     }
-    return a.len - b.len;
+    if (r == 0) {
+        var x = a.len - first;
+        var y = b.len - first;
+        if (x < 0) {
+            x = 0;
+        }
+        if (y < 0) {
+            y = 0;
+        }
+        r = x - y;
+    }
+    if (reverse) {
+        return -r;
+    }
+    return r;
 }
 
-fn main(args: [][]u8) {
-    var reverse = args.len > 1 && (str.equal(args[1], "/R") || str.equal(args[1], "/r"));
-    var text = read_input();
+// Sorts lines and keeps those that compare equal in their order, with spare as room for as many
+fn merge_sort(lines: [][]u8, spare: [][]u8) {
+    if (lines.len < 2) {
+        return;
+    }
+    var middle = lines.len / 2;
+    merge_sort(lines[:middle], spare[:middle]);
+    merge_sort(lines[middle:], spare[middle:]);
+    var i = 0;
+    var j = middle;
+    for (var k = 0; k < lines.len; k += 1) {
+        if (j == lines.len || i < middle && compare(lines[j], lines[i]) >= 0) {
+            spare[k] = lines[i];
+            i += 1;
+        } else {
+            spare[k] = lines[j];
+            j += 1;
+        }
+    }
+    for (var k = 0; k < lines.len; k += 1) {
+        lines[k] = spare[k];
+    }
+}
+
+// Says what is wrong with a parameter and gives the status for it
+fn fail(problem: []u8, arg: []u8) int {
+    io.print_error(problem);
+    io.print_error(arg);
+    io.print_error("\n");
+    return 2;
+}
+
+fn main(args: [][]u8) int {
+    var path: []u8;
+    for (var i = 1; i < args.len; i += 1) {
+        var arg = args[i];
+        if (str.equal(arg, "/?")) {
+            print(HELP);
+            return 0;
+        }
+        if (str.equal(arg, "/R") || str.equal(arg, "/r")) {
+            reverse = true;
+        } else if (str.starts_with(arg, "/+")) {
+            var column = str.parse_int(arg[2:]);
+            if (!column.ok || column.value < 1) {
+                return fail("Invalid switch - ", arg);
+            }
+            first = column.value - 1;
+        } else if (str.starts_with(arg, "/")) {
+            return fail("Invalid switch - ", arg);
+        } else if (path.len > 0) {
+            return fail("Too many parameters - ", arg);
+        } else {
+            path = arg;
+        }
+    }
+    var handle = io.STDIN;
+    if (path.len > 0) {
+        handle = io.open(path, io.READ);
+        if (handle < 0) {
+            return fail("File not found - ", path);
+        }
+    }
+    var text = read_all(handle);
     var count = 0;
     for (var i = 0; i < text.len; i += 1) {
         if (text[i] == '\n' || i == text.len - 1) {
@@ -60,17 +138,10 @@ fn main(args: [][]u8) {
             start = i + 1;
         }
     }
-    for (var i = 1; i < lines.len; i += 1) {
-        var line = lines[i];
-        var k = i;
-        while (k > 0 && (compare(lines[k - 1], line) > 0) != reverse && compare(lines[k - 1], line) != 0) {
-            lines[k] = lines[k - 1];
-            k -= 1;
-        }
-        lines[k] = line;
-    }
+    merge_sort(lines, new([]u8, count));
     for (var i = 0; i < lines.len; i += 1) {
         io.write(io.STDOUT, lines[i]);
         io.write(io.STDOUT, "\n");
     }
+    return 0;
 }

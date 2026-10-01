@@ -60,4 +60,49 @@ File not found
 A:\>DIR > LIST.TXT
 A:\>FIND "LIST" LIST.TXT
 LIST     TXT             0 10-01-26   9:30a
+A:\>SORT FRUIT.TXT /+2
+banana
+pear
+cherry
+appended
+Apple
+A:\>SORT /R FRUIT.TXT
+pear
+cherry
+banana
+Apple
+appended
+A:\>FIND /N "e" FRUIT.TXT
+[1]pear
+[2]Apple
+[4]cherry
+[5]appended
+A:\>FIND /I "" FRUIT.TXT
+pear
+Apple
+banana
+cherry
+appended
+A:\>SORT /X
+Invalid switch - /X
+A:\>SORT /+0 FRUIT.TXT
+Invalid switch - /+0
+A:\>FIND /Q "a"
+Invalid switch - /Q
+A:\>FIND "a" FRUIT.TXT LIST.TXT EXTRA.TXT
+Too many parameters - LIST.TXT
+A:\>SORT /?
+Sorts lines of text
+
+SORT [/R] [/+n] [[drive:][path]file]
+  /R   Reverses the order
+  /+n  Compares the lines from their column n on
+A:\>FIND /?
+Finds lines that contain a text
+
+FIND [/V] [/C] [/N] [/I] "text" [[drive:][path]file]
+  /V  Shows the lines that do not contain the text
+  /C  Shows only how many lines it found
+  /N  Shows each line after its number
+  /I  Ignores whether letters are capitals
 A:\>EXIT

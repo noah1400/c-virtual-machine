@@ -1,10 +1,13 @@
-// FIND [/V] [/C] [/I] "text" [file]: writes the lines of a file or of its input that contain text, with
-// /V those that do not, with /C only how many, and with /I ignoring case
+// FIND [/V] [/C] [/N] [/I] "text" [file]: writes the lines of a file or of its input that contain text, with
+// /V those that do not, with /C only how many, with /N each after its number, and with /I ignoring case
 import "std/io";
 import "std/str";
 
+const HELP = "Finds lines that contain a text\n\nFIND [/V] [/C] [/N] [/I] \"text\" [[drive:][path]file]\n  /V  Shows the lines that do not contain the text\n  /C  Shows only how many lines it found\n  /N  Shows each line after its number\n  /I  Ignores whether letters are capitals\n";
+
 var invert = false;
 var count_only = false;
+var numbered = false;
 var ignore_case = false;
 
 fn upper(c: u8) u8 {
@@ -40,39 +43,61 @@ fn read_all(handle: int) []u8 {
     return str.text(&text);
 }
 
+// Says what is wrong with a parameter and gives the status for it
+fn fail(problem: []u8, arg: []u8) int {
+    io.print_error(problem);
+    io.print_error(arg);
+    io.print_error("\n");
+    return 2;
+}
+
 fn main(args: [][]u8) int {
     var text: []u8;
     var path: []u8;
     var have_text = false;
     for (var i = 1; i < args.len; i += 1) {
         var arg = args[i];
-        if (str.equal(arg, "/V") || str.equal(arg, "/v")) {
+        if (arg.len != 2 || arg[0] != '/') {
+            if (!have_text) {
+                text = arg;
+                have_text = true;
+            } else if (path.len == 0) {
+                path = arg;
+            } else {
+                return fail("Too many parameters - ", arg);
+            }
+            continue;
+        }
+        var letter = upper(arg[1]);
+        if (letter == '?') {
+            print(HELP);
+            return 0;
+        } else if (letter == 'V') {
             invert = true;
-        } else if (str.equal(arg, "/C") || str.equal(arg, "/c")) {
+        } else if (letter == 'C') {
             count_only = true;
-        } else if (str.equal(arg, "/I") || str.equal(arg, "/i")) {
+        } else if (letter == 'N') {
+            numbered = true;
+        } else if (letter == 'I') {
             ignore_case = true;
-        } else if (!have_text) {
-            text = arg;
-            have_text = true;
         } else {
-            path = arg;
+            return fail("Invalid switch - ", arg);
         }
     }
     if (!have_text) {
-        print("Required parameter missing\n");
+        io.print_error("Required parameter missing\n");
         return 2;
     }
     var handle = io.STDIN;
     if (path.len > 0) {
         handle = io.open(path, io.READ);
         if (handle < 0) {
-            print("File not found - ", path, "\n");
-            return 2;
+            return fail("File not found - ", path);
         }
     }
     var input = read_all(handle);
     var found = 0;
+    var number = 0;
     var start = 0;
     for (var i = 0; i <= input.len; i += 1) {
         if (i == input.len || input[i] == '\n') {
@@ -81,8 +106,12 @@ fn main(args: [][]u8) int {
                 line = line[:line.len - 1];
             }
             if (i < input.len || line.len > 0) {
+                number += 1;
                 if (contains(line, text) != invert) {
                     found += 1;
+                    if (numbered && !count_only) {
+                        print("[", number, "]");
+                    }
                     if (!count_only) {
                         print(line, "\n");
                     }

@@ -145,9 +145,9 @@ Format complete.
 System transferred
 
       15,360 bytes total disk space
-       6,144 bytes available on disk
+       1,536 bytes available on disk
 
          512 bytes in each allocation unit
-          12 allocation units available on disk
+           3 allocation units available on disk
 
 B:\>EXIT
