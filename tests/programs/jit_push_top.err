@@ -1,0 +1,2 @@
+vm: error: Stack pointer 0x00100001 is outside the stack
+vm: at 0x0020 <.loop+20> tests/programs/jit_push_top.asm:15: PUSH R10
