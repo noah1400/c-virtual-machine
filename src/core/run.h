@@ -44,7 +44,7 @@ struct Decoded {
     uint32_t imm;       // the immediate or displacement, or the word a jump goes to
     uint16_t cond;      // one bit for each value of the Z, N, C and O flags under which a jump or SET holds
     uint8_t len;        // the words the instruction takes
-    uint8_t heat;       // how often jumps went here, which decides when the code here gets compiled
+    uint8_t heat;       // the jumps still missing before the code here gets compiled
 };
 
 typedef struct Decoded Decoded;

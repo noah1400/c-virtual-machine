@@ -251,6 +251,7 @@ void cpu_forget(VM *vm, uint32_t address, uint32_t size) {
     for (uint32_t k = first; k <= last; k++) {
         if (vm->decoded[k].kind != D_DECODE) {
             vm->decoded[k].kind = D_DECODE;
+            vm->decoded[k].heat = 0;
         }
     }
 }
@@ -363,7 +364,10 @@ static uint8_t value_kind(uint8_t opcode) {
 // Decodes the instruction at a word. Instructions that write PC or SR as a register or read PC from their
 // first field stop, as do those that cpu_run does not run, and vm_step runs them.
 static void decode(VM *vm, Decoded *d, uint32_t index, uint32_t words) {
+    // The jumps that came before the word was decoded counted down from 0
+    uint8_t jumped = (uint8_t)-d->heat;
     memset(d, 0, sizeof(*d));
+    d->heat = jumped < vm->jit_threshold ? (uint8_t)(vm->jit_threshold - jumped) : 0;
     d->kind = D_STOP;
     d->len = 1;
     if (index >= words) {
@@ -624,12 +628,12 @@ INLINE int jumps(const uint32_t *r, const Decoded *d, const Flags *p) {
     } while (0)
 
 // Makes a word that a jump goes to the next instruction, and compiles the code there once enough jumps went there
-#define JUMP_TO(word)                   \
-    do {                                \
-        next = code + (word);           \
-        if (++next->heat == hot) {      \
-            jit_compile(vm, (word));    \
-        }                               \
+#define JUMP_TO(word)                \
+    do {                             \
+        next = code + (word);        \
+        if (--next->heat == 0) {     \
+            jit_compile(vm, (word)); \
+        }                            \
     } while (0)
 
 // Runs up to limit instructions and returns how many it ran. The caller makes sure that nothing has to
@@ -640,7 +644,6 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
     uint32_t left = limit, words = fetch_words(vm), index = word_index(r[R3_PC]), value;
     Flags flags = { FLAGS_SET, 0, 0, FLAGS_SET, 0, 0 };
     FlagUpdate f;
-    const uint32_t hot = vm->jit_threshold ? vm->jit_threshold : 256;
 
     if (!prepared) {
         prepare();
@@ -694,6 +697,9 @@ dispatch:
     switch (d->kind) {
         TARGET(D_DECODE):
             decode(vm, d, (uint32_t)(d - code), words);
+            if (d->heat == 0 && vm->jit_threshold) {
+                jit_compile(vm, (uint32_t)(d - code));
+            }
             next = d + d->len;
             goto dispatch;
 #ifdef __GNUC__
@@ -718,7 +724,7 @@ dispatch:
                 next = d + d->len;
                 goto *targets[d->kind == D_JIT ? jit_kind(vm, to) : d->kind];
             }
-            if (++d->heat == hot) {
+            if (--d->heat == 0) {
                 jit_compile(vm, to);
             }
             next = d + d->len;

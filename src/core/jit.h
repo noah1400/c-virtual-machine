@@ -7,8 +7,8 @@
 // code, or at the address it names, which lies where cpu_run does not run
 enum { JIT_NEXT, JIT_HERE, JIT_LEAVE };
 
-// Compiles the instructions from a word below the words cpu_run runs; tells whether that word now starts
-// compiled code, which its kind D_JIT announces
+// Compiles the instructions from a word below the words cpu_run runs, unless jit_threshold is 0; tells whether
+// that word now starts compiled code, which its kind D_JIT announces
 int jit_compile(VM *vm, uint32_t index);
 
 // Runs the compiled code from a word while left, the instructions cpu_run may still run, allows; updates left

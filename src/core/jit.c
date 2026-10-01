@@ -1296,6 +1296,7 @@ static void forget_code(struct Jit *jit, VM *vm) {
         jit->entries[word] = NULL;
         if (vm->decoded && word < vm->decoded_words && vm->decoded[word].kind == D_JIT) {
             vm->decoded[word].kind = D_DECODE;
+            vm->decoded[word].heat = 0;
         }
     }
     jit->start_count = 0;
@@ -1420,7 +1421,7 @@ static uint8_t *compile_block(struct Jit *jit, VM *vm, uint32_t word, uint32_t *
 }
 
 int jit_compile(VM *vm, uint32_t index) {
-    struct Jit *jit = jit_for(vm);
+    struct Jit *jit = vm->jit_threshold ? jit_for(vm) : NULL;
     if (!jit || index >= jit->words || jit->entries[index]) {
         return jit && index < jit->words && jit->entries[index];
     }
