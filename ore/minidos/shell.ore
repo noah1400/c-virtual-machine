@@ -42,7 +42,7 @@ pub fn interact() {
     while (!stopping) {
         prompt();
         var line: []u8;
-        if (!console.read_line(buffer, &line)) {
+        if (!console.read_command(buffer, &line)) {
             console.write("\n");
             return;
         }

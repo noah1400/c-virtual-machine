@@ -1,0 +1,16 @@
+N
+FORMAT A: /V:EDIT
+ECHO first
+[A
+ECHO tyoppo
+ECHO wrld[D[D[Do
+ECHO abc[HREM [F!
+ECHO xyz[H[3~
+ECHO goneECHO kept
+ECHO one > NOTES.TXT
+MD NOTEBOOK
+TYPE NO	
+DIR /B NO		
+CD NOTE		
+[A[A[A[A[B
+EXIT

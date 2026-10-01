@@ -33,7 +33,7 @@ GOTO END
 ECHO No parameters
 :END
 ECHO Done
-
+^Z
         1 file(s) copied
 A:\>TEST alpha beta
 Parameters: alpha and beta
@@ -54,7 +54,7 @@ IF EXIST SHOW.BAT ECHO SHOW.BAT exists
 IF NOT EXIST NOPE.BAT ECHO NOPE.BAT does not
 GOTO MISSING
 ECHO not reached
-
+^Z
         1 file(s) copied
 A:\>SHOW
 A:\>ECHO Batch files show their commands unless ECHO is off

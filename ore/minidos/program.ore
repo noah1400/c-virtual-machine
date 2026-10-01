@@ -108,6 +108,7 @@ pub fn run(path: []u8, tail: []u8) int {
     running = true;
     var status = cpu.enter_user(h.entry as u32, LIMIT as u32) as int;
     running = false;
+    console.forget_typed();
     cpu.write_control(cpu.SLO, bottom);
 
     for (var i = 0; i < HANDLES; i += 1) {
@@ -455,7 +456,7 @@ fn read_line(frame: *cpu.Frame, address: u32, size: int) {
     }
     var buffer = user_bytes(address, size);
     var text: []u8;
-    if (!console.read_line(buffer, &text)) {
+    if (!console.program_line(buffer, &text)) {
         buffer[0] = 0;
         frame.r5 = IO_ERROR;
         return;

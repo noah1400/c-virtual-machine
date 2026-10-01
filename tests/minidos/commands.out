@@ -76,7 +76,7 @@ Invalid file name
 A:\>COPY CON POEM.TXT
 roses are red
 violets are blue
-
+^Z
         1 file(s) copied
 A:\>TYPE POEM.TXT
 roses are red

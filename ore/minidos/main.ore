@@ -1,6 +1,5 @@
 // MiniDos: a small DOS for the VM, written in Ore. It keeps its files on the VM's disks and runs programs from
-// there below itself, in user mode. -e shows what is read from the keyboard, for sessions that come from a file.
-import "std/str";
+// there below itself, in user mode.
 import "console";
 import "disk";
 import "disks";
@@ -8,12 +7,7 @@ import "fs";
 import "program";
 import "shell";
 
-fn main(args: [][]u8) int {
-    for (var i = 1; i < args.len; i += 1) {
-        if (str.equal(args[i], "-e")) {
-            console.echo = true;
-        }
-    }
+fn main() int {
     if ((main as u32) < program.LIMIT as u32) {
         console.screen("MiniDos has to be built above the programs, with vmc -b 0x100000\n");
         return 1;

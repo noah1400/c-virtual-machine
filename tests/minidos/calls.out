@@ -18,7 +18,7 @@ Format complete.
 A:\>COPY CON INNER.BAT
 @ECHO inner got %1
 @ECHO inner sets %TOP%
-
+^Z
         1 file(s) copied
 A:\>COPY CON OUTER.BAT
 @ECHO OFF
@@ -27,7 +27,7 @@ CALL INNER one
 ECHO back in outer
 INNER two
 ECHO not reached
-
+^Z
         1 file(s) copied
 A:\>OUTER
 inner got one
@@ -62,7 +62,7 @@ GOTO END
 :C
 ECHO chose C
 :END
-
+^Z
         1 file(s) copied
 A:\>ASK
 Pick one [A,B,C]?z

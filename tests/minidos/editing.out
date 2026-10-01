@@ -1,0 +1,39 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A: /V:EDIT
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>ECHO first
+first
+A:\>ECHO first
+first
+A:\>ECHO tyop  po
+typo
+A:\>ECHO wrldorld
+world
+A:\>ECHO abcRECHO abcEECHO abcMECHO abc ECHO abcECHO abc!
+A:\>ECHO xyzECHO xyz 
+Bad command or file name
+A:\>ECHO gone         ECHO kept
+kept
+A:\>ECHO one > NOTES.TXT
+A:\>MD NOTEBOOK
+A:\>TYPE NONOTES.TXT
+one
+A:\>DIR /B NONOTES.TXTNOTEBOOK 
+A:\>CD NOTENOTES.TXTNOTEBOOK 
+A:\NOTEBOOK>CD NOTEBOOKDIR /B NOTEBOOKTYPE NOTES.TXT MD NOTEBOOK   TYPE NOTES.TXT
+File not found
+A:\NOTEBOOK>EXIT
