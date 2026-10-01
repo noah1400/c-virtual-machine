@@ -990,7 +990,7 @@ The error messages of both compilers name the file and line of the first problem
 
 [MiniDos](docs/minidos.md) is a small DOS written in Ore, in `ore/minidos`. It keeps its files on up to four disks and has 42 commands with `/?` help, batch files, pipes, a line editor with a history and completion of file names, a clock and a full-screen editor, `EDIT`. It lives above the first megabyte, built with `vmc -b 0x100000`, and runs programs below it in user mode, so any program `vmc` builds runs under it unchanged: their syscalls arrive at MiniDos as privilege violations, and it serves them from its own disks and console.
 
-`vm` creates a disk image that does not exist yet, and MiniDos offers to format it and to put its programs `SORT` and `FIND` on it:
+`vm` creates a disk image that does not exist yet, and MiniDos offers to format it and to put its programs `SORT`, `FIND` and `FC` on it:
 
 ```console
 $ ./vm -b work.img minidos.bin

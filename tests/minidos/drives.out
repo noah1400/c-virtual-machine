@@ -137,17 +137,18 @@ System transferred
 B:\>DIR B:\DOS /B
 SORT.EXE
 FIND.EXE
-B:\>FORMAT B: /F:16K /V:TINY /S
+FC.EXE
+B:\>FORMAT B: /F:32K /V:TINY /S
 WARNING: ALL DATA ON THE DISK IN DRIVE B: WILL BE LOST!
 Proceed with Format (Y/N)?Y
-Formatting 16K
+Formatting 32K
 Format complete.
 System transferred
 
-      15,360 bytes total disk space
-       1,536 bytes available on disk
+      31,744 bytes total disk space
+      10,752 bytes available on disk
 
          512 bytes in each allocation unit
-           3 allocation units available on disk
+          21 allocation units available on disk
 
 B:\>EXIT

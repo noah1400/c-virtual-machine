@@ -1,0 +1,144 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A: /V:COMPARE
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>IMPORT fc.bin FC.EXE
+        1 file(s) imported
+A:\>COPY CON ONE.TXT
+alpha
+beta
+gamma
+delta
+epsilon
+zeta
+^Z
+        1 file(s) copied
+A:\>COPY CON TWO.TXT
+alpha
+BETA
+gamma
+inserted
+delta
+epsilon
+zeta
+eta
+^Z
+        1 file(s) copied
+A:\>COPY ONE.TXT SAME.TXT
+        1 file(s) copied
+A:\>FC ONE.TXT SAME.TXT
+Comparing files ONE.TXT and SAME.TXT
+FC: no differences encountered
+
+A:\>FC ONE.TXT TWO.TXT
+Comparing files ONE.TXT and TWO.TXT
+***** ONE.TXT
+alpha
+beta
+gamma
+delta
+***** TWO.TXT
+alpha
+BETA
+gamma
+inserted
+delta
+*****
+
+***** ONE.TXT
+zeta
+***** TWO.TXT
+zeta
+eta
+*****
+
+A:\>IF ERRORLEVEL 1 ECHO the files differ
+the files differ
+A:\>FC /C /N ONE.TXT TWO.TXT
+Comparing files ONE.TXT and TWO.TXT
+***** ONE.TXT
+3:  gamma
+4:  delta
+***** TWO.TXT
+3:  gamma
+4:  inserted
+5:  delta
+*****
+
+***** ONE.TXT
+6:  zeta
+***** TWO.TXT
+7:  zeta
+8:  eta
+*****
+
+A:\>FC /B ONE.TXT TWO.TXT
+Comparing files ONE.TXT and TWO.TXT
+00000006: 62 42
+00000007: 65 45
+00000008: 74 54
+00000009: 61 41
+00000011: 64 69
+00000012: 65 6E
+00000013: 6C 73
+00000014: 74 65
+00000015: 61 72
+00000016: 0A 74
+00000018: 70 64
+00000019: 73 0A
+0000001A: 69 64
+0000001B: 6C 65
+0000001C: 6F 6C
+0000001D: 6E 74
+0000001E: 0A 61
+0000001F: 7A 0A
+00000021: 74 70
+00000022: 61 73
+00000023: 0A 69
+FC: TWO.TXT longer than ONE.TXT
+
+A:\>FC /B ONE.TXT SAME.TXT
+Comparing files ONE.TXT and SAME.TXT
+FC: no differences encountered
+
+A:\>COPY NUL EMPTY.TXT
+        1 file(s) copied
+A:\>FC EMPTY.TXT ONE.TXT
+Comparing files EMPTY.TXT and ONE.TXT
+***** EMPTY.TXT
+***** ONE.TXT
+alpha
+beta
+gamma
+delta
+epsilon
+zeta
+*****
+
+A:\>FC ONE.TXT
+Insufficient number of file specifications
+A:\>FC ONE.TXT NOPE.TXT
+Cannot open NOPE.TXT
+A:\>FC /X ONE.TXT TWO.TXT
+Invalid switch - /X
+A:\>FC /?
+Compares two files and shows where they differ
+
+FC [/B] [/C] [/N] [drive:][path]file1 [drive:][path]file2
+  /B  Compares the files byte by byte
+  /C  Ignores whether letters are capitals
+  /N  Shows the numbers of the lines
+A:\>EXIT

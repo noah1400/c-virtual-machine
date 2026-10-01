@@ -20,6 +20,7 @@ struct SystemFile {
 var system_files = []SystemFile {
     SystemFile { name: "SORT.EXE", bytes: embed("sort.bin") },
     SystemFile { name: "FIND.EXE", bytes: embed("find.bin") },
+    SystemFile { name: "FC.EXE", bytes: embed("fc.bin") },
 };
 
 const AUTOEXEC = "@ECHO OFF\nPATH A:\\DOS\n";

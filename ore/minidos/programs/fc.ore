@@ -1,0 +1,227 @@
+// FC [/B] [/C] [/N] file1 file2: shows where two files differ, as the lines between the places where they
+// match again, or with /B byte by byte. /C ignores the case of letters and /N numbers the lines.
+import "std/io";
+import "std/str";
+
+const HELP = "Compares two files and shows where they differ\n\nFC [/B] [/C] [/N] [drive:][path]file1 [drive:][path]file2\n  /B  Compares the files byte by byte\n  /C  Ignores whether letters are capitals\n  /N  Shows the numbers of the lines\n";
+
+const RESYNC = 2;           // lines that have to match for the files to go on together after a difference
+const REACH = 100;          // lines that a difference may span before FC gives up
+
+var binary = false;
+var ignore_case = false;
+var numbered = false;
+
+// Says what is wrong with a parameter and gives the status for it
+fn fail(problem: []u8, arg: []u8) int {
+    io.print_error(problem);
+    io.print_error(arg);
+    io.print_error("\n");
+    return 2;
+}
+
+fn upper(c: u8) u8 {
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a' + 'A';
+    }
+    return c;
+}
+
+fn same_line(a: []u8, b: []u8) bool {
+    if (a.len != b.len) {
+        return false;
+    }
+    for (var i = 0; i < a.len; i += 1) {
+        if (a[i] != b[i] && !(ignore_case && upper(a[i]) == upper(b[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The lines of a text without their ends
+fn lines_of(text: []u8) [][]u8 {
+    var count = 0;
+    for (var i = 0; i < text.len; i += 1) {
+        if (text[i] == '\n' || i == text.len - 1) {
+            count += 1;
+        }
+    }
+    var lines = new([]u8, count);
+    var start = 0;
+    count = 0;
+    for (var i = 0; i < text.len; i += 1) {
+        if (text[i] == '\n' || i == text.len - 1) {
+            var end = i;
+            if (text[i] != '\n') {
+                end = i + 1;
+            }
+            if (end > start && text[end - 1] == '\r') {
+                end -= 1;
+            }
+            lines[count] = text[start:end];
+            count += 1;
+            start = i + 1;
+        }
+    }
+    return lines;
+}
+
+// Whether the files go on together from line a of one and line b of the other: RESYNC lines match, or both
+// end before that
+fn together(x: [][]u8, a: int, y: [][]u8, b: int) bool {
+    for (var k = 0; k < RESYNC; k += 1) {
+        if (a + k >= x.len || b + k >= y.len) {
+            return a + k >= x.len && b + k >= y.len;
+        }
+        if (!same_line(x[a + k], y[b + k])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Shows the lines of one file around a difference: the last one before it that matched, the different ones
+// and the first one after it that matches again
+fn show(name: []u8, lines: [][]u8, from: int, to: int) {
+    print("***** ", name, "\n");
+    if (from > 0) {
+        from -= 1;
+    }
+    if (to < lines.len) {
+        to += 1;
+    }
+    for (var i = from; i < to; i += 1) {
+        if (numbered) {
+            print(i + 1, ":  ");
+        }
+        print(lines[i], "\n");
+    }
+}
+
+fn compare_lines(name1: []u8, text1: []u8, name2: []u8, text2: []u8) int {
+    var x = lines_of(text1);
+    var y = lines_of(text2);
+    var i = 0;
+    var j = 0;
+    var differences = 0;
+    while (i < x.len || j < y.len) {
+        if (i < x.len && j < y.len && same_line(x[i], y[j])) {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        var a = -1;
+        var b = -1;
+        for (var distance = 1; distance <= 2 * REACH && a < 0; distance += 1) {
+            for (var step = 0; step <= distance && a < 0; step += 1) {
+                if (step <= REACH && distance - step <= REACH && i + step <= x.len && j + distance - step <= y.len &&
+                    together(x, i + step, y, j + distance - step)) {
+                    a = i + step;
+                    b = j + distance - step;
+                }
+            }
+        }
+        differences += 1;
+        if (a < 0) {
+            show(name1, x, i, x.len);
+            show(name2, y, j, y.len);
+            print("*****\n\nResync failed. Files are too different.\n");
+            return 1;
+        }
+        show(name1, x, i, a);
+        show(name2, y, j, b);
+        print("*****\n\n");
+        i = a;
+        j = b;
+    }
+    if (differences == 0) {
+        print("FC: no differences encountered\n\n");
+        return 0;
+    }
+    return 1;
+}
+
+fn hex(value: int, digits: int) {
+    var text: [8]u8;
+    for (var i = digits - 1; i >= 0; i -= 1) {
+        text[i] = "0123456789ABCDEF"[value % 16];
+        value /= 16;
+    }
+    print(text[:digits]);
+}
+
+fn compare_bytes(name1: []u8, a: []u8, name2: []u8, b: []u8) int {
+    var differences = 0;
+    for (var i = 0; i < a.len && i < b.len; i += 1) {
+        if (a[i] != b[i]) {
+            hex(i, 8);
+            print(": ");
+            hex(a[i] as int, 2);
+            print(" ");
+            hex(b[i] as int, 2);
+            print("\n");
+            differences += 1;
+        }
+    }
+    if (a.len != b.len) {
+        var longer = name1;
+        var shorter = name2;
+        if (b.len > a.len) {
+            longer = name2;
+            shorter = name1;
+        }
+        print("FC: ", longer, " longer than ", shorter, "\n\n");
+        return 1;
+    }
+    if (differences == 0) {
+        print("FC: no differences encountered\n\n");
+        return 0;
+    }
+    print("\n");
+    return 1;
+}
+
+fn main(args: [][]u8) int {
+    var names: [2][]u8;
+    var count = 0;
+    for (var i = 1; i < args.len; i += 1) {
+        var arg = args[i];
+        if (arg.len == 2 && arg[0] == '/') {
+            var letter = upper(arg[1]);
+            if (letter == '?') {
+                print(HELP);
+                return 0;
+            } else if (letter == 'B') {
+                binary = true;
+            } else if (letter == 'C') {
+                ignore_case = true;
+            } else if (letter == 'N') {
+                numbered = true;
+            } else {
+                return fail("Invalid switch - ", arg);
+            }
+        } else if (count == 2) {
+            return fail("Too many parameters - ", arg);
+        } else {
+            names[count] = arg;
+            count += 1;
+        }
+    }
+    if (count < 2) {
+        io.print_error("Insufficient number of file specifications\n");
+        return 2;
+    }
+    var texts: [2][]u8;
+    for (var k = 0; k < 2; k += 1) {
+        texts[k] = io.read_file(names[k]);
+        if (texts[k].ptr == null) {
+            return fail("Cannot open ", names[k]);
+        }
+    }
+    print("Comparing files ", names[0], " and ", names[1], "\n");
+    if (binary) {
+        return compare_bytes(names[0], texts[0], names[1], texts[1]);
+    }
+    return compare_lines(names[0], texts[0], names[1], texts[1]);
+}

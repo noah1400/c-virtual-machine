@@ -42,7 +42,7 @@ vmc.bin: vmc1.bin vm vmasm
 	./vmasm -I ./ore/lib -I . $@.asm -o $@
 	rm -f $@.asm
 
-# MiniDos lives above the programs it runs, which start at 0, asks for 4 MB of memory and carries the
+# MiniDos lives above the programs it runs, which start at 0, asks for 8 MB of memory and carries the
 # programs that FORMAT /S puts onto a disk
 minidos.bin: vmc.bin vm vmasm $(MINIDOS_SRC) $(ORE_LIB) $(MINIDOS_PROGRAMS)
 	./vmc -b 0x100000 -m 8192 -I $(BUILD)/minidos ore/minidos/main.ore -o $@

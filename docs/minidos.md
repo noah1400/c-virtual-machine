@@ -36,7 +36,7 @@ AUTOEXEC BAT            22 10-01-26   9:30a
         1 dir(s)       4,147,200 bytes free
 ```
 
-`vm` creates `work.img` when it does not exist, as a disk without sectors, and MiniDos offers to format it. Formatting makes the disk as large as asked, puts the system programs `SORT` and `FIND` into `\DOS` and writes an `AUTOEXEC.BAT` that adds `\DOS` to `PATH`. The next start finds the formatted disk and goes straight to the prompt.
+`vm` creates `work.img` when it does not exist, as a disk without sectors, and MiniDos offers to format it. Formatting makes the disk as large as asked, puts the system programs `SORT`, `FIND` and `FC` into `\DOS` and writes an `AUTOEXEC.BAT` that adds `\DOS` to `PATH`. The next start finds the formatted disk and goes straight to the prompt.
 
 `make` also builds `minidos.img`, a 4 MB disk formatted the same way, labelled `MINIDOS`. It builds that disk anew whenever MiniDos changes, so files of your own belong on a disk like `work.img`, where `SYS A:` brings the system programs up to date. MiniDos asks for 8 MB of memory in its binary's header, which `vm` gives it without `-m`.
 
@@ -201,6 +201,7 @@ A fault ends the program with a message, such as `Divide overflow` or `Stack ove
 
 - `SORT [/R] [/+n] [file]` writes the lines of a file or of its input in order, ignoring case, comparing them from column *n* on with `/+n` and in reverse order with `/R`.
 - `FIND [/V] [/C] [/N] [/I] "text" [file]` writes the lines that contain the text, with `/V` those that do not, with `/C` only how many, with `/N` each after its number in brackets, and with `/I` ignoring case. It ends with status 1 when no line matched.
+- `FC [/B] [/C] [/N] file1 file2` shows where two files differ: the lines of each between the last ones that match and the next two that match again, numbered with `/N` and compared without case with `/C`, or with `/B` the offsets and values of the bytes that differ. It ends with status 0 for files that are the same, 1 for different ones and 2 when it cannot compare them.
 
 A new program is any Ore program that reads and writes with `std/io`, best built with `-g0` as well:
 
@@ -258,7 +259,7 @@ Directories are files of 32-byte entries, the root directory included. Every oth
 | `ore/minidos/disk.ore` | The disk ports |
 | `ore/minidos/time.ore` | The clock and how dates and times are written |
 | `ore/minidos/names.ore` | Comparing and joining names and paths |
-| `ore/minidos/programs/` | `SORT` and `FIND` |
+| `ore/minidos/programs/` | `SORT`, `FIND` and `FC` |
 
 `tests/minidos` holds MiniDos sessions for the test suite: what is typed in `NAME.in` and what MiniDos shows in `NAME.out`, with the display as plain text frames, along with programs the sessions import. They run with the clock held at 2026-10-01 9:30, and with an empty disk in drive A and a new one in drive B unless `NAME.disks` gives other disk options.
 

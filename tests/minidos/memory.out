@@ -20,11 +20,12 @@ AUTOEXEC BAT            22 10-01-26   9:30a
 ..              <DIR>      10-01-26   9:30a
 SORT     EXE         6,737 10-01-26   9:30a
 FIND     EXE         4,642 10-01-26   9:30a
-        2 file(s)         11,379 bytes
+FC       EXE         7,147 10-01-26   9:30a
+        3 file(s)         18,526 bytes
 
 Total files listed:
-        3 file(s)         11,401 bytes
-        3 dir(s)       1,026,048 bytes free
+        4 file(s)         18,548 bytes
+        3 dir(s)       1,018,880 bytes free
 A:\>ECHO kept in memory > NOTE.TXT
 A:\>SORT < NOTE.TXT
 kept in memory
