@@ -1,0 +1,23 @@
+N
+FORMAT A: /V:BREAK
+IMPORT sort.bin SORT.EXE
+half typedCOPY CON WAIT.BAT
+@ECHO OFF
+ECHO before the pause
+PAUSE
+ECHO after the pause
+
+WAIT
+ECHO the batch file stopped at the pause
+SORT
+pear
+apple
+ECHO SORT ended before it wrote anything
+COPY CON PART.TXT
+a line
+DIR PART.TXT
+CHOICE Go on
+IF ERRORLEVEL 1 ECHO CHOICE chose something
+EDIT KEPT.TXT
+abcdefTYPE KEPT.TXT
+EXIT

@@ -22,6 +22,8 @@ const INVALID_FREE: u32 = 6;
 const IO_ERROR: u32 = 11;
 const FIRST_HANDLE = 3;
 const HANDLES = 16;
+const CTRL_C_PORT = 0x63;
+const BREAK_VECTOR = 0x23;          // the interrupt for Ctrl-C, as INT 23h was under DOS
 
 // Exit statuses of programs that did not choose one
 pub const ABORTED = 1;
@@ -66,6 +68,18 @@ pub fn install() {
     cpu.set_handler(12, on_heap_protection as u32);
     cpu.set_handler(PRIVILEGE_VIOLATION, on_privilege_violation as u32);
     cpu.set_handler(14, on_page_fault as u32);
+    cpu.set_handler(BREAK_VECTOR, on_break as u32);
+    cpu.write_port(CTRL_C_PORT, BREAK_VECTOR);
+    cpu.enable_interrupts();
+}
+
+// Ctrl-C ends a program at once, and what MiniDos does itself once it looks
+interrupt fn on_break(frame: *cpu.Frame) {
+    console.press_break();
+    if (running && (frame.sr & SUPERVISOR) == 0) {
+        console.show_break();
+        end(CRASHED);
+    }
 }
 
 // Loads the program at path and runs it with the words of tail as its arguments; returns its exit
@@ -182,6 +196,10 @@ interrupt fn on_privilege_violation(frame: *cpu.Frame) {
         }
         frame.pc += length;
         serve(frame, number);
+        if (console.break_pressed()) {
+            console.show_break();
+            end(CRASHED);
+        }
         return;
     }
     if (word >> 24 == HALT_OPCODE) {

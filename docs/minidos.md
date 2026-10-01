@@ -44,7 +44,7 @@ Started without `-b`, MiniDos keeps drive A in memory: a 1 MB disk labelled `RAM
 
 - **More drives:** each further `-b` attaches the next drive, up to `D:`, as in `./vm -b work.img -b data.img minidos.bin`. MiniDos says which disks are not formatted yet, and `FORMAT B:` prepares one.
 - **Host files:** `IMPORT` and `EXPORT` copy files between a MiniDos disk and the directory `vm` runs in.
-- **Stopping:** `EXIT`, or the end of the input when it comes from a file or a pipe, stops MiniDos and the VM. Ctrl-C stops the VM at once.
+- **Stopping:** `EXIT`, or the end of the input when it comes from a file or a pipe, stops MiniDos and the VM. Ctrl-C stops what runs, not MiniDos.
 - **The clock:** files get the local date and time of the host when they are written. `DATE` and `TIME` move MiniDos's clock until it stops, without touching the host's, and `vm -T 2026-10-01T09:30:00` holds the clock still.
 
 ## The command line
@@ -59,6 +59,7 @@ Commands are typed into a line editor:
 | Tab | Completes the file or directory name before the cursor, and offers the next match with each further Tab |
 | Escape | Clears the line |
 | Ctrl-Z | Ends the input of `COPY CON` or a program after this line; it shows as `^Z` until Enter |
+| Ctrl-C | Cancels the line, or stops the command, batch file or program that runs |
 
 Names of commands, files and directories may be written in any case and have up to 8 characters with an extension of up to 3. Paths take `\` or `/`, may start with a drive such as `B:` and may contain `.` and `..`. Typing a drive alone, as in `B:`, makes it the current drive, and each drive keeps a current directory of its own.
 
@@ -68,6 +69,7 @@ Any other name runs a program or a batch file: `NAME` looks for `NAME.EXE` and t
 
 - **Redirection:** `> file` sends a command's output into a file, `>> file` adds it to the end, and `< file` gives the command the file as its input. Error messages and questions always go to the screen.
 - **Pipes:** `a | b` runs `a` with its output going to a temporary file in the root directory, then `b` with that file as its input.
+- **Ctrl-C:** a program ends at once, with status 255, and so do batch files and `FOR` loops; a command of MiniDos stops showing anything and ends soon after, and `COPY CON` makes no file. Should MiniDos not take a Ctrl-C, because a program keeps it busy where it cannot, a second one stops the VM.
 - **Wildcards:** `*` stands for the rest of the name or extension and `?` for one character, as in `DEL *.TXT` or `DIR A?C.*`. `DIR NAME` lists `NAME.*`.
 - **NUL:** every directory has the device `NUL`, with any extension, which reads as empty and takes whatever is written to it: `> NUL` throws output away, `COPY NUL FILE` makes an empty file, and `IF EXIST DIR\NUL` tells whether a directory exists.
 
@@ -157,7 +159,7 @@ The system programs live in `\DOS`, and `AUTOEXEC.BAT` in the root directory, wh
 | Insert | Switches between inserting and overwriting, `OVR` in the bottom line |
 | Tab | Inserts a tab, which reaches to the next column of 8 |
 | ^S | Saves, after asking for a name when the text has none |
-| ^Q or Escape | Quits, after asking whether to save changes; Escape goes back to the text |
+| ^Q or Escape | Quits, after asking whether to save changes; Escape goes back to the text. Ctrl-C does nothing here |
 | ^F | Finds text after the cursor, whatever its case, going on from the top; Enter on the last text finds the next |
 | ^G | Goes to a line by its number |
 | ^K | Cuts the cursor's line; cutting lines one after another gathers them |
@@ -193,7 +195,7 @@ A program's syscalls cannot reach the VM from user mode; they arrive at MiniDos 
 | 36, Clock | Gives MiniDos's date and time, which `DATE` and `TIME` may have moved |
 | Sleep, time, ticks and random numbers, 31 to 33, 40 and 41 | Go to the VM |
 
-A fault ends the program with a message, such as `Divide overflow` or `Stack overflow`, and status 255; so does any other privileged instruction. `HALT` ends it with status 0. Memory is not protected, as under DOS: a program that writes outside its own memory can damage MiniDos.
+A fault ends the program with a message, such as `Divide overflow` or `Stack overflow`, and status 255; so does any other privileged instruction, and Ctrl-C with `^C`. `HALT` ends it with status 0. Ctrl-C reaches MiniDos as interrupt 0x23, which it asks the keyboard for through port 0x63, and programs run with interrupts on. Memory is not protected, as under DOS: a program that writes outside its own memory can damage MiniDos.
 
 `ore/minidos/programs` holds the system programs, which `make` builds with `vmc -g0` and MiniDos carries inside itself for `FORMAT /S` and `SYS`:
 
@@ -263,6 +265,5 @@ Directories are files of 32-byte entries, the root directory included. Every oth
 ## Limits
 
 - One program at a time, with 1 MB for its code, data and stack, and no protection of MiniDos's memory from it.
-- No interrupts: a program that never ends can only be stopped with the VM.
 - Names of 8 and 3 characters, and disks of at most 32 MB.
 - `DATE` and `TIME` last until MiniDos stops.

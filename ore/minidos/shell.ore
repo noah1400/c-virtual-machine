@@ -29,6 +29,11 @@ struct Batch {
 
 var batch: *Batch = null;
 
+// Whether batch files and FOR go on: neither EXIT nor Ctrl-C stopped them
+fn going_on() bool {
+    return !stopping && !console.break_pressed();
+}
+
 pub fn stopped() bool {
     return stopping;
 }
@@ -41,6 +46,7 @@ pub fn in_batch() bool {
 pub fn interact() {
     var buffer: [256]u8;
     while (!stopping) {
+        console.take_break();
         prompt();
         var line: []u8;
         if (!console.read_command(buffer, &line)) {
@@ -429,7 +435,7 @@ pub fn run_batch(path: []u8, rest: []u8, call: bool) {
     b.parameters = parameters_of(b.words);
     var outer = batch;
     batch = b;
-    while (b.next < b.lines.len && !stopping) {
+    while (b.next < b.lines.len && going_on()) {
         var line = b.lines[b.next];
         b.next += 1;
         var expanded = expand(line, b);
@@ -654,7 +660,7 @@ pub fn for_each(a: *args.Args) {
     }
     var command = str.trim(rest[2:]);
     var i = 0;
-    while (i < set.len && !stopping) {
+    while (i < set.len && going_on()) {
         while (i < set.len && (set[i] == ' ' || set[i] == ',' || set[i] == ';')) {
             i += 1;
         }
@@ -676,7 +682,7 @@ pub fn for_each(a: *args.Args) {
             fs.list(&selection, false, &entries) != fs.Error.NONE) {
             continue;
         }
-        for (var k = 0; k < entries.len && !stopping; k += 1) {
+        for (var k = 0; k < entries.len && going_on(); k += 1) {
             if ((entries[k].attributes & fs.DIRECTORY) == 0) {
                 var buffer: [12]u8;
                 var path = names.join(names.directory_part(item), "", fs.name_text(entries[k].name, buffer));
@@ -774,7 +780,7 @@ pub fn choice(a: *args.Args) {
         console.screen(str.text(&question));
         var line: []u8;
         if (!console.read_line(buffer, &line)) {
-            console.screen("\n");
+            console.unanswered();
             break;
         }
         var answer = str.trim(line);

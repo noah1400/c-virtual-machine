@@ -28,12 +28,16 @@ pub const INSERT = 0x106;
 pub const DELETE = 0x107;
 pub const PAGE_UP = 0x108;
 pub const PAGE_DOWN = 0x109;
+pub const BREAK = -2;           // what key gives in place of a key after Ctrl-C
 
 const HISTORY = 32;
 const LINE = 256;
 
 var output: *fs.File = null;
 var input: *fs.File = null;
+
+var broken = false;             // Ctrl-C was pressed and the shell has not taken note yet; output stops till then
+var break_shown = false;
 
 var history: [HISTORY][]u8;     // the commands typed last, the oldest first
 var history_count = 0;
@@ -63,6 +67,9 @@ pub fn output_redirected() bool {
 }
 
 pub fn write(text: []u8) {
+    if (broken) {
+        return;
+    }
     if (output != null) {
         fs.write(output, text);
     } else {
@@ -132,16 +139,54 @@ pub fn clear() {
     write("\x1b[2J\x1b[H");
 }
 
+// Ctrl-C
+
+// Notes Ctrl-C, from its interrupt
+pub fn press_break() {
+    broken = true;
+}
+
+pub fn break_pressed() bool {
+    return broken;
+}
+
+// Shows ^C, once each time Ctrl-C is pressed
+pub fn show_break() {
+    if (!break_shown) {
+        break_shown = true;
+        screen("^C\n");
+    }
+}
+
+// Shows ^C when Ctrl-C was pressed, tells whether it was, and lets output go on
+pub fn take_break() bool {
+    if (!broken) {
+        return false;
+    }
+    show_break();
+    forget_break();
+    return true;
+}
+
+pub fn forget_break() {
+    broken = false;
+    break_shown = false;
+}
+
 // The keyboard
 
 pub fn key_waiting() bool {
     return (cpu.read_port(KEY_STATUS) & KEY_WAITING) != 0;
 }
 
-// The next key, after waiting for one, or -1 when the input has ended
+// The next key, after waiting for one with interrupts on, BREAK after Ctrl-C, or -1 when the input has ended
 pub fn key() int {
+    cpu.enable_interrupts();
     for (;;) {
         var status = cpu.read_port(KEY_STATUS);
+        if (broken) {
+            return BREAK;
+        }
         if ((status & KEY_WAITING) != 0) {
             return cpu.read_port(KEY_DATA) as int;
         }
@@ -293,6 +338,12 @@ fn edit(buffer: []u8, text: *[]u8, command: bool) bool {
     var ended = false;
     for (;;) {
         var k = key();
+        if (k == BREAK) {
+            show_break();
+            forget_names(&e);
+            *text = buffer[:0];
+            return command;
+        }
         if (k < 0) {
             if (e.length == 0) {
                 forget_names(&e);
@@ -498,12 +549,19 @@ pub fn read(buffer: []u8) int {
     return fs.read(input, buffer);
 }
 
+// Ends the line of a question that the end of the input left without an answer, unless Ctrl-C ended it
+pub fn unanswered() {
+    if (!broken) {
+        screen("\n");
+    }
+}
+
 // Shows a question and reads a line of answer into buffer, trimmed, or nothing when the input ends
 pub fn ask(question: []u8, buffer: []u8) []u8 {
     screen(question);
     var text: []u8;
     if (!read_line(buffer, &text)) {
-        screen("\n");
+        unanswered();
         return "";
     }
     return str.trim(text);
@@ -516,7 +574,7 @@ pub fn confirm(question: []u8) bool {
         screen(question);
         var text: []u8;
         if (!read_line(buffer, &text)) {
-            screen("\n");
+            unanswered();
             return false;
         }
         var answer = str.trim(text);

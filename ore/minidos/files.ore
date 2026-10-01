@@ -148,7 +148,7 @@ fn may_replace(path: []u8, ask: bool, all: *bool) bool {
         console.screen(question);
         var line: []u8;
         if (!console.read_line(buffer, &line)) {
-            console.screen("\n");
+            console.unanswered();
             answer = 'N';
         } else if (str.trim(line).len > 0) {
             answer = names.upper_byte(str.trim(line)[0]);
@@ -626,6 +626,10 @@ fn copy_console(target: []u8) {
         }
         str.append(&text, line);
         str.append(&text, "\n");
+    }
+    if (console.break_pressed()) {
+        str.release(&text);
+        return;
     }
     var e = fs.write_file(target, str.text(&text));
     str.release(&text);

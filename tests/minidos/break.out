@@ -1,0 +1,80 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A: /V:BREAK
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>IMPORT sort.bin SORT.EXE
+        1 file(s) imported
+A:\>half typed^C
+A:\>COPY CON WAIT.BAT
+@ECHO OFF
+ECHO before the pause
+PAUSE
+ECHO after the pause
+^Z
+        1 file(s) copied
+A:\>WAIT
+before the pause
+Press Enter to continue . . .^C
+A:\>ECHO the batch file stopped at the pause
+the batch file stopped at the pause
+A:\>SORT
+pear
+apple
+^C
+A:\>ECHO SORT ended before it wrote anything
+SORT ended before it wrote anything
+A:\>COPY CON PART.TXT
+a line
+^C
+A:\>DIR PART.TXT
+
+ Volume in drive A is BREAK
+ Directory of A:\
+
+File not found
+A:\>CHOICE Go on
+Go on [Y,N]?^C
+A:\>IF ERRORLEVEL 1 ECHO CHOICE chose something
+A:\>EDIT KEPT.TXT
+--- refresh 1 ---
+ MiniDos Editor                   A:\KEPT.TXT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ New file                                                         Line:1  Col:1
+A:\>TYPE KEPT.TXT
+abcdef
+A:\>EXIT

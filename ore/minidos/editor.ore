@@ -198,12 +198,20 @@ fn show() {
     cpu.write_port(DISPLAY_REFRESH, 0);
 }
 
-// The next key, drawing the screen first unless more keys wait already; -1 when the input has ended
+// The next key, drawing the screen first unless more keys wait already; -1 when the input has ended. Ctrl-C
+// does nothing here.
 fn next_key() int {
-    if (!console.key_waiting()) {
-        show();
+    for (;;) {
+        if (!console.key_waiting()) {
+            show();
+        }
+        var k = console.key();
+        if (k != console.BREAK) {
+            return k;
+        }
+        console.forget_break();
     }
-    return console.key();
+    return -1;
 }
 
 // Makes room for an empty line at index at and returns it
