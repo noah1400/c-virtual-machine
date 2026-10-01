@@ -3,7 +3,7 @@ Starting MiniDos...
 
 The disk is not formatted; FORMAT prepares it.
 A:\>DIR
-Disk not formatted
+The disk in drive A is not formatted
 A:\>FORMAT TESTDISK
 Format complete.
 

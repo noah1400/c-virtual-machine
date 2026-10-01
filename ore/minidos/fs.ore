@@ -1,13 +1,25 @@
-// The MiniDos file system. Sector 0 describes the disk, the allocation table follows it, and then come
-// the clusters, one sector each. The table holds an int for every cluster: the next cluster of the same
-// file, END for its last one, or 0 for a free one. Directories are files of 32-byte entries, the root
-// directory included, and every other directory starts with the entries . and .. for itself and its
-// parent.
+// The MiniDos file system, one on the disk of each drive from A: to D:. Sector 0 describes the disk, the
+// allocation table follows it, and then come the clusters, one sector each. The table holds an int for every
+// cluster: the next cluster of the same file, END for its last one, or 0 for a free one. Directories are files
+// of 32-byte entries, the root directory included, and every other directory starts with the entries . and ..
+// for itself and its parent.
 import "std/mem";
 import "std/str";
 import "disk";
 
+pub const DRIVES = disk.DRIVES;
+
+// Attributes of entries
+pub const READ_ONLY: u8 = 0x01;
+pub const HIDDEN: u8 = 0x02;
+pub const SYSTEM: u8 = 0x04;
 pub const DIRECTORY: u8 = 0x10;
+pub const ARCHIVE: u8 = 0x20;
+
+// The sizes in sectors that a disk can be formatted to, and the size of a disk that had none
+pub const SMALLEST = 16;
+pub const LARGEST = 65536;
+pub const NEW_DISK = 8192;
 
 const SECTOR = disk.SECTOR;
 const MAGIC = "MDOS";
@@ -30,8 +42,12 @@ pub enum Error {
     DISK_ERROR,
     NO_DISK,
     NOT_FORMATTED,
-    TOO_SMALL,
+    BAD_DRIVE,
+    BAD_SIZE,
 }
+
+var problem_drive = 0;      // the drive that the last NO_DISK or NOT_FORMATTED was about
+var message_text: [64]u8;
 
 pub fn message(e: Error) []u8 {
     switch (e) {
@@ -66,16 +82,31 @@ pub fn message(e: Error) []u8 {
             return "Disk error";
         }
         case Error.NO_DISK {
-            return "No disk";
+            return about_drive("There is no disk in drive ", "");
         }
         case Error.NOT_FORMATTED {
-            return "Disk not formatted";
+            return about_drive("The disk in drive ", " is not formatted");
         }
-        case Error.TOO_SMALL {
-            return "Disk too small";
+        case Error.BAD_DRIVE {
+            return "Invalid drive specification";
+        }
+        case Error.BAD_SIZE {
+            return "A disk holds 8K to 32,768K";
         }
     }
     return "No error";
+}
+
+fn about_drive(before: []u8, after: []u8) []u8 {
+    mem.copy(message_text[:], before);
+    message_text[before.len] = letter(problem_drive);
+    mem.copy(message_text[before.len + 1:], after);
+    return message_text[:before.len + 1 + after.len];
+}
+
+// The letter of a drive
+pub fn letter(d: int) u8 {
+    return 'A' + d as u8;
 }
 
 // A directory entry as it is on the disk
@@ -99,103 +130,194 @@ struct Boot {
     label: [11]u8;
 }
 
-var boot: Boot;
-var table: []int;
-var changed: []bool;        // sectors of the table that differ from the disk
-var hint = 1;               // where the search for a free cluster starts
-var ready = false;
-var current = 0;            // the first cluster of the current directory
-var current_path: []u8;
-
-pub fn mounted() bool {
-    return ready;
+// The file system of a drive while it is in use
+struct Volume {
+    drive: int;
+    ready: bool;
+    boot: Boot;
+    table: []int;
+    changed: []bool;        // sectors of the table that differ from the disk
+    free: int;              // free clusters
+    hint: int;              // where the search for a free cluster starts
+    current: int;           // the first cluster of the current directory
+    path: []u8;             // the current directory as \NAME\NAME
 }
 
-// The current directory as \NAME\NAME
-pub fn current_directory() []u8 {
-    if (current_path.len == 0) {
+var volumes: [DRIVES]Volume;
+var drive = 0;              // the current drive
+
+pub fn current_drive() int {
+    return drive;
+}
+
+pub fn mounted(d: int) bool {
+    return d >= 0 && d < DRIVES && volumes[d].ready;
+}
+
+// Makes another drive the current one, if its file system can be used
+pub fn change_drive(d: int) Error {
+    var e = Error.NONE;
+    if (volume(d, &e) != null) {
+        drive = d;
+    }
+    return e;
+}
+
+// The current directory of a drive as \NAME\NAME
+pub fn directory(d: int) []u8 {
+    if (!mounted(d)) {
         return "\\";
     }
-    return current_path;
+    return volumes[d].path;
 }
 
-pub fn label() []u8 {
-    var end = boot.label.len;
-    while (end > 0 && boot.label[end - 1] == ' ') {
+pub fn label(d: int) []u8 {
+    if (!mounted(d)) {
+        return "";
+    }
+    var name = volumes[d].boot.label[:];
+    var end = name.len;
+    while (end > 0 && name[end - 1] == ' ') {
         end -= 1;
     }
-    return boot.label[:end];
+    return name[:end];
 }
 
-fn table_bytes() []u8 {
-    return mem.bytes(table.ptr as *u8, table.len * 4);
+fn table_bytes(v: *Volume) []u8 {
+    return mem.bytes(v.table.ptr as *u8, v.table.len * 4);
 }
 
-// Reads the description and the allocation table of the disk and starts in its root directory
-pub fn mount() Error {
-    ready = false;
-    var sectors = disk.sectors();
-    if (sectors == 0) {
+// Reads the description and the allocation table of a drive's disk and starts in its root directory
+pub fn mount(d: int) Error {
+    var v = &volumes[d];
+    v.drive = d;
+    v.ready = false;
+    problem_drive = d;
+    if (!disk.present(d)) {
         return Error.NO_DISK;
     }
+    var sectors = disk.sectors(d);
+    if (sectors == 0) {
+        return Error.NOT_FORMATTED;
+    }
     var sector: [SECTOR]u8;
-    if (!disk.read(0, sector)) {
+    if (!disk.read(d, 0, sector)) {
         return Error.DISK_ERROR;
     }
     var b = *(&sector[0] as *Boot);
-    if (!mem.equal(b.magic[:], MAGIC) || b.version != VERSION || b.clusters < 1 ||
-        b.table_sectors * TABLE_PER_SECTOR <= b.clusters || b.data + b.clusters > sectors || b.root < 1 ||
-        b.root > b.clusters) {
+    if (!mem.equal(b.magic[:], MAGIC) || b.version != VERSION || b.clusters < 1 || b.table < 1 ||
+        b.table_sectors < 1 || b.table + b.table_sectors > b.data || b.table_sectors * TABLE_PER_SECTOR <= b.clusters ||
+        b.data + b.clusters > sectors || b.root < 1 || b.root > b.clusters) {
         return Error.NOT_FORMATTED;
     }
-    boot = b;
-    free(table);
-    free(changed);
-    table = new(int, boot.table_sectors * TABLE_PER_SECTOR);
-    changed = new(bool, boot.table_sectors);
-    if (!disk.read(boot.table, table_bytes())) {
+    v.boot = b;
+    free(v.table);
+    free(v.changed);
+    v.table = new(int, b.table_sectors * TABLE_PER_SECTOR);
+    v.changed = new(bool, b.table_sectors);
+    if (!disk.read(d, b.table, table_bytes(v))) {
         return Error.DISK_ERROR;
     }
-    hint = 1;
-    current = boot.root;
-    free(current_path);
-    current_path = str.clone("\\");
-    ready = true;
+    v.free = 0;
+    for (var c = 1; c <= b.clusters; c += 1) {
+        if (v.table[c] == 0) {
+            v.free += 1;
+        }
+    }
+    v.hint = 1;
+    v.current = b.root;
+    free(v.path);
+    v.path = str.clone("\\");
+    v.ready = true;
     return Error.NONE;
 }
 
-// Makes an empty file system of the whole disk, with a label of up to 11 characters
-pub fn format(name: []u8) Error {
-    ready = false;
-    var sectors = disk.sectors();
-    if (sectors == 0) {
+// Whether a drive's disk holds a file system, which format would then destroy
+pub fn formatted(d: int) bool {
+    return mounted(d) || mount(d) == Error.NONE;
+}
+
+// Makes an empty file system on a drive's disk, with a label of up to 11 characters, after giving the disk
+// size sectors unless size is 0
+pub fn format(d: int, name: []u8, size: int) Error {
+    var v = &volumes[d];
+    v.ready = false;
+    problem_drive = d;
+    if (!disk.present(d)) {
         return Error.NO_DISK;
+    }
+    if (size != 0 && size != disk.sectors(d)) {
+        if (size < SMALLEST || size > LARGEST) {
+            return Error.BAD_SIZE;
+        }
+        if (!disk.resize(d, size)) {
+            return Error.DISK_ERROR;
+        }
+    }
+    var sectors = disk.sectors(d);
+    if (sectors < SMALLEST) {
+        return Error.BAD_SIZE;
+    }
+    if (sectors > LARGEST) {
+        sectors = LARGEST;
     }
     var table_sectors = (sectors + TABLE_PER_SECTOR - 1) / TABLE_PER_SECTOR;
     var b = Boot {
         version: VERSION, sectors: sectors, table: 1, table_sectors: table_sectors, data: 1 + table_sectors,
         clusters: sectors - 1 - table_sectors, root: 1,
     };
-    if (b.clusters < 8) {
-        return Error.TOO_SMALL;
-    }
     mem.copy(b.magic[:], MAGIC);
-    mem.fill(b.label[:], ' ');
-    for (var i = 0; i < name.len && i < b.label.len; i += 1) {
-        b.label[i] = upper(name[i]);
-    }
+    set_label_text(&b, name);
 
     var sector: [SECTOR]u8;
     *(&sector[0] as *Boot) = b;
     var empty = new(int, table_sectors * TABLE_PER_SECTOR);
     empty[b.root] = END;
-    var ok = disk.write(0, sector) && disk.write(b.table, mem.bytes(empty.ptr as *u8, empty.len * 4));
+    var ok = disk.write(d, 0, sector) && disk.write(d, b.table, mem.bytes(empty.ptr as *u8, empty.len * 4));
     free(empty);
     mem.fill(sector[:], 0);
-    if (!ok || !disk.write(b.data + b.root - 1, sector)) {
+    if (!ok || !disk.write(d, b.data + b.root - 1, sector)) {
         return Error.DISK_ERROR;
     }
-    return mount();
+    return mount(d);
+}
+
+fn set_label_text(b: *Boot, name: []u8) {
+    mem.fill(b.label[:], ' ');
+    for (var i = 0; i < name.len && i < b.label.len; i += 1) {
+        b.label[i] = upper(name[i]);
+    }
+}
+
+// Gives a drive's disk another label
+pub fn set_label(d: int, name: []u8) Error {
+    var e = Error.NONE;
+    var v = volume(d, &e);
+    if (v == null) {
+        return e;
+    }
+    set_label_text(&v.boot, name);
+    var sector: [SECTOR]u8;
+    *(&sector[0] as *Boot) = v.boot;
+    if (!disk.write(d, 0, sector)) {
+        return Error.DISK_ERROR;
+    }
+    return Error.NONE;
+}
+
+// The file system of a drive, mounted if it was not yet, or null with the reason in *e
+fn volume(d: int, e: *Error) *Volume {
+    if (d < 0 || d >= DRIVES) {
+        *e = Error.BAD_DRIVE;
+        return null;
+    }
+    if (!volumes[d].ready) {
+        *e = mount(d);
+        if (*e != Error.NONE) {
+            return null;
+        }
+    }
+    return &volumes[d];
 }
 
 fn upper(c: u8) u8 {
@@ -205,39 +327,47 @@ fn upper(c: u8) u8 {
     return c;
 }
 
-fn sector_of(cluster: int) int {
-    return boot.data + cluster - 1;
+fn sector_of(v: *Volume, cluster: int) int {
+    return v.boot.data + cluster - 1;
 }
 
-fn valid(cluster: int) bool {
-    return cluster >= 1 && cluster <= boot.clusters;
+fn valid(v: *Volume, cluster: int) bool {
+    return cluster >= 1 && cluster <= v.boot.clusters;
 }
 
-fn set(cluster: int, value: int) {
-    table[cluster] = value;
-    changed[cluster / TABLE_PER_SECTOR] = true;
+fn set(v: *Volume, cluster: int, value: int) {
+    if (v.table[cluster] == 0 && value != 0) {
+        v.free -= 1;
+    } else if (v.table[cluster] != 0 && value == 0) {
+        v.free += 1;
+    }
+    v.table[cluster] = value;
+    v.changed[cluster / TABLE_PER_SECTOR] = true;
 }
 
 // Writes the changed sectors of the allocation table
-fn flush() bool {
-    var bytes = table_bytes();
+fn flush(v: *Volume) bool {
+    var bytes = table_bytes(v);
     var ok = true;
-    for (var i = 0; i < changed.len; i += 1) {
-        if (changed[i]) {
-            ok = disk.write(boot.table + i, bytes[i * SECTOR:(i + 1) * SECTOR]) && ok;
-            changed[i] = false;
+    for (var i = 0; i < v.changed.len; i += 1) {
+        if (v.changed[i]) {
+            ok = disk.write(v.drive, v.boot.table + i, bytes[i * SECTOR:(i + 1) * SECTOR]) && ok;
+            v.changed[i] = false;
         }
     }
     return ok;
 }
 
 // A free cluster, made the last of a chain, or 0 when the disk is full
-fn allocate() int {
-    for (var n = 0; n < boot.clusters; n += 1) {
-        var c = hint;
-        hint = hint % boot.clusters + 1;
-        if (table[c] == 0) {
-            set(c, END);
+fn allocate(v: *Volume) int {
+    if (v.free == 0) {
+        return 0;
+    }
+    for (var n = 0; n < v.boot.clusters; n += 1) {
+        var c = v.hint;
+        v.hint = v.hint % v.boot.clusters + 1;
+        if (v.table[c] == 0) {
+            set(v, c, END);
             return c;
         }
     }
@@ -245,48 +375,49 @@ fn allocate() int {
 }
 
 // The clusters of the chain from first on, which free gives back. A damaged table cannot make it loop.
-fn chain(first: int) []int {
+fn chain(v: *Volume, first: int) []int {
     var count = 0;
     var c = first;
-    while (valid(c) && count < boot.clusters) {
+    while (valid(v, c) && count < v.boot.clusters) {
         count += 1;
-        c = table[c];
+        c = v.table[c];
     }
     var clusters = new(int, count);
     c = first;
     for (var i = 0; i < count; i += 1) {
         clusters[i] = c;
-        c = table[c];
+        c = v.table[c];
     }
     return clusters;
 }
 
 // Frees the chain from first on
-fn release(first: int) {
+fn release(v: *Volume, first: int) {
     var c = first;
-    for (var n = 0; valid(c) && n < boot.clusters; n += 1) {
-        var next = table[c];
-        set(c, 0);
+    for (var n = 0; valid(v, c) && n < v.boot.clusters; n += 1) {
+        var next = v.table[c];
+        set(v, c, 0);
         c = next;
     }
 }
 
-pub fn free_bytes() int {
-    var count = 0;
-    for (var c = 1; c <= boot.clusters; c += 1) {
-        if (table[c] == 0) {
-            count += 1;
-        }
+pub fn free_bytes(d: int) int {
+    if (!mounted(d)) {
+        return 0;
     }
-    return count * SECTOR;
+    return volumes[d].free * SECTOR;
 }
 
-pub fn total_bytes() int {
-    return boot.clusters * SECTOR;
+pub fn total_bytes(d: int) int {
+    if (!mounted(d)) {
+        return 0;
+    }
+    return volumes[d].boot.clusters * SECTOR;
 }
 
 // A whole directory in memory
 struct Directory {
+    v: *Volume;
     first: int;
     clusters: []int;
     entries: []Entry;
@@ -296,12 +427,13 @@ fn cluster_bytes(d: *Directory, i: int) []u8 {
     return mem.bytes(&d.entries[i * PER_CLUSTER] as *u8, SECTOR);
 }
 
-fn load(first: int, d: *Directory) Error {
+fn load(v: *Volume, first: int, d: *Directory) Error {
+    d.v = v;
     d.first = first;
-    d.clusters = chain(first);
+    d.clusters = chain(v, first);
     d.entries = new(Entry, d.clusters.len * PER_CLUSTER);
     for (var i = 0; i < d.clusters.len; i += 1) {
-        if (!disk.read(sector_of(d.clusters[i]), cluster_bytes(d, i))) {
+        if (!disk.read(v.drive, sector_of(v, d.clusters[i]), cluster_bytes(d, i))) {
             unload(d);
             return Error.DISK_ERROR;
         }
@@ -317,7 +449,7 @@ fn unload(d: *Directory) {
 // Writes the cluster that holds entry index back to the disk
 fn store(d: *Directory, index: int) Error {
     var i = index / PER_CLUSTER;
-    if (!disk.write(sector_of(d.clusters[i]), cluster_bytes(d, i))) {
+    if (!disk.write(d.v.drive, sector_of(d.v, d.clusters[i]), cluster_bytes(d, i))) {
         return Error.DISK_ERROR;
     }
     return Error.NONE;
@@ -333,11 +465,11 @@ fn add(d: *Directory, entry: Entry, index: *int) Error {
         }
     }
     if (free_index < 0) {
-        var c = allocate();
+        var c = allocate(d.v);
         if (c == 0) {
             return Error.DISK_FULL;
         }
-        set(d.clusters[d.clusters.len - 1], c);
+        set(d.v, d.clusters[d.clusters.len - 1], c);
         var clusters = new(int, d.clusters.len + 1);
         var entries = new(Entry, clusters.len * PER_CLUSTER);
         for (var i = 0; i < d.clusters.len; i += 1) {
@@ -355,7 +487,7 @@ fn add(d: *Directory, entry: Entry, index: *int) Error {
     d.entries[free_index] = entry;
     *index = free_index;
     var e = store(d, free_index);
-    if (e == Error.NONE && !flush()) {
+    if (e == Error.NONE && !flush(d.v)) {
         e = Error.DISK_ERROR;
     }
     return e;
@@ -456,22 +588,33 @@ pub fn name_text(name: [11]u8, buffer: []u8) []u8 {
     return buffer[:length];
 }
 
-fn is_separator(c: u8) bool {
+pub fn is_separator(c: u8) bool {
     return c == '\\' || c == '/';
 }
 
+// Takes the drive letter and its colon off the start of a path and leaves the drive in *d, the current one
+// when the path names none
+pub fn drive_of(path: []u8, d: *int) []u8 {
+    if (path.len >= 2 && path[1] == ':') {
+        *d = (upper(path[0]) - 'A') as int;
+        return path[2:];
+    }
+    *d = drive;
+    return path;
+}
+
 // The directory that holds entries of the given name, or 0: the directory itself for ., its parent for ..
-fn enter(dir: int, name: []u8, e: *Error) int {
+fn enter(v: *Volume, dir: int, name: []u8, e: *Error) int {
     var n = short_name(name, false, false);
     if (!n.ok) {
         *e = Error.PATH_NOT_FOUND;
         return 0;
     }
-    if (str.equal(name, ".") || str.equal(name, "..") && dir == boot.root) {
+    if (str.equal(name, ".") || str.equal(name, "..") && dir == v.boot.root) {
         return dir;
     }
     var d = Directory {};
-    *e = load(dir, &d);
+    *e = load(v, dir, &d);
     if (*e != Error.NONE) {
         return 0;
     }
@@ -482,25 +625,36 @@ fn enter(dir: int, name: []u8, e: *Error) int {
     } else {
         next = d.entries[i].cluster;
         if (next == 0) {
-            next = boot.root;
+            next = v.boot.root;
         }
     }
     unload(&d);
     return next;
 }
 
-// Follows path to the directory that holds its last part, and leaves that part in *last
-fn walk(path: []u8, last: *[]u8, dir: *int) Error {
-    var p = path;
-    if (p.len >= 2 && p[1] == ':') {
-        if (upper(p[0]) != 'A') {
-            return Error.PATH_NOT_FOUND;
-        }
-        p = p[2:];
+// Where a path leads: the drive and the directory that hold its entry, the entry's index there and the entry
+// itself. A directory named by ., .., a trailing \ or as the root has no index, only its cluster in the entry.
+pub struct Place {
+    drive: int;
+    dir: int;
+    index: int;
+    entry: Entry;
+}
+
+// Follows a path to the directory that holds its last part, leaves that part in *last and the drive and the
+// directory in place
+fn walk(path: []u8, last: *[]u8, place: *Place) Error {
+    var d = 0;
+    var p = drive_of(path, &d);
+    var e = Error.NONE;
+    var v = volume(d, &e);
+    if (v == null) {
+        return e;
     }
-    var at = current;
+    place.drive = d;
+    var at = v.current;
     if (p.len > 0 && is_separator(p[0])) {
-        at = boot.root;
+        at = v.boot.root;
         p = p[1:];
     }
     for (;;) {
@@ -510,12 +664,11 @@ fn walk(path: []u8, last: *[]u8, dir: *int) Error {
         }
         if (end == p.len) {
             *last = p;
-            *dir = at;
+            place.dir = at;
             return Error.NONE;
         }
         if (end > 0) {
-            var e = Error.NONE;
-            at = enter(at, p[:end], &e);
+            at = enter(v, at, p[:end], &e);
             if (e != Error.NONE) {
                 return e;
             }
@@ -525,35 +678,23 @@ fn walk(path: []u8, last: *[]u8, dir: *int) Error {
     return Error.NONE;
 }
 
-// Where a path leads: the directory that holds its entry, the entry's index there and the entry itself.
-// A directory named by ., .., a trailing \ or as the root has no index, only its cluster in the entry.
-pub struct Place {
-    dir: int;
-    index: int;
-    entry: Entry;
-}
-
 pub fn find(path: []u8, place: *Place) Error {
-    if (!ready) {
-        return Error.NOT_FORMATTED;
-    }
     var last: []u8;
-    var dir = 0;
-    var e = walk(path, &last, &dir);
+    var e = walk(path, &last, place);
     if (e != Error.NONE) {
         return e;
     }
+    var v = &volumes[place.drive];
     if (last.len == 0 || str.equal(last, ".") || str.equal(last, "..")) {
         if (last.len > 0) {
-            dir = enter(dir, last, &e);
+            place.dir = enter(v, place.dir, last, &e);
             if (e != Error.NONE) {
                 return e;
             }
         }
-        *place = Place { dir: dir, index: -1 };
+        place.index = -1;
+        place.entry = Entry { attributes: DIRECTORY, cluster: place.dir };
         mem.fill(place.entry.name[:], ' ');
-        place.entry.attributes = DIRECTORY;
-        place.entry.cluster = dir;
         return Error.NONE;
     }
     var n = short_name(last, false, false);
@@ -561,7 +702,7 @@ pub fn find(path: []u8, place: *Place) Error {
         return Error.BAD_NAME;
     }
     var d = Directory {};
-    e = load(dir, &d);
+    e = load(v, place.dir, &d);
     if (e != Error.NONE) {
         return e;
     }
@@ -569,7 +710,8 @@ pub fn find(path: []u8, place: *Place) Error {
     if (i < 0) {
         e = Error.NOT_FOUND;
     } else {
-        *place = Place { dir: dir, index: i, entry: d.entries[i] };
+        place.index = i;
+        place.entry = d.entries[i];
     }
     unload(&d);
     return e;
@@ -579,50 +721,23 @@ pub fn is_directory(place: *Place) bool {
     return (place.entry.attributes & DIRECTORY) != 0;
 }
 
-// The entries of the directory at dir that match pattern, apart from free ones; free gives them back
-pub fn list(dir: int, pattern: [11]u8, entries: *[]Entry) Error {
-    var d = Directory {};
-    var e = load(dir, &d);
-    if (e != Error.NONE) {
-        return e;
-    }
-    var count = 0;
-    for (var i = 0; i < d.entries.len; i += 1) {
-        if (d.entries[i].name[0] != 0 && matches(pattern, d.entries[i].name)) {
-            count += 1;
-        }
-    }
-    *entries = new(Entry, count);
-    count = 0;
-    for (var i = 0; i < d.entries.len; i += 1) {
-        if (d.entries[i].name[0] != 0 && matches(pattern, d.entries[i].name)) {
-            (*entries)[count] = d.entries[i];
-            count += 1;
-        }
-    }
-    unload(&d);
-    return Error.NONE;
-}
-
 // The directory a path names and the pattern of its last part, for listing and wildcard commands. A
 // directory stands for all of its entries.
 pub struct Selection {
+    drive: int;
     dir: int;
     pattern: [11]u8;
 }
 
 pub fn select(path: []u8, all: bool, selection: *Selection) Error {
-    if (!ready) {
-        return Error.NOT_FORMATTED;
-    }
     var everything = short_name("*.*", true, false);
+    var place = Place {};
     if (!has_wildcards(path)) {
-        var place = Place {};
         var e = find(path, &place);
         if (e == Error.NONE && is_directory(&place)) {
-            *selection = Selection { dir: place.entry.cluster, pattern: everything.chars };
+            *selection = Selection { drive: place.drive, dir: place.entry.cluster, pattern: everything.chars };
             if (place.entry.cluster == 0) {
-                selection.dir = boot.root;
+                selection.dir = volumes[place.drive].boot.root;
             }
             return Error.NONE;
         }
@@ -631,8 +746,7 @@ pub fn select(path: []u8, all: bool, selection: *Selection) Error {
         }
     }
     var last: []u8;
-    var dir = 0;
-    var e = walk(path, &last, &dir);
+    var e = walk(path, &last, &place);
     if (e != Error.NONE) {
         return e;
     }
@@ -640,7 +754,40 @@ pub fn select(path: []u8, all: bool, selection: *Selection) Error {
     if (!n.ok) {
         return Error.BAD_NAME;
     }
-    *selection = Selection { dir: dir, pattern: n.chars };
+    *selection = Selection { drive: place.drive, dir: place.dir, pattern: n.chars };
+    return Error.NONE;
+}
+
+// The entries of a selection apart from free ones, and hidden ones unless asked for; free gives them back
+pub fn list(selection: *Selection, hidden: bool, entries: *[]Entry) Error {
+    var e = Error.NONE;
+    var v = volume(selection.drive, &e);
+    if (v == null) {
+        return e;
+    }
+    var d = Directory {};
+    e = load(v, selection.dir, &d);
+    if (e != Error.NONE) {
+        return e;
+    }
+    var count = 0;
+    for (var pass = 0; pass < 2; pass += 1) {
+        if (pass == 1) {
+            *entries = new(Entry, count);
+            count = 0;
+        }
+        for (var i = 0; i < d.entries.len; i += 1) {
+            var entry = d.entries[i];
+            if (entry.name[0] != 0 && matches(selection.pattern, entry.name) &&
+                (hidden || (entry.attributes & HIDDEN) == 0)) {
+                if (pass == 1) {
+                    (*entries)[count] = entry;
+                }
+                count += 1;
+            }
+        }
+    }
+    unload(&d);
     return Error.NONE;
 }
 
@@ -651,23 +798,24 @@ pub fn delete(path: []u8) Error {
     if (e != Error.NONE) {
         return e;
     }
-    if (place.index < 0 || is_directory(&place)) {
+    if (place.index < 0 || is_directory(&place) || (place.entry.attributes & READ_ONLY) != 0) {
         return Error.ACCESS_DENIED;
     }
     return remove_entry(&place);
 }
 
 fn remove_entry(place: *Place) Error {
+    var v = &volumes[place.drive];
     var d = Directory {};
-    var e = load(place.dir, &d);
+    var e = load(v, place.dir, &d);
     if (e != Error.NONE) {
         return e;
     }
-    release(d.entries[place.index].cluster);
+    release(v, d.entries[place.index].cluster);
     d.entries[place.index].name[0] = 0;
     e = store(&d, place.index);
     unload(&d);
-    if (e == Error.NONE && !flush()) {
+    if (e == Error.NONE && !flush(v)) {
         e = Error.DISK_ERROR;
     }
     return e;
@@ -685,7 +833,7 @@ pub fn rename(path: []u8, new_name: []u8) Error {
         return Error.BAD_NAME;
     }
     var d = Directory {};
-    e = load(place.dir, &d);
+    e = load(&volumes[place.drive], place.dir, &d);
     if (e != Error.NONE) {
         return e;
     }
@@ -699,11 +847,32 @@ pub fn rename(path: []u8, new_name: []u8) Error {
     return e;
 }
 
+// Changes the attributes of a file or directory, apart from whether it is a directory
+pub fn set_attributes(path: []u8, attributes: u8) Error {
+    var place = Place {};
+    var e = find(path, &place);
+    if (e != Error.NONE) {
+        return e;
+    }
+    if (place.index < 0) {
+        return Error.ACCESS_DENIED;
+    }
+    var d = Directory {};
+    e = load(&volumes[place.drive], place.dir, &d);
+    if (e != Error.NONE) {
+        return e;
+    }
+    var entry = &d.entries[place.index];
+    entry.attributes = entry.attributes & DIRECTORY | attributes & ~DIRECTORY;
+    e = store(&d, place.index);
+    unload(&d);
+    return e;
+}
+
 // Makes an entry for a new, empty file or directory at path
 fn create(path: []u8, attributes: u8, place: *Place) Error {
     var last: []u8;
-    var dir = 0;
-    var e = walk(path, &last, &dir);
+    var e = walk(path, &last, place);
     if (e != Error.NONE) {
         return e;
     }
@@ -712,7 +881,7 @@ fn create(path: []u8, attributes: u8, place: *Place) Error {
         return Error.BAD_NAME;
     }
     var d = Directory {};
-    e = load(dir, &d);
+    e = load(&volumes[place.drive], place.dir, &d);
     if (e != Error.NONE) {
         return e;
     }
@@ -724,26 +893,29 @@ fn create(path: []u8, attributes: u8, place: *Place) Error {
     var index = 0;
     e = add(&d, entry, &index);
     unload(&d);
-    *place = Place { dir: dir, index: index, entry: entry };
+    place.index = index;
+    place.entry = entry;
     return e;
 }
 
 pub fn make_directory(path: []u8) Error {
-    if (!ready) {
-        return Error.NOT_FORMATTED;
-    }
     var place = Place {};
-    if (find(path, &place) == Error.NONE) {
+    var e = find(path, &place);
+    if (e == Error.NONE) {
         return Error.EXISTS;
     }
-    var c = allocate();
+    if (e != Error.NOT_FOUND) {
+        return e;
+    }
+    var v = &volumes[place.drive];
+    var c = allocate(v);
     if (c == 0) {
         return Error.DISK_FULL;
     }
-    var e = create(path, DIRECTORY, &place);
+    e = create(path, DIRECTORY, &place);
     if (e != Error.NONE) {
-        release(c);
-        flush();
+        release(v, c);
+        flush(v);
         return e;
     }
     var entries: [PER_CLUSTER]Entry;
@@ -754,7 +926,7 @@ pub fn make_directory(path: []u8) Error {
     entries[1] = entries[0];
     entries[1].name[1] = '.';
     entries[1].cluster = place.dir;
-    if (!disk.write(sector_of(c), mem.bytes(&entries[0] as *u8, SECTOR))) {
+    if (!disk.write(v.drive, sector_of(v, c), mem.bytes(&entries[0] as *u8, SECTOR))) {
         return Error.DISK_ERROR;
     }
     return set_entry(&place, c, 0);
@@ -762,8 +934,9 @@ pub fn make_directory(path: []u8) Error {
 
 // Changes where the entry at place starts and how long it is
 fn set_entry(place: *Place, cluster: int, length: int) Error {
+    var v = &volumes[place.drive];
     var d = Directory {};
-    var e = load(place.dir, &d);
+    var e = load(v, place.dir, &d);
     if (e != Error.NONE) {
         return e;
     }
@@ -772,7 +945,7 @@ fn set_entry(place: *Place, cluster: int, length: int) Error {
     place.entry = d.entries[place.index];
     e = store(&d, place.index);
     unload(&d);
-    if (e == Error.NONE && !flush()) {
+    if (e == Error.NONE && !flush(v)) {
         e = Error.DISK_ERROR;
     }
     return e;
@@ -788,14 +961,15 @@ pub fn remove_directory(path: []u8) Error {
     if (!is_directory(&place)) {
         return Error.NOT_DIRECTORY;
     }
-    if (place.index < 0 || place.entry.cluster == boot.root) {
+    var v = &volumes[place.drive];
+    if (place.index < 0 || place.entry.cluster == v.boot.root) {
         return Error.ACCESS_DENIED;
     }
-    if (place.entry.cluster == current) {
+    if (place.entry.cluster == v.current) {
         return Error.CURRENT_DIRECTORY;
     }
     var d = Directory {};
-    e = load(place.entry.cluster, &d);
+    e = load(v, place.entry.cluster, &d);
     if (e != Error.NONE) {
         return e;
     }
@@ -811,7 +985,7 @@ pub fn remove_directory(path: []u8) Error {
     return remove_entry(&place);
 }
 
-// Makes path the current directory
+// Makes path the current directory of its drive
 pub fn change_directory(path: []u8) Error {
     var place = Place {};
     var e = find(path, &place);
@@ -825,21 +999,24 @@ pub fn change_directory(path: []u8) Error {
         return Error.NOT_DIRECTORY;
     }
     var full = absolute(path);
-    current = place.entry.cluster;
-    free(current_path);
-    current_path = full;
+    var v = &volumes[place.drive];
+    v.current = place.entry.cluster;
+    free(v.path);
+    v.path = str.clone(full[2:]);
+    free(full);
     return Error.NONE;
 }
 
-// The path from the root to what path names, in capitals and without . and .., which free gives back
+// The path from the root to what path names, with its drive, in capitals and without . and .., which free
+// gives back
 pub fn absolute(path: []u8) []u8 {
-    var p = path;
-    if (p.len >= 2 && p[1] == ':') {
-        p = p[2:];
-    }
+    var d = 0;
+    var p = drive_of(path, &d);
     var b = str.builder(64);
+    str.append_byte(&b, letter(d));
+    str.append_byte(&b, ':');
     if (p.len == 0 || !is_separator(p[0])) {
-        str.append(&b, current_directory());
+        str.append(&b, directory(d));
     }
     while (p.len > 0) {
         var end = 0;
@@ -850,8 +1027,10 @@ pub fn absolute(path: []u8) []u8 {
         if (str.equal(part, "..")) {
             var text = str.text(&b);
             var slash = str.find_last_byte(text, '\\');
-            if (slash >= 0) {
+            if (slash > 2) {
                 b.len = slash;
+            } else {
+                b.len = 2;
             }
         } else if (part.len > 0 && !str.equal(part, ".")) {
             var n = short_name(part, false, false);
@@ -866,7 +1045,7 @@ pub fn absolute(path: []u8) []u8 {
         }
         p = p[end + 1:];
     }
-    if (b.len == 0) {
+    if (b.len == 2) {
         str.append_byte(&b, '\\');
     }
     var result = str.clone(str.text(&b));
@@ -902,12 +1081,14 @@ pub fn open(path: []u8, mode: int, e: *Error) *File {
     if (*e != Error.NONE) {
         return null;
     }
-    if (place.index < 0 || is_directory(&place) || mode < READ || mode > REPLACE) {
+    if (place.index < 0 || is_directory(&place) || mode < READ || mode > REPLACE ||
+        mode != READ && (place.entry.attributes & READ_ONLY) != 0) {
         *e = Error.ACCESS_DENIED;
         return null;
     }
+    var v = &volumes[place.drive];
     if ((mode == WRITE || mode == REPLACE) && place.entry.cluster != 0) {
-        release(place.entry.cluster);
+        release(v, place.entry.cluster);
         *e = set_entry(&place, 0, 0);
         if (*e != Error.NONE) {
             return null;
@@ -915,7 +1096,7 @@ pub fn open(path: []u8, mode: int, e: *Error) *File {
     }
     var f = new(File);
     f.place = place;
-    f.clusters = chain(place.entry.cluster);
+    f.clusters = chain(v, place.entry.cluster);
     f.count = f.clusters.len;
     f.size = place.entry.size;
     f.writable = mode != READ;
@@ -932,6 +1113,7 @@ pub fn file_size(f: *File) int {
 
 // Reads up to buffer.len bytes from the current position and returns how many, 0 at the end, or -1
 pub fn read(f: *File, buffer: []u8) int {
+    var v = &volumes[f.place.drive];
     var count = f.size - f.position;
     if (count > buffer.len) {
         count = buffer.len;
@@ -945,7 +1127,7 @@ pub fn read(f: *File, buffer: []u8) int {
         if (part > count - done) {
             part = count - done;
         }
-        if (index >= f.count || !disk.read(sector_of(f.clusters[index]), sector)) {
+        if (index >= f.count || !disk.read(v.drive, sector_of(v, f.clusters[index]), sector)) {
             return -1;
         }
         mem.copy(buffer[done:done + part], sector[offset:offset + part]);
@@ -960,6 +1142,7 @@ pub fn write(f: *File, bytes: []u8) int {
     if (!f.writable) {
         return -1;
     }
+    var v = &volumes[f.place.drive];
     if (f.appending) {
         f.position = f.size;
     }
@@ -975,13 +1158,13 @@ pub fn write(f: *File, bytes: []u8) int {
         if (index >= f.count && !grow(f)) {
             break;
         }
-        var sector_number = sector_of(f.clusters[index]);
+        var sector_number = sector_of(v, f.clusters[index]);
         mem.fill(sector[:], 0);
-        if (part < SECTOR && index * SECTOR < f.size && !disk.read(sector_number, sector)) {
+        if (part < SECTOR && index * SECTOR < f.size && !disk.read(v.drive, sector_number, sector)) {
             return -1;
         }
         mem.copy(sector[offset:offset + part], bytes[done:done + part]);
-        if (!disk.write(sector_number, sector)) {
+        if (!disk.write(v.drive, sector_number, sector)) {
             return -1;
         }
         done += part;
@@ -999,12 +1182,13 @@ pub fn write(f: *File, bytes: []u8) int {
 
 // Adds a cluster to the end of a file
 fn grow(f: *File) bool {
-    var c = allocate();
+    var v = &volumes[f.place.drive];
+    var c = allocate(v);
     if (c == 0) {
         return false;
     }
     if (f.count > 0) {
-        set(f.clusters[f.count - 1], c);
+        set(v, f.clusters[f.count - 1], c);
     }
     if (f.count == f.clusters.len) {
         var larger = new(int, f.count * 2 + 4);

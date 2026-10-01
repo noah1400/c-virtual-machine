@@ -50,8 +50,10 @@ pub fn interact() {
 }
 
 fn prompt() {
-    console.write("A:");
-    console.write(fs.current_directory());
+    var d = fs.current_drive();
+    console.write_byte(fs.letter(d));
+    console.write(":");
+    console.write(fs.directory(d));
     console.write(">");
 }
 
@@ -310,7 +312,12 @@ fn run(text: []u8) {
         }
     }
     var name = upper(word);
-    if (!builtin(name, rest, echo_text)) {
+    if (name.len == 2 && name[1] == ':' && rest.len == 0) {
+        var e = fs.change_drive((name[0] - 'A') as int);
+        if (e != fs.Error.NONE) {
+            complain(e);
+        }
+    } else if (!builtin(name, rest, echo_text)) {
         external(word, rest);
     }
     free(name);
@@ -663,9 +670,16 @@ fn condition(text: []u8) {
 }
 
 fn change_directory(path: []u8) {
-    if (path.len == 0) {
-        console.write("A:");
-        console.line(fs.current_directory());
+    if (path.len == 0 || path.len == 2 && path[1] == ':') {
+        var d = fs.current_drive();
+        fs.drive_of(path, &d);
+        if (d < 0 || d >= fs.DRIVES) {
+            complain(fs.Error.BAD_DRIVE);
+            return;
+        }
+        console.write_byte(fs.letter(d));
+        console.write(":");
+        console.line(fs.directory(d));
         return;
     }
     var e = fs.change_directory(path);
@@ -695,24 +709,25 @@ fn dir(argument: []u8) {
         return;
     }
     var entries: []fs.Entry;
-    e = fs.list(selection.dir, selection.pattern, &entries);
+    e = fs.list(&selection, false, &entries);
     if (e != fs.Error.NONE) {
         complain(e);
         return;
     }
-    console.write("\n Volume in drive A ");
-    if (fs.label().len > 0) {
-        console.write("is ");
-        console.line(fs.label());
+    console.write("\n Volume in drive ");
+    console.write_byte(fs.letter(selection.drive));
+    if (fs.label(selection.drive).len > 0) {
+        console.write(" is ");
+        console.line(fs.label(selection.drive));
     } else {
-        console.line("has no label");
+        console.line(" has no label");
     }
-    console.write(" Directory of A:");
+    console.write(" Directory of ");
     var shown = fs.absolute(path);
     if (fs.has_wildcards(path) || !is_directory(path)) {
         var slash_at = str.find_last_byte(shown, '\\');
-        if (slash_at < 1) {
-            slash_at = 1;
+        if (slash_at < 3) {
+            slash_at = 3;
         }
         console.line(shown[:slash_at]);
     } else {
@@ -767,7 +782,7 @@ fn dir(argument: []u8) {
     console.line(" bytes");
     console.number(directories, 9);
     console.write(" dir(s) ");
-    console.number(fs.free_bytes(), 15);
+    console.number(fs.free_bytes(selection.drive), 15);
     console.line(" bytes free");
 }
 
@@ -813,7 +828,7 @@ fn copy(argument: []u8) {
         return;
     }
     var entries: []fs.Entry;
-    e = fs.list(selection.dir, selection.pattern, &entries);
+    e = fs.list(&selection, false, &entries);
     if (e != fs.Error.NONE) {
         complain(e);
         return;
@@ -916,7 +931,7 @@ fn delete(argument: []u8) {
         return;
     }
     var entries: []fs.Entry;
-    e = fs.list(selection.dir, selection.pattern, &entries);
+    e = fs.list(&selection, false, &entries);
     if (e != fs.Error.NONE) {
         complain(e);
         return;
@@ -976,15 +991,18 @@ fn echo(argument: []u8, text: []u8) {
 }
 
 fn volume() {
-    if (!fs.mounted()) {
-        complain(fs.Error.NOT_FORMATTED);
+    var d = fs.current_drive();
+    if (!fs.mounted(d)) {
+        complain(fs.mount(d));
         return;
     }
-    if (fs.label().len > 0) {
-        console.write(" Volume in drive A is ");
-        console.line(fs.label());
+    console.write(" Volume in drive ");
+    console.write_byte(fs.letter(d));
+    if (fs.label(d).len > 0) {
+        console.write(" is ");
+        console.line(fs.label(d));
     } else {
-        console.line(" Volume in drive A has no label");
+        console.line(" has no label");
     }
 }
 
@@ -1000,16 +1018,17 @@ fn memory() {
 }
 
 fn format(label: []u8) {
-    var e = fs.format(label);
+    var d = fs.current_drive();
+    var e = fs.format(d, label, 0);
     if (e != fs.Error.NONE) {
         complain(e);
         return;
     }
     console.line("Format complete.");
     console.write("\n");
-    console.number(fs.total_bytes(), 12);
+    console.number(fs.total_bytes(d), 12);
     console.line(" bytes total disk space");
-    console.number(fs.free_bytes(), 12);
+    console.number(fs.free_bytes(d), 12);
     console.line(" bytes available on disk");
     console.write("\n");
 }

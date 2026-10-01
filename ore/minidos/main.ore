@@ -19,7 +19,10 @@ fn main(args: [][]u8) int {
     }
     program.install();
     console.write("\nStarting MiniDos...\n\n");
-    var e = fs.mount();
+    for (var d = 1; d < fs.DRIVES; d += 1) {
+        fs.mount(d);
+    }
+    var e = fs.mount(0);
     if (e == fs.Error.NO_DISK) {
         console.line("There is no disk; start vm with -b and a disk image.");
     } else if (e == fs.Error.NOT_FORMATTED) {

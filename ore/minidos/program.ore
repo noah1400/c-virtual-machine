@@ -99,13 +99,7 @@ pub fn run(path: []u8, tail: []u8) int {
     }
     free(bytes);
 
-    var absolute = fs.absolute(path);
-    var full = new(u8, absolute.len + 2);
-    full[0] = 'A';
-    full[1] = ':';
-    mem.copy(full[2:], absolute);
-    free(absolute);
-    arguments = split(full, tail);
+    arguments = split(fs.absolute(path), tail);
     blocks = new(Block, 16);
     block_count = 0;
     var bottom = cpu.read_control(cpu.SLO);

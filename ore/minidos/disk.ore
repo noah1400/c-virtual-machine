@@ -1,35 +1,57 @@
-// The VM's disk: whole sectors between the disk and memory
+// The VM's disk drives: whole sectors between a drive's image and memory
 import "std/cpu";
 
 pub const SECTOR = 512;
+pub const DRIVES = 4;
 
 const SECTOR_PORT = 0x70;
 const BUFFER_PORT = 0x71;
 const COUNT_PORT = 0x72;
 const COMMAND_PORT = 0x73;
 const SIZE_PORT = 0x74;
+const DRIVE_PORT = 0x75;
 
 const READ: u32 = 1;
 const WRITE: u32 = 2;
+const RESIZE: u32 = 3;
+const NO_DISK: u32 = 1;
+
+fn command(drive: int, what: u32) u32 {
+    cpu.write_port(DRIVE_PORT, drive as u32);
+    cpu.write_port(COMMAND_PORT, what);
+    return cpu.read_port(COMMAND_PORT);
+}
+
+// Whether the drive has an image, even one without sectors, which a transfer of none tells
+pub fn present(drive: int) bool {
+    cpu.write_port(COUNT_PORT, 0);
+    return command(drive, READ) != NO_DISK;
+}
 
 // The number of sectors, 0 without a disk
-pub fn sectors() int {
+pub fn sectors(drive: int) int {
+    cpu.write_port(DRIVE_PORT, drive as u32);
     return cpu.read_port(SIZE_PORT) as int;
 }
 
 // Moves as many whole sectors as fit in buffer, from sector on, and tells whether that worked
-fn transfer(command: u32, sector: int, buffer: []u8) bool {
+fn transfer(drive: int, what: u32, sector: int, buffer: []u8) bool {
     cpu.write_port(SECTOR_PORT, sector as u32);
     cpu.write_port(BUFFER_PORT, buffer.ptr as u32);
     cpu.write_port(COUNT_PORT, (buffer.len / SECTOR) as u32);
-    cpu.write_port(COMMAND_PORT, command);
-    return cpu.read_port(COMMAND_PORT) == 0;
+    return command(drive, what) == 0;
 }
 
-pub fn read(sector: int, buffer: []u8) bool {
-    return transfer(READ, sector, buffer);
+pub fn read(drive: int, sector: int, buffer: []u8) bool {
+    return transfer(drive, READ, sector, buffer);
 }
 
-pub fn write(sector: int, buffer: []u8) bool {
-    return transfer(WRITE, sector, buffer);
+pub fn write(drive: int, sector: int, buffer: []u8) bool {
+    return transfer(drive, WRITE, sector, buffer);
+}
+
+// Makes the disk as many sectors long, adding zeros or cutting off its end
+pub fn resize(drive: int, count: int) bool {
+    cpu.write_port(COUNT_PORT, count as u32);
+    return command(drive, RESIZE) == 0;
 }
