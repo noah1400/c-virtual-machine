@@ -2,6 +2,7 @@
 import "args";
 import "console";
 import "disks";
+import "editor";
 import "files";
 import "names";
 import "shell";
@@ -90,6 +91,13 @@ var table = []Command {
         "Shows text, or whether batch files show their commands",
         "ECHO [ON | OFF | text]",
         "  ECHO. shows an empty line",
+    } },
+    Command { name: "EDIT", run: editor.edit, help: [][]u8 {
+        "Edits a text file on the whole screen, a new one when it does not exist",
+        "EDIT [[drive:][path]file]",
+        "  The arrow keys, Home, End, Page Up and Page Down move, Insert switches between inserting and",
+        "  overwriting. ^S saves, ^Q or Escape quits, ^F finds text, ^G goes to a line, ^K cuts the line",
+        "  and ^U puts the lines cut last before the cursor's line.",
     } },
     Command { name: "EXIT", run: shell.exit, help: [][]u8 {
         "Stops MiniDos and the VM",

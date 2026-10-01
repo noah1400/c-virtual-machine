@@ -1,0 +1,630 @@
+// EDIT: a full-screen editor for text files, which draws on the VM's display and takes keys from the keyboard
+import "std/cpu";
+import "std/mem";
+import "std/str";
+import "args";
+import "console";
+import "fs";
+import "names";
+
+const DISPLAY_BUFFER = 0x50;
+const DISPLAY_REFRESH = 0x51;
+const COLUMNS = 80;
+const ROWS = 25;
+const TEXT_ROWS = ROWS - 2;         // between the title and the status line
+const TAB_STOP = 8;
+
+const TITLE_COLORS: u8 = 0x70;      // black on white
+const TEXT_COLORS: u8 = 0x1F;       // bright white on blue
+const CURSOR_COLORS: u8 = 0x71;     // blue on white
+const STATUS_COLORS: u8 = 0x30;     // black on cyan
+const ANSWER_CURSOR_COLORS: u8 = 0x03;
+
+const CTRL_F = 0x06;
+const CTRL_G = 0x07;
+const CTRL_K = 0x0B;
+const CTRL_Q = 0x11;
+const CTRL_S = 0x13;
+const CTRL_U = 0x15;
+
+const KEYS = " ^S Save  ^Q Quit  ^F Find  ^G Go to  ^K Cut  ^U Paste";
+
+var cells: [COLUMNS * ROWS * 2]u8;
+
+var lines: []str.Builder;           // the text, a line each without its end, of which count are in use; the
+                                    // file ends each line but a last empty one
+var count = 0;
+var row = 0;                        // the cursor's line, and its byte there
+var column = 0;
+var wanted = 0;                     // the screen column that Up and Down keep to
+var top = 0;                        // the first line and screen column shown
+var left = 0;
+var overwrite = false;
+var changed = false;
+var crlf = false;                   // the file ends its lines with CR LF
+var path: []u8;                     // where the text is saved, empty until it has a name
+var clipboard: str.Builder;         // the lines ^K cut, each with a line end
+var found: str.Builder;             // what ^F looked for last
+var question: []u8;                 // what the status line asks, and the answer typed so far
+var answer: *str.Builder = null;
+var note: [COLUMNS]u8;              // what the status line tells until the next key
+var note_length = 0;
+
+fn tell(text: []u8) {
+    note_length = 0;
+    add_note(text);
+}
+
+fn add_note(text: []u8) {
+    for (var i = 0; i < text.len && note_length < note.len; i += 1) {
+        note[note_length] = text[i];
+        note_length += 1;
+    }
+}
+
+// The columns that byte c takes on the screen at column x: tabs reach to the next tab stop
+fn width(c: u8, x: int) int {
+    if (c == '\t') {
+        return TAB_STOP - x % TAB_STOP;
+    }
+    return 1;
+}
+
+fn screen_column(text: []u8, index: int) int {
+    var x = 0;
+    for (var i = 0; i < index; i += 1) {
+        x += width(text[i], x);
+    }
+    return x;
+}
+
+// The byte of text that covers screen column x, or the end of text
+fn index_at(text: []u8, x: int) int {
+    var at = 0;
+    for (var i = 0; i < text.len; i += 1) {
+        at += width(text[i], at);
+        if (at > x) {
+            return i;
+        }
+    }
+    return text.len;
+}
+
+fn fill(y: int, colors: u8) {
+    for (var x = 0; x < COLUMNS; x += 1) {
+        cells[(y * COLUMNS + x) * 2] = ' ';
+        cells[(y * COLUMNS + x) * 2 + 1] = colors;
+    }
+}
+
+fn put(x: int, y: int, text: []u8) {
+    for (var i = 0; i < text.len && x + i < COLUMNS; i += 1) {
+        if (x + i >= 0) {
+            cells[(y * COLUMNS + x + i) * 2] = text[i];
+        }
+    }
+}
+
+fn paint(x: int, y: int, colors: u8) {
+    if (x >= 0 && x < COLUMNS) {
+        cells[(y * COLUMNS + x) * 2 + 1] = colors;
+    }
+}
+
+fn draw_line(y: int, text: []u8) {
+    var x = 0;
+    for (var i = 0; i < text.len && x < left + COLUMNS; i += 1) {
+        var c = text[i];
+        var w = width(c, x);
+        if (c == '\t') {
+            c = ' ';
+        }
+        for (var k = 0; k < w; k += 1) {
+            if (x >= left && x < left + COLUMNS) {
+                cells[(y * COLUMNS + x - left) * 2] = c;
+            }
+            x += 1;
+        }
+    }
+}
+
+// Appends text to buffer at at and returns where it ends
+fn append_to(buffer: []u8, at: int, text: []u8) int {
+    return at + mem.copy(buffer[at:], text);
+}
+
+fn draw_status(x: int) {
+    var y = ROWS - 1;
+    fill(y, STATUS_COLORS);
+    if (answer != null) {
+        var typed = str.text(answer);
+        put(1, y, question);
+        put(1 + question.len, y, typed);
+        paint(1 + question.len + typed.len, y, ANSWER_CURSOR_COLORS);
+        return;
+    }
+    if (note_length > 0) {
+        put(1, y, note[:note_length]);
+    } else {
+        put(0, y, KEYS);
+    }
+    var buffer: [32]u8;
+    var digits: [11]u8;
+    var at = append_to(buffer, 0, "Line:");
+    at = append_to(buffer, at, str.format_int(row + 1, digits));
+    at = append_to(buffer, at, "  Col:");
+    at = append_to(buffer, at, str.format_int(x + 1, digits));
+    put(COLUMNS - 1 - at, y, buffer[:at]);
+    if (overwrite) {
+        put(COLUMNS - 6 - at, y, "OVR");
+    }
+}
+
+// Scrolls to the cursor and draws the title, the text and the status line into the cells
+fn draw() {
+    var x = screen_column(str.text(&lines[row]), column);
+    if (row < top) {
+        top = row;
+    } else if (row >= top + TEXT_ROWS) {
+        top = row - TEXT_ROWS + 1;
+    }
+    if (x < left) {
+        left = x;
+    } else if (x >= left + COLUMNS) {
+        left = x - COLUMNS + 1;
+    }
+    fill(0, TITLE_COLORS);
+    put(1, 0, "MiniDos Editor");
+    var name = path;
+    if (name.len == 0) {
+        name = "Untitled";
+    }
+    put((COLUMNS - name.len) / 2, 0, name);
+    if (changed) {
+        put(COLUMNS - 9, 0, "Modified");
+    }
+    for (var y = 0; y < TEXT_ROWS; y += 1) {
+        fill(y + 1, TEXT_COLORS);
+        if (top + y < count) {
+            draw_line(y + 1, str.text(&lines[top + y]));
+        }
+    }
+    paint(x - left, row - top + 1, CURSOR_COLORS);
+    draw_status(x);
+}
+
+fn show() {
+    draw();
+    cpu.write_port(DISPLAY_REFRESH, 0);
+}
+
+// The next key, drawing the screen first unless more keys wait already; -1 when the input has ended
+fn next_key() int {
+    if (!console.key_waiting()) {
+        show();
+    }
+    return console.key();
+}
+
+// Makes room for an empty line at index at and returns it
+fn insert_line(at: int) *str.Builder {
+    if (count == lines.len) {
+        var larger = new(str.Builder, lines.len * 2);
+        for (var i = 0; i < count; i += 1) {
+            larger[i] = lines[i];
+        }
+        free(lines);
+        lines = larger;
+    }
+    for (var i = count; i > at; i -= 1) {
+        lines[i] = lines[i - 1];
+    }
+    lines[at] = str.builder(16);
+    count += 1;
+    changed = true;
+    return &lines[at];
+}
+
+fn remove_line(at: int) {
+    str.release(&lines[at]);
+    for (var i = at; i < count - 1; i += 1) {
+        lines[i] = lines[i + 1];
+    }
+    count -= 1;
+    changed = true;
+}
+
+fn insert_byte(c: u8) {
+    var line = &lines[row];
+    if (!overwrite || column == line.len) {
+        str.append_byte(line, c);
+        mem.copy(line.bytes[column + 1:line.len], line.bytes[column:line.len - 1]);
+    }
+    line.bytes[column] = c;
+    column += 1;
+    changed = true;
+}
+
+fn delete_byte(at: int) {
+    var line = &lines[row];
+    mem.copy(line.bytes[at:line.len - 1], line.bytes[at + 1:line.len]);
+    line.len -= 1;
+    changed = true;
+}
+
+fn split_line() {
+    var rest = insert_line(row + 1);
+    var line = &lines[row];
+    str.append(rest, line.bytes[column:line.len]);
+    line.len = column;
+    row += 1;
+    column = 0;
+}
+
+// Appends the next line to the cursor's line
+fn join_next() {
+    var next = lines[row + 1];
+    str.append(&lines[row], str.text(&next));
+    remove_line(row + 1);
+}
+
+// Moves the cursor's line to the clipboard, after the lines cut just before
+fn cut_line(again: bool) {
+    if (!again) {
+        str.clear(&clipboard);
+    }
+    str.append(&clipboard, str.text(&lines[row]));
+    str.append_byte(&clipboard, '\n');
+    if (count == 1) {
+        lines[0].len = 0;
+        changed = true;
+    } else {
+        remove_line(row);
+        if (row == count) {
+            row -= 1;
+        }
+    }
+    column = 0;
+}
+
+// Puts the lines of the clipboard before the cursor's line
+fn paste() {
+    var text = str.text(&clipboard);
+    var start = 0;
+    for (var i = 0; i < text.len; i += 1) {
+        if (text[i] == '\n') {
+            str.append(insert_line(row), text[start:i]);
+            row += 1;
+            start = i + 1;
+        }
+    }
+    column = 0;
+}
+
+// Asks a question in the status line, where typed holds the answer; false when Escape or the end of the
+// input cancels it
+fn ask(text: []u8, typed: *str.Builder) bool {
+    question = text;
+    answer = typed;
+    var ok = false;
+    for (;;) {
+        var k = next_key();
+        if (k < 0 || k == console.ESCAPE) {
+            break;
+        }
+        if (k == '\n' || k == '\r') {
+            ok = true;
+            break;
+        }
+        if (k == console.BACKSPACE || k == console.RUBOUT) {
+            if (typed.len > 0) {
+                typed.len -= 1;
+            }
+        } else if (k >= ' ' && k < console.RUBOUT && 2 + question.len + typed.len < COLUMNS) {
+            str.append_byte(typed, k as u8);
+        }
+    }
+    answer = null;
+    return ok;
+}
+
+// Where pattern starts in text from byte from on, whatever the case of letters, or -1
+fn search(text: []u8, from: int, pattern: []u8) int {
+    for (var i = from; i + pattern.len <= text.len; i += 1) {
+        var k = 0;
+        while (k < pattern.len && names.upper_byte(text[i + k]) == names.upper_byte(pattern[k])) {
+            k += 1;
+        }
+        if (k == pattern.len) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Moves the cursor to where the text that ^F asks for comes next, going on from the top after the end
+fn find_text() {
+    if (!ask("Find: ", &found) || found.len == 0) {
+        return;
+    }
+    var pattern = str.text(&found);
+    for (var n = 0; n <= count; n += 1) {
+        var r = (row + n) % count;
+        var from = 0;
+        if (n == 0) {
+            from = column + 1;
+        }
+        var at = search(str.text(&lines[r]), from, pattern);
+        if (at >= 0 && (n < count || at <= column)) {
+            row = r;
+            column = at;
+            return;
+        }
+    }
+    tell("Not found");
+}
+
+fn go_to_line() {
+    var typed = str.builder(16);
+    if (ask("Go to line: ", &typed)) {
+        var number = str.parse_int(str.trim(str.text(&typed)));
+        if (number.ok && number.value >= 1) {
+            row = number.value - 1;
+            if (row >= count) {
+                row = count - 1;
+            }
+            column = 0;
+        } else {
+            tell("Not a line number");
+        }
+    }
+    str.release(&typed);
+}
+
+// Writes the text to its file, after asking for a name when it has none, and tells whether it did
+fn save() bool {
+    var named = false;
+    if (path.len == 0) {
+        var typed = str.builder(64);
+        var name = "";
+        if (ask("Save as: ", &typed)) {
+            name = str.trim(str.text(&typed));
+        }
+        if (name.len > 0) {
+            path = fs.absolute(name);
+            named = true;
+        }
+        str.release(&typed);
+        if (!named) {
+            tell("Not saved");
+            return false;
+        }
+    }
+    var ended = count;
+    if (lines[count - 1].len == 0) {
+        ended -= 1;
+    }
+    var size = ended;
+    if (crlf) {
+        size *= 2;
+    }
+    for (var i = 0; i < count; i += 1) {
+        size += lines[i].len;
+    }
+    var bytes = new(u8, size + 1);
+    var at = 0;
+    for (var i = 0; i < count; i += 1) {
+        at = append_to(bytes, at, str.text(&lines[i]));
+        if (i < ended && crlf) {
+            bytes[at] = '\r';
+            at += 1;
+        }
+        if (i < ended) {
+            bytes[at] = '\n';
+            at += 1;
+        }
+    }
+    var e = fs.write_file(path, bytes[:size]);
+    free(bytes);
+    if (e != fs.Error.NONE) {
+        tell(fs.message(e));
+        if (named) {
+            free(path);
+            var none: []u8;
+            path = none;
+        }
+        return false;
+    }
+    changed = false;
+    var digits: [11]u8;
+    tell("Saved ");
+    add_note(str.format_int(size, digits));
+    add_note(" bytes");
+    return true;
+}
+
+// Whether the editor may end: when the text has changed, the answer to a question decides
+fn may_quit() bool {
+    if (!changed) {
+        return true;
+    }
+    for (;;) {
+        tell("Save the changes (Y/N)? Escape goes back to the text.");
+        var k = next_key();
+        if (k < 0 || k == 'n' || k == 'N') {
+            return true;
+        }
+        if (k == 'y' || k == 'Y') {
+            return save();
+        }
+        if (k == console.ESCAPE) {
+            note_length = 0;
+            return false;
+        }
+    }
+    return true;
+}
+
+// Reads a file into the lines, or starts a new one when it does not exist; false after saying why it cannot
+fn load(name: []u8) bool {
+    path = fs.absolute(name);
+    var bytes: []u8;
+    var e = fs.read_file(path, &bytes);
+    if (e == fs.Error.NOT_FOUND) {
+        tell("New file");
+        return true;
+    }
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        return false;
+    }
+    var start = 0;
+    for (var i = 0; i <= bytes.len; i += 1) {
+        if (i == bytes.len || bytes[i] == '\n') {
+            var end = i;
+            if (end > start && bytes[end - 1] == '\r') {
+                end -= 1;
+                crlf = true;
+            }
+            str.append(insert_line(count), bytes[start:end]);
+            start = i + 1;
+        }
+    }
+    free(bytes);
+    return true;
+}
+
+// Does what a key says and tells whether it moved the cursor up or down, which keeps the screen column
+fn handle(k: int, last: int) bool {
+    var line = &lines[row];
+    var page = TEXT_ROWS - 1;
+    if (k == console.UP || k == console.DOWN || k == console.PAGE_UP || k == console.PAGE_DOWN) {
+        if (k == console.UP) {
+            row -= 1;
+        } else if (k == console.DOWN) {
+            row += 1;
+        } else if (k == console.PAGE_UP) {
+            row -= page;
+            top -= page;
+        } else {
+            row += page;
+            top += page;
+        }
+        if (row < 0) {
+            row = 0;
+        } else if (row >= count) {
+            row = count - 1;
+        }
+        if (top > count - TEXT_ROWS) {
+            top = count - TEXT_ROWS;
+        }
+        if (top < 0) {
+            top = 0;
+        }
+        column = index_at(str.text(&lines[row]), wanted);
+        return true;
+    }
+    if (k == console.LEFT && column > 0) {
+        column -= 1;
+    } else if (k == console.LEFT && row > 0) {
+        row -= 1;
+        column = lines[row].len;
+    } else if (k == console.RIGHT && column < line.len) {
+        column += 1;
+    } else if (k == console.RIGHT && row < count - 1) {
+        row += 1;
+        column = 0;
+    } else if (k == console.HOME) {
+        column = 0;
+    } else if (k == console.END) {
+        column = line.len;
+    } else if (k == '\n' || k == '\r') {
+        split_line();
+    } else if ((k == console.BACKSPACE || k == console.RUBOUT) && column > 0) {
+        column -= 1;
+        delete_byte(column);
+    } else if ((k == console.BACKSPACE || k == console.RUBOUT) && row > 0) {
+        row -= 1;
+        column = lines[row].len;
+        join_next();
+    } else if (k == console.DELETE && column < line.len) {
+        delete_byte(column);
+    } else if (k == console.DELETE && row < count - 1) {
+        join_next();
+    } else if (k == console.INSERT) {
+        overwrite = !overwrite;
+    } else if (k == console.TAB || k >= ' ' && k < console.RUBOUT) {
+        insert_byte(k as u8);
+    } else if (k == CTRL_S) {
+        save();
+    } else if (k == CTRL_F) {
+        find_text();
+    } else if (k == CTRL_G) {
+        go_to_line();
+    } else if (k == CTRL_K) {
+        cut_line(last == CTRL_K);
+    } else if (k == CTRL_U) {
+        paste();
+    }
+    return false;
+}
+
+// EDIT [file] edits a text file, a new one when it does not exist
+pub fn edit(a: *args.Args) {
+    if (a.switches.len > 0 || a.words.len > 1) {
+        console.error("Too many parameters - EDIT takes the name of one file");
+        return;
+    }
+    var none: []u8;
+    lines = new(str.Builder, 64);
+    count = 0;
+    path = none;
+    note_length = 0;
+    crlf = false;
+    if (a.words.len == 1 && !load(a.words[0])) {
+        free(lines);
+        free(path);
+        return;
+    }
+    if (count == 0) {
+        insert_line(0);
+    }
+    row = 0;
+    column = 0;
+    wanted = 0;
+    top = 0;
+    left = 0;
+    overwrite = false;
+    changed = false;
+    clipboard = str.builder(64);
+    found = str.builder(16);
+    var screen = cells[:];
+    cpu.write_port(DISPLAY_BUFFER, screen.ptr as u32);
+    show();
+    var last = 0;
+    for (;;) {
+        var k = next_key();
+        if (k < 0) {
+            break;
+        }
+        note_length = 0;
+        if (k == CTRL_Q || k == console.ESCAPE) {
+            if (may_quit()) {
+                break;
+            }
+        } else if (!handle(k, last)) {
+            wanted = screen_column(str.text(&lines[row]), column);
+        }
+        last = k;
+    }
+    cpu.write_port(DISPLAY_BUFFER, 0);
+    for (var i = 0; i < count; i += 1) {
+        str.release(&lines[i]);
+    }
+    free(lines);
+    str.release(&clipboard);
+    str.release(&found);
+    if (path.len > 0) {
+        free(path);
+    }
+}

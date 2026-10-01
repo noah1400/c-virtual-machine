@@ -1,0 +1,388 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A: /V:EDIT
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>EDIT NOTES.TXT
+--- refresh 1 ---
+ MiniDos Editor                   A:\NOTES.TXT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ New file                                                         Line:1  Col:1
+A:\>TYPE NOTES.TXT
+first line
+second line
+third line
+A:\>EDIT NOTES.TXT
+--- refresh 2 ---
+ MiniDos Editor                   A:\NOTES.TXT
+first line
+second line
+third line
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ^S Save  ^Q Quit  ^F Find  ^G Go to  ^K Cut  ^U Paste            Line:1  Col:1
+A:\>TYPE NOTES.TXT
+First line
+Second line!
+third line
+A:\>EDIT NOTES.TXT
+--- refresh 3 ---
+ MiniDos Editor                   A:\NOTES.TXT
+First line
+Second line!
+third line
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ^S Save  ^Q Quit  ^F Find  ^G Go to  ^K Cut  ^U Paste            Line:1  Col:1
+A:\>TYPE NOTES.TXT
+#Second *line!
+third line
+First line
+A:\>EDIT
+--- refresh 4 ---
+ MiniDos Editor                     Untitled
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ^S Save  ^Q Quit  ^F Find  ^G Go to  ^K Cut  ^U Paste            Line:1  Col:1
+A:\>HELLO
+Hello from the editor
+A:\>EDIT HELLO.BAT
+--- refresh 5 ---
+ MiniDos Editor                   A:\HELLO.BAT
+@ECHO OFF
+ECHO Hello from the editor
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ^S Save  ^Q Quit  ^F Find  ^G Go to  ^K Cut  ^U Paste            Line:1  Col:1
+A:\>TYPE HELLO.BAT
+@ECHO OFF
+ECHO Hello from the editor
+A:\>EDIT HELLO.BAT
+--- refresh 6 ---
+ MiniDos Editor                   A:\HELLO.BAT
+@ECHO OFF
+ECHO Hello from the editor
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ^S Save  ^Q Quit  ^F Find  ^G Go to  ^K Cut  ^U Paste            Line:1  Col:1
+A:\>HELLO
+Hello from the editor!
+A:\>EDIT WIDE.TXT
+--- refresh 7 ---
+ MiniDos Editor                   A:\WIDE.TXT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ New file                                                         Line:1  Col:1
+A:\>EDIT WIDE.TXT
+--- refresh 8 ---
+ MiniDos Editor                   A:\WIDE.TXT
+a       b       c
+01234567890123456789012345678901234567890123456789012345678901234567890123456789
+line 3
+line 4
+line 5
+line 6
+line 7
+line 8
+line 9
+line 10
+line 11
+line 12
+line 13
+line 14
+line 15
+line 16
+line 17
+line 18
+line 19
+line 20
+line 21
+line 22
+line 23
+ ^S Save  ^Q Quit  ^F Find  ^G Go to  ^K Cut  ^U Paste            Line:1  Col:1
+A:\>TYPE WIDE.TXT
+Ya	b	c
+0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+line 3
+line 4
+line 5
+line 6
+line 7
+line 8
+line 9
+line 10
+line 11
+line 12
+line 13
+line 14
+line 15
+line 16
+line 17
+line 18
+line 19
+line 20
+line 21
+line 22
+Xline 23
+line 24
+line 25
+line 26
+line 27
+line 28
+line 29
+line 30
+A:\>EDIT EMPTY.TXT
+--- refresh 9 ---
+ MiniDos Editor                   A:\EMPTY.TXT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ New file                                                         Line:1  Col:1
+A:\>DIR EMPTY.TXT
+
+ Volume in drive A is EDIT
+ Directory of A:\
+
+EMPTY    TXT             0 10-01-26   9:30a
+        1 file(s)              0 bytes
+        0 dir(s)       1,037,824 bytes free
+A:\>EDIT EMPTY.TXT
+--- refresh 10 ---
+ MiniDos Editor                   A:\EMPTY.TXT
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ^S Save  ^Q Quit  ^F Find  ^G Go to  ^K Cut  ^U Paste            Line:1  Col:1
+A:\>ATTRIB +R HELLO.BAT
+A:\>EDIT HELLO.BAT
+--- refresh 11 ---
+ MiniDos Editor                   A:\HELLO.BAT
+@ECHO OFF
+ECHO Hello from the editor!
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ^S Save  ^Q Quit  ^F Find  ^G Go to  ^K Cut  ^U Paste            Line:1  Col:1
+A:\>TYPE HELLO.BAT
+@ECHO OFF
+ECHO Hello from the editor!
+A:\>EDIT NOWHERE\NEW.TXT
+Path not found
+A:\>EDIT ONE.TXT TWO.TXT
+Too many parameters - EDIT takes the name of one file
+A:\>EDIT /?
+Edits a text file on the whole screen, a new one when it does not exist
+
+EDIT [[drive:][path]file]
+  The arrow keys, Home, End, Page Up and Page Down move, Insert switches between inserting and
+  overwriting. ^S saves, ^Q or Escape quits, ^F finds text, ^G goes to a line, ^K cuts the line
+  and ^U puts the lines cut last before the cursor's line.
+A:\>EXIT

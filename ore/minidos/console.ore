@@ -13,18 +13,21 @@ const KEY_DATA = 0x61;
 const KEY_WAITING: u32 = 1;
 const INPUT_ENDED: u32 = 2;
 
-const BACKSPACE = 0x08;
-const TAB = 0x09;
-const CTRL_Z = 0x1A;
-const ESCAPE = 0x1B;
-const RUBOUT = 0x7F;
-const UP = 0x100;
-const DOWN = 0x101;
-const RIGHT = 0x102;
-const LEFT = 0x103;
-const HOME = 0x104;
-const END = 0x105;
-const DELETE = 0x107;
+pub const BACKSPACE = 0x08;
+pub const TAB = 0x09;
+pub const CTRL_Z = 0x1A;
+pub const ESCAPE = 0x1B;
+pub const RUBOUT = 0x7F;
+pub const UP = 0x100;
+pub const DOWN = 0x101;
+pub const RIGHT = 0x102;
+pub const LEFT = 0x103;
+pub const HOME = 0x104;
+pub const END = 0x105;
+pub const INSERT = 0x106;
+pub const DELETE = 0x107;
+pub const PAGE_UP = 0x108;
+pub const PAGE_DOWN = 0x109;
 
 const HISTORY = 32;
 const LINE = 256;
@@ -131,8 +134,12 @@ pub fn clear() {
 
 // The keyboard
 
+pub fn key_waiting() bool {
+    return (cpu.read_port(KEY_STATUS) & KEY_WAITING) != 0;
+}
+
 // The next key, after waiting for one, or -1 when the input has ended
-fn key() int {
+pub fn key() int {
     for (;;) {
         var status = cpu.read_port(KEY_STATUS);
         if ((status & KEY_WAITING) != 0) {
