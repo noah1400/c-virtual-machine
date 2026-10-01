@@ -385,7 +385,7 @@ Syscall buffers and heap blocks are virtual addresses too. The vector table is r
 
 The display shows an 80×25 buffer of cells in memory. A cell is two bytes: the character, then an attribute with the foreground color in the low nibble and the background color in the high nibble. Colors 0 to 7 are black, red, green, yellow, blue, magenta, cyan and white, and 8 to 15 are their bright versions. Characters outside printable ASCII show as spaces.
 
-Setting the buffer address clears the terminal and hides the cursor. Each write to the refresh port then draws the cells that changed with ANSI escape sequences, so a program updates its buffer and refreshes once per frame. When the display is turned off or the program ends, the cursor reappears below the display.
+Setting the buffer address switches the terminal to its alternate screen, clears it and hides the cursor. Each write to the refresh port then draws the cells that changed with ANSI escape sequences, so a program updates its buffer and refreshes once per frame. When the display is turned off or the program ends, the cursor reappears and the terminal shows again what it showed before; a terminal without an alternate screen keeps the display, with the cursor below it.
 
 With `vm -s`, a refresh prints the characters as plain text instead, when they changed since the last frame. A header line gives the number of the refresh and the instructions executed so far, and trailing spaces are left out:
 

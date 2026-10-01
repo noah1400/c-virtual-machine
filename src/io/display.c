@@ -96,17 +96,18 @@ static void display_refresh(VM *vm, DisplayState *display) {
     fflush(stdout);
 }
 
-// Gives the terminal back with the cursor below the display
+// Gives the terminal back with the cursor below the display, and what it showed before on terminals
+// with an alternate screen
 static void display_off(DisplayState *display) {
     if (display->buffer && !display->text) {
-        printf("\033[0m\033[?25h\033[%d;1H", DISPLAY_ROWS + 1);
+        printf("\033[0m\033[?25h\033[%d;1H\033[?1049l", DISPLAY_ROWS + 1);
         fflush(stdout);
     }
     display->buffer = 0;
 }
 
-// Port 0 holds the buffer address; setting one clears the terminal and 0 turns the display off.
-// Writing port 1 refreshes; ports 2 and 3 read the columns and rows.
+// Port 0 holds the buffer address; setting one clears the terminal's alternate screen and 0 turns the
+// display off. Writing port 1 refreshes; ports 2 and 3 read the columns and rows.
 static uint32_t display_read(VM *vm, IODevice *device, uint16_t offset) {
     DisplayState *display = device->state;
     (void)vm;
@@ -127,7 +128,7 @@ static void display_write(VM *vm, IODevice *device, uint16_t offset, uint32_t va
     switch (offset) {
         case 0:
             if (value && !display->buffer && !display->text) {
-                printf("\033[?25l\033[2J");
+                printf("\033[?1049h\033[?25l\033[2J");
                 fflush(stdout);
             } else if (!value) {
                 display_off(display);
