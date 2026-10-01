@@ -53,8 +53,8 @@ struct Jit {
     uint8_t *exit;          // leaves compiled code with the word or address in eax and how in edx
 };
 
-// Host registers. Compiled code keeps the context in rbp, the VM registers at rbx, VM memory at r12, the VM
-// in r13, the budget in r14d and the table of compiled entries in r15.
+// Host registers. Compiled code keeps SP in ebx, R0 in ebp, VM memory at r12, the VM in r13, the budget in
+// r14d and the table of compiled entries in r15.
 enum { HAX, HCX, HDX, HBX, HSP, HBP, HSI, HDI, H8, H9, H10, H11, H12, H13, H14, H15 };
 
 // x86 conditions
