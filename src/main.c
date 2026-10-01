@@ -20,7 +20,8 @@
 
 typedef struct {
     const char *program;
-    const char *disk;
+    const char *disks[DISK_DRIVES];
+    int disk_count;
     const char *commands;
     uint32_t history;
     int text_display;
@@ -44,7 +45,8 @@ typedef struct {
 static void print_usage(FILE *out, const char *name) {
     fprintf(out, "Usage: %s [options] program.bin [arguments...]\n", name);
     fprintf(out, "Options:\n");
-    fprintf(out, "  -b FILE   Attach FILE as the disk image\n");
+    fprintf(out, "  -b FILE   Attach FILE as the image of the next disk drive, up to four; a missing FILE is\n"
+                 "            created empty\n");
     fprintf(out, "  -c FILE   Write how often each source line ran to FILE, - for stdout\n");
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
@@ -85,7 +87,11 @@ static int parse_options(int argc, char **argv, Options *opts) {
                 fprintf(stderr, "vm: -b needs a disk image\n");
                 return -1;
             }
-            opts->disk = argv[++i];
+            if (opts->disk_count == DISK_DRIVES) {
+                fprintf(stderr, "vm: -b attaches at most %d disk images\n", DISK_DRIVES);
+                return -1;
+            }
+            opts->disks[opts->disk_count++] = argv[++i];
         } else if (strcmp(arg, "-c") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "vm: -c needs a file for the coverage\n");
@@ -246,10 +252,12 @@ int main(int argc, char *argv[]) {
         vm_cleanup(&vm);
         return 1;
     }
-    if (opts.disk && io_attach_disk(&vm, opts.disk) != VM_ERROR_NONE) {
-        fprintf(stderr, "vm: cannot attach the disk image %s\n", vm_get_error_message(&vm));
-        vm_cleanup(&vm);
-        return 1;
+    for (int i = 0; i < opts.disk_count; i++) {
+        if (io_attach_disk(&vm, i, opts.disks[i]) != VM_ERROR_NONE) {
+            fprintf(stderr, "vm: cannot attach the disk image %s\n", vm_get_error_message(&vm));
+            vm_cleanup(&vm);
+            return 1;
+        }
     }
     if (opts.verbose) {
         fprintf(stderr, "vm: loaded %s, %u KB memory, entry 0x%04X, %u symbols\n", opts.program,

@@ -11,7 +11,7 @@ void display_as_text(IODevice *device);
 int keyboard_device(VM *vm, IODevice *device);
 int keyboard_script(VM *vm, IODevice *device, const char *path);
 int disk_device(VM *vm, IODevice *device);
-int disk_attach(VM *vm, IODevice *device, const char *path);
+int disk_attach(VM *vm, IODevice *device, int drive, const char *path);
 
 void io_set_ticking(VM *vm, const IODevice *device, int ticking);
 

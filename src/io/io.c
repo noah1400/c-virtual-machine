@@ -77,9 +77,9 @@ static IODevice *named_device(VM *vm, const char *name) {
     return NULL;
 }
 
-int io_attach_disk(VM *vm, const char *path) {
+int io_attach_disk(VM *vm, int drive, const char *path) {
     IODevice *disk = named_device(vm, "disk");
-    return disk ? disk_attach(vm, disk, path) : vm_raise(vm, VM_ERROR_IO_ERROR, "There is no disk device");
+    return disk ? disk_attach(vm, disk, drive, path) : vm_raise(vm, VM_ERROR_IO_ERROR, "There is no disk device");
 }
 
 int io_keyboard_script(VM *vm, const char *path) {

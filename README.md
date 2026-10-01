@@ -97,7 +97,7 @@ Everything after the program path is passed to the program, which reads it with 
 
 | Option | Effect |
 |---|---|
-| `-b FILE` | Attach FILE as the [disk](#disk) image |
+| `-b FILE` | Attach FILE as the image of the next [disk](#disk) drive, up to four times. A missing FILE is created empty |
 | `-c FILE` | Write how often each source line ran to FILE, or to stdout for `-` |
 | `-d` | Start the interactive [debugger](#debugger) |
 | `-D` | Disassemble the program instead of running it |
@@ -374,8 +374,9 @@ Syscall buffers and heap blocks are virtual addresses too. The vector table is r
 | 0x70 | Disk sector | First sector | Sets the first sector of the next transfer |
 | 0x71 | Disk buffer | Buffer address | Sets the address of the transfer buffer |
 | 0x72 | Disk count | Sector count | Sets the number of sectors per transfer (default 1) |
-| 0x73 | Disk command | Result of the last command | 1 reads sectors into memory, 2 writes memory to sectors |
+| 0x73 | Disk command | Result of the last command | 1 reads sectors into memory, 2 writes memory to sectors, 3 sets the size |
 | 0x74 | Disk size | Sectors on the disk, 0 without an image | Ignored |
+| 0x75 | Disk drive | The selected drive | Selects the drive, 0 to 3, that commands and the size go to |
 
 `assembler/examples/timer.asm` drives a main loop from timer interrupts. The display and the disk take physical addresses, which do not go through [paging](#paging).
 
@@ -422,7 +423,9 @@ With a script, the keyboard leaves the terminal and stdin alone, and looks for k
 
 #### Disk
 
-`vm -b FILE` attaches a disk image of 512-byte sectors; a partial sector at the end of FILE is left out. Writing a command to port 0x73 moves the given number of sectors, starting at the first sector, between the image and the buffer. The transfer is done when `OUT` returns, and reading the port gives the result:
+`vm -b FILE` attaches a disk image of 512-byte sectors as drive 0, and each further `-b` the next drive, up to drive 3; a partial sector at the end of FILE is left out. A FILE that does not exist is created empty, as a disk without sectors. Port 0x75 selects the drive that the commands and the size port go to, while the sector, buffer and count ports serve all drives.
+
+Writing a command to port 0x73 runs it on the selected drive. Commands 1 and 2 move the given number of sectors, starting at the first sector, between the image and the buffer. Command 3 makes the disk as many sectors long as the count says, up to 4,194,304 (2 GB), adding zeros to the image or cutting off its end. A command is done when `OUT` returns, and reading the port gives the result:
 
 | Result | Meaning |
 |---|---|
@@ -434,7 +437,7 @@ With a script, the keyboard leaves the terminal and stdin alone, and looks for k
 | 5 | The image is read-only |
 | 6 | The host reported an error |
 
-An image that `vm` may not write is attached read-only. The MiniDos example in assembly keeps up to 32 files of 4 KB on a disk of at least 259 sectors:
+An image that `vm` may not write is attached read-only. A transfer of no sectors does nothing, but its result of 0 or 1 tells whether the drive has an image, even an empty one. The MiniDos example in assembly keeps up to 32 files of 4 KB on a disk of at least 259 sectors:
 
 ```console
 $ dd if=/dev/zero of=disk.img bs=512 count=300

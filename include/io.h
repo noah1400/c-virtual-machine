@@ -8,6 +8,7 @@
 #define IO_PORT_DISPLAY  0x50
 #define IO_PORT_KEYBOARD 0x60
 #define IO_PORT_DISK     0x70
+#define DISK_DRIVES      4
 
 typedef struct IODevice IODevice;
 
@@ -26,8 +27,8 @@ struct IODevice {
 int io_init(VM *vm);
 void io_cleanup(VM *vm);
 
-// Opens path as the image of the disk device
-int io_attach_disk(VM *vm, const char *path);
+// Opens path as the image of a drive of the disk device, creating it empty when it does not exist
+int io_attach_disk(VM *vm, int drive, const char *path);
 
 // Makes the display print each changed frame as plain text instead of drawing on the terminal
 void io_display_as_text(VM *vm);
