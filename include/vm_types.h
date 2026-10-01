@@ -101,7 +101,8 @@ typedef struct {
 
     struct Decoded *decoded;       // the instructions below the heap as cpu_run decoded them, by word
     uint32_t decoded_words;        // how many words cpu_run runs instructions at
-    uint32_t decoded_end;          // the end of the words that decoded instructions take
+    uint32_t decoded_end;          // the end of the words that decoded instructions can take
+    uint32_t decoded_high;         // the end of the words that the instructions decoded so far take
     uint32_t stack_span;           // how far SP may lie above SLO for cpu_run to push and pop without other checks
 
     struct DebugInfo *debug_info;  // Debug information (NULL if not loaded)

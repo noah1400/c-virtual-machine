@@ -217,7 +217,7 @@ static uint32_t stack_span(const VM *vm) {
 }
 
 INLINE void written(VM *vm, uint32_t address, uint32_t size) {
-    if (address < vm->decoded_end) {
+    if (address < vm->decoded_high) {
         cpu_forget(vm, address, size);
     }
 }
@@ -258,7 +258,7 @@ INLINE uint32_t word_index(uint32_t address) {
 }
 
 void cpu_forget(VM *vm, uint32_t address, uint32_t size) {
-    if (address >= vm->decoded_end || size == 0) {
+    if (address >= vm->decoded_high || size == 0) {
         return;
     }
     uint32_t first = address >> 2;
@@ -282,6 +282,7 @@ void cpu_forget_all(VM *vm) {
     vm->decoded = NULL;
     vm->decoded_words = 0;
     vm->decoded_end = 0;
+    vm->decoded_high = 0;
 }
 
 // Sets the operand in the register field at field as register b, mask and imm, where PC reads as the address
@@ -396,6 +397,9 @@ static void decode(VM *vm, Decoded *d, uint32_t index, uint32_t words) {
     int memory;
 
     d->len = (uint8_t)((next - pc) / 4);
+    if (next > vm->decoded_high) {
+        vm->decoded_high = next;
+    }
     d->a = (uint8_t)a;
     d->op = (uint8_t)(w >> 24);
     switch (run) {
