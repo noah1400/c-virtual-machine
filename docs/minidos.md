@@ -138,7 +138,6 @@ Directories are files of 32-byte entries, the root directory included. Every oth
 | `ore/minidos/fs.ore` | The file system |
 | `ore/minidos/disk.ore` | The disk's ports |
 | `ore/minidos/console.ore` | Output and input, redirected or not |
-| `ore/minidos/machine.ore` | Two things Ore cannot reach itself, in `machine.asm` |
 | `ore/minidos/programs/` | `SORT` and `FIND` |
 
 `tests/minidos` holds MiniDos sessions for the test suite: what is typed in `NAME.in`, what the screen shows in `NAME.out`, and the programs the sessions import.

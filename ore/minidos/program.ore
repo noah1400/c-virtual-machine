@@ -6,7 +6,6 @@ import "std/mem";
 import "std/str";
 import "console";
 import "fs";
-import "machine";
 
 // Programs live below this address and MiniDos above it, as make builds it with vmc -b
 pub const LIMIT = 0x100000;
@@ -204,13 +203,20 @@ fn next_word(text: []u8, at: *int) []u8 {
     return text[start:end];
 }
 
+// The word at an address of the program's memory, which may be 0, where no pointer can go
+fn word_at(address: u32) u32 {
+    var word: u32 = 0;
+    syscall(22, &word, address, 4);
+    return word;
+}
+
 interrupt fn on_privilege_violation(frame: *cpu.Frame) {
-    var word = machine.peek(frame.pc);
+    var word = word_at(frame.pc);
     if (word >> 24 == SYSCALL_OPCODE && (frame.sr & SUPERVISOR) == 0) {
         var number = word & 0xFFFF;
         var length: u32 = 4;
         if ((word & 0x800000) != 0) {
-            number = machine.peek(frame.pc + 4);
+            number = word_at(frame.pc + 4);
             length = 8;
         }
         frame.pc += length;
@@ -383,7 +389,10 @@ fn serve(frame: *cpu.Frame, number: u32) {
             }
         }
         case 23 {
-            machine.memory_info(frame);
+            var info = syscall(23);
+            frame.r0 = info.value as u32;
+            frame.r6 = info.r6 as u32;
+            frame.r7 = info.r7 as u32;
         }
         case 30 {
             end(a as int);

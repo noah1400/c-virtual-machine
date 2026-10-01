@@ -4,7 +4,6 @@ import "std/str";
 import "std/sys";
 import "console";
 import "fs";
-import "machine";
 import "program";
 
 pub const VERSION = "MiniDos Version 2.0";
@@ -995,7 +994,7 @@ fn memory() {
     console.line(" bytes for programs");
     console.number(sys.memory_size(), 12);
     console.line(" bytes of memory");
-    console.number(machine.free_heap(), 12);
+    console.number(sys.free_heap(), 12);
     console.line(" bytes free for programs to allocate");
     console.write("\n");
 }
