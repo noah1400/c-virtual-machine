@@ -1208,6 +1208,7 @@ static void compile_stub(Compiler *k, Stub *s) {
     patch(c, s->jump, c->p);
     switch (s->type) {
         case STUB_BUDGET:
+            refund(c, n);
             mov_imm(c, HAX, it->index);
             leave_with(c, k->jit, JIT_HERE);
             break;
@@ -1431,9 +1432,8 @@ static uint8_t *compile_block(struct Jit *jit, VM *vm, uint32_t word, uint32_t *
     k.c.end = jit->code + CODE_SIZE;
     uint8_t *entry = k.c.p;
     endbr(&k.c);
-    alu_imm(&k.c, CMP, H14, k.count);
-    stub(&k, jcc(&k.c, CC_B), STUB_BUDGET, 0);
     alu_imm(&k.c, SUB, H14, k.count);
+    stub(&k, jcc(&k.c, CC_B), STUB_BUDGET, 0);
     for (uint32_t j = 0; j < k.count; j++) {
         compile_item(&k, j);
     }
