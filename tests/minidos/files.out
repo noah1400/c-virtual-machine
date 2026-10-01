@@ -38,10 +38,10 @@ A:\>DIR /O:S
  Volume in drive A is FILES
  Directory of A:\
 
-DOCS            <DIR>
-B        TXT             5
-A        TXT             6
-C        LOG            12
+DOCS            <DIR>      10-01-26   9:30a
+B        TXT             5 10-01-26   9:30a
+A        TXT             6 10-01-26   9:30a
+C        LOG            12 10-01-26   9:30a
         3 file(s)             23 bytes
         1 dir(s)       1,036,800 bytes free
 A:\>DIR *.TXT /B
@@ -53,23 +53,23 @@ A:\>DIR /S
 
  Directory of A:\
 
-A        TXT             6
-B        TXT             5
-C        LOG            12
-DOCS            <DIR>
+A        TXT             6 10-01-26   9:30a
+B        TXT             5 10-01-26   9:30a
+C        LOG            12 10-01-26   9:30a
+DOCS            <DIR>      10-01-26   9:30a
         3 file(s)             23 bytes
 
  Directory of A:\DOCS
 
-.               <DIR>
-..              <DIR>
-OLD             <DIR>
+.               <DIR>      10-01-26   9:30a
+..              <DIR>      10-01-26   9:30a
+OLD             <DIR>      10-01-26   9:30a
         0 file(s)              0 bytes
 
  Directory of A:\DOCS\OLD
 
-.               <DIR>
-..              <DIR>
+.               <DIR>      10-01-26   9:30a
+..              <DIR>      10-01-26   9:30a
         0 file(s)              0 bytes
 
 Total files listed:

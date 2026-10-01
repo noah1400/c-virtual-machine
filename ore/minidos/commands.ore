@@ -72,7 +72,7 @@ var table = []Command {
         "  /W     Shows only names, five to a line",
         "  /A     Shows hidden files too, or only those with the attributes D, H, R, S or A; - in front",
         "         of one leaves those out",
-        "  /O     Sorts by N name, E extension, S size or G directories first; - in front reverses",
+        "  /O     Sorts by N name, E extension, S size, D date or G directories first; - in front reverses",
         "  /S     Lists the files in the subdirectories as well",
         "  /B     Shows only the names",
     } },

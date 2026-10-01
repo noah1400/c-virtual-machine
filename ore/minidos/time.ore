@@ -1,0 +1,44 @@
+// The date and time that MiniDos shows and gives to files
+import "std/sys";
+
+pub fn now() u32 {
+    return sys.clock();
+}
+
+fn two_digits(buffer: []u8, at: int, value: int) {
+    buffer[at] = '0' + (value / 10 % 10) as u8;
+    buffer[at + 1] = '0' + (value % 10) as u8;
+}
+
+// The date of a clock value as 10-01-26, in buffer, which takes 8 bytes
+pub fn short_date(clock: u32, buffer: []u8) []u8 {
+    var t = sys.date_time(clock);
+    two_digits(buffer, 0, t.month);
+    buffer[2] = '-';
+    two_digits(buffer, 3, t.day);
+    buffer[5] = '-';
+    two_digits(buffer, 6, t.year % 100);
+    return buffer[:8];
+}
+
+// The time of a clock value as 9:30a, in buffer, which takes 6 bytes
+pub fn short_time(clock: u32, buffer: []u8) []u8 {
+    var t = sys.date_time(clock);
+    var hour = t.hour % 12;
+    if (hour == 0) {
+        hour = 12;
+    }
+    var length = 0;
+    if (hour >= 10) {
+        buffer[0] = '1';
+        length = 1;
+    }
+    buffer[length] = '0' + (hour % 10) as u8;
+    buffer[length + 1] = ':';
+    two_digits(buffer, length + 2, t.minute);
+    buffer[length + 4] = 'a';
+    if (t.hour >= 12) {
+        buffer[length + 4] = 'p';
+    }
+    return buffer[:length + 5];
+}

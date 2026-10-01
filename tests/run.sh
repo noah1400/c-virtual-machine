@@ -319,7 +319,7 @@ for src in "$root"/tests/minidos/*.in; do
     fi
     dd if=/dev/zero of="$dir/disk.img" bs=512 count=2048 2> /dev/null
     rm -f "$dir/second.img"
-    (cd "$dir" && "$vm" $VM_FLAGS -n 100000000 -b disk.img -b second.img "$root/minidos.bin" < "$src" > "$session.out" 2>&1)
+    (cd "$dir" && "$vm" $VM_FLAGS -n 100000000 -T 2026-10-01T09:30:00 -b disk.img -b second.img "$root/minidos.bin" < "$src" > "$session.out" 2>&1)
     status=$?
     expected="$root/tests/minidos/$session.out"
     if [ "$update" -eq 1 ] && [ "$status" -eq 0 ] && ! cmp -s "$expected" "$dir/$session.out"; then

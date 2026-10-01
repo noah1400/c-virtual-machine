@@ -6,6 +6,7 @@
 import "std/mem";
 import "std/str";
 import "disk";
+import "time";
 
 pub const DRIVES = disk.DRIVES;
 
@@ -115,7 +116,8 @@ pub struct Entry {
     attributes: u8;
     cluster: int;           // the first cluster, 0 for an empty file
     size: int;
-    reserved: [12]u8;
+    time: u32;              // when it was last written, as a clock value, or 0
+    reserved: [8]u8;
 }
 
 struct Boot {
@@ -939,6 +941,27 @@ pub fn move(path: []u8, target: []u8) Error {
     return e;
 }
 
+// Gives a file or directory another time of writing
+pub fn set_time(path: []u8, clock: u32) Error {
+    var place = Place {};
+    var e = find(path, &place);
+    if (e != Error.NONE) {
+        return e;
+    }
+    if (place.index < 0) {
+        return Error.ACCESS_DENIED;
+    }
+    var d = Directory {};
+    e = load(&volumes[place.drive], place.dir, &d);
+    if (e != Error.NONE) {
+        return e;
+    }
+    d.entries[place.index].time = clock;
+    e = store(&d, place.index);
+    unload(&d);
+    return e;
+}
+
 // Changes the attributes of a file or directory, apart from whether it is a directory
 pub fn set_attributes(path: []u8, attributes: u8) Error {
     var place = Place {};
@@ -981,7 +1004,7 @@ fn create(path: []u8, attributes: u8, place: *Place) Error {
         unload(&d);
         return Error.EXISTS;
     }
-    var entry = Entry { name: n.chars, attributes: attributes };
+    var entry = Entry { name: n.chars, attributes: attributes, time: time.now() };
     var index = 0;
     e = add(&d, entry, &index);
     unload(&d);
@@ -1015,6 +1038,7 @@ pub fn make_directory(path: []u8) Error {
     entries[0].name[0] = '.';
     entries[0].attributes = DIRECTORY;
     entries[0].cluster = c;
+    entries[0].time = time.now();
     entries[1] = entries[0];
     entries[1].name[1] = '.';
     entries[1].cluster = place.dir;
@@ -1024,7 +1048,7 @@ pub fn make_directory(path: []u8) Error {
     return set_entry(&place, c, 0);
 }
 
-// Changes where the entry at place starts and how long it is
+// Changes where the entry at place starts and how long it is, which makes now the time it was written
 fn set_entry(place: *Place, cluster: int, length: int) Error {
     var v = &volumes[place.drive];
     var d = Directory {};
@@ -1034,6 +1058,7 @@ fn set_entry(place: *Place, cluster: int, length: int) Error {
     }
     d.entries[place.index].cluster = cluster;
     d.entries[place.index].size = length;
+    d.entries[place.index].time = time.now();
     place.entry = d.entries[place.index];
     e = store(&d, place.index);
     unload(&d);

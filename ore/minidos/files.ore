@@ -6,6 +6,7 @@ import "console";
 import "fs";
 import "names";
 import "shell";
+import "time";
 
 const SCREEN_LINES = 23;        // lines that a screenful shows before it waits
 const CHUNK = 4096;
@@ -87,13 +88,14 @@ fn count_files(entries: []fs.Entry) int {
     return count;
 }
 
-// Copies a file into another one, after its end when appending
+// Copies a file into another one, after its end when appending, and otherwise with the time it was written
 fn copy_file(from: []u8, to: []u8, appending: bool) fs.Error {
     var e = fs.Error.NONE;
     var source = fs.open(from, fs.READ, &e);
     if (source == null) {
         return e;
     }
+    var written = source.place.entry.time;
     var mode = fs.WRITE;
     if (appending) {
         mode = fs.APPEND;
@@ -123,6 +125,9 @@ fn copy_file(from: []u8, to: []u8, appending: bool) fs.Error {
     var closed = fs.close(target);
     if (e == fs.Error.NONE) {
         e = closed;
+    }
+    if (e == fs.Error.NONE && !appending) {
+        e = fs.set_time(to, written);
     }
     return e;
 }
@@ -238,6 +243,12 @@ fn compare_entries(a: *fs.Entry, b: *fs.Entry, order: []u8) int {
             } else if (a.size > b.size) {
                 r = 1;
             }
+        } else if (c == 'D') {
+            if (a.time < b.time) {
+                r = -1;
+            } else if (a.time > b.time) {
+                r = 1;
+            }
         } else if (c == 'G') {
             r = (is_entry_directory(b) as int) - (is_entry_directory(a) as int);
         }
@@ -326,13 +337,24 @@ fn show_entry(l: *Listing, directory: []u8, entry: *fs.Entry, last: bool) {
         console.write(entry.name[0:8]);
         console.write(" ");
         console.write(entry.name[8:11]);
-        if (directory_entry) {
-            show_line(l, "    <DIR>");
+        if (directory_entry && entry.time == 0) {
+            console.write("    <DIR>");
+        } else if (directory_entry) {
+            console.write("    <DIR>     ");
         } else {
             console.number(entry.size, 14);
-            console.write("\n");
-            next_line(l);
         }
+        if (entry.time != 0) {
+            var date: [8]u8;
+            var clock: [6]u8;
+            var at = time.short_time(entry.time, clock);
+            console.write(" ");
+            console.write(time.short_date(entry.time, date));
+            console.column("", 8 - at.len);
+            console.write(at);
+        }
+        console.write("\n");
+        next_line(l);
     }
 }
 
@@ -429,7 +451,7 @@ pub fn dir(a: *args.Args) {
             l.order = "GN";
         }
         for (var i = 0; i < l.order.len; i += 1) {
-            if (str.find_byte("NESG-", names.upper_byte(l.order[i])) < 0) {
+            if (str.find_byte("NESDG-", names.upper_byte(l.order[i])) < 0) {
                 console.error("Parameter format not correct");
                 return;
             }

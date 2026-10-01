@@ -87,9 +87,9 @@ A:\>DIR B:
  Volume in drive B is WORK DISK
  Directory of B:\SUB
 
-.               <DIR>
-..              <DIR>
-NOTE     TXT            11
+.               <DIR>      10-01-26   9:30a
+..              <DIR>      10-01-26   9:30a
+NOTE     TXT            11 10-01-26   9:30a
         1 file(s)             11 bytes
         2 dir(s)          62,464 bytes free
 A:\>B:
@@ -98,9 +98,9 @@ B:\SUB>DIR
  Volume in drive B is WORK DISK
  Directory of B:\SUB
 
-.               <DIR>
-..              <DIR>
-NOTE     TXT            11
+.               <DIR>      10-01-26   9:30a
+..              <DIR>      10-01-26   9:30a
+NOTE     TXT            11 10-01-26   9:30a
         1 file(s)             11 bytes
         2 dir(s)          62,464 bytes free
 B:\SUB>CD \

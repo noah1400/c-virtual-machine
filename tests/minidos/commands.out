@@ -43,10 +43,10 @@ A:\DOCS>DIR
  Volume in drive A is TESTDISK
  Directory of A:\DOCS
 
-.               <DIR>
-..              <DIR>
-NOTES    TXT            23
-COPY     TXT            23
+.               <DIR>      10-01-26   9:30a
+..              <DIR>      10-01-26   9:30a
+NOTES    TXT            23 10-01-26   9:30a
+COPY     TXT            23 10-01-26   9:30a
         2 file(s)             46 bytes
         2 dir(s)       1,036,800 bytes free
 A:\DOCS>CD..
