@@ -1,4 +1,5 @@
-; Keys come from stdin one at a time, with the arrow and editing keys decoded and other escape sequences dropped
+; Keys come from stdin one at a time, with the arrow and editing keys decoded, other escape sequences dropped
+; and an escape before another one taken as the Escape key
 
 .equ KEY_STATUS, 0x60
 .equ KEY_DATA,   0x61

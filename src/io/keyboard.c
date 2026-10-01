@@ -121,7 +121,7 @@ static int escape_key(int final, int number) {
 }
 
 // Moves waiting input into the queue; a terminal sends a whole escape sequence at once, so an
-// escape that nothing follows yet is the Escape key
+// escape that nothing follows yet, or another escape, is the Escape key
 static void keyboard_poll(const VM *vm, KeyboardState *keyboard) {
     int byte;
     while (keyboard->count < KEYBOARD_QUEUE_SIZE && (byte = next_byte(vm, keyboard)) >= 0) {
@@ -130,6 +130,10 @@ static void keyboard_poll(const VM *vm, KeyboardState *keyboard) {
             continue;
         }
         int kind = next_byte(vm, keyboard);
+        while (kind == KEY_ESCAPE) {
+            add_key(keyboard, KEY_ESCAPE);
+            kind = next_byte(vm, keyboard);
+        }
         if (kind != '[' && kind != 'O') {
             add_key(keyboard, KEY_ESCAPE);
             if (kind >= 0) {

@@ -414,7 +414,7 @@ The keyboard reads stdin directly. The first access to one of its ports switches
 | Page Up | 0x108 |
 | Page Down | 0x109 |
 
-Other escape sequences are dropped, and up to 64 keys wait in a queue. Reading the status or the data port checks for new input. While the vector port holds a vector, the keyboard also checks every 10000 instructions and requests the interrupt for as long as keys wait.
+Other escape sequences are dropped, and an escape that is not followed by the rest of a sequence is the Escape key, 0x1B. Up to 64 keys wait in a queue. Reading the status or the data port checks for new input. While the vector port holds a vector, the keyboard also checks every 10000 instructions and requests the interrupt for as long as keys wait.
 
 When stdin is a file or a pipe, its bytes arrive as keys and the status reports the end of input. Reading the console as well can split the input, because the console reads ahead into a buffer.
 
