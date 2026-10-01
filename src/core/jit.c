@@ -8,8 +8,8 @@
 #include "vm.h"
 
 // The JIT turns the instructions from a word that jumps go to often into x86-64 code, up to an instruction
-// that always goes elsewhere. The code keeps SP in ebx, the other VM registers in memory and the flags as
-// cpu_run keeps them, and checks the budget once per block. It hands an instruction that would fault, or that it does not
+// that always goes elsewhere. The code keeps SP in ebx and R0 in ebp, the other VM registers in memory and
+// the flags as cpu_run keeps them, and checks the budget once per block. It hands an instruction that would fault, or that it does not
 // compile, back to cpu_run, which runs it as before.
 
 #if defined(__x86_64__) && defined(__GNUC__) && (defined(__linux__) || defined(__APPLE__))
@@ -26,7 +26,6 @@
 
 // What compiled code works with; the code reaches it through rbp
 typedef struct {
-    uint32_t *registers;
     uint8_t *memory;
     VM *vm;
     void **entries;
@@ -65,14 +64,17 @@ enum { CC_O = 0, CC_B = 2, CC_AE = 3, CC_E = 4, CC_NE = 5, CC_BE = 6, CC_A = 7, 
 // ALU operations in the order of their x86 encodings
 enum { ADD = 0, OR = 1, AND = 4, SUB = 5, XOR = 6, CMP = 7 };
 
-#define FLAGS(field) ((int32_t)(offsetof(Context, flags) + offsetof(Flags, field)))
+#define FLAGS(field) ((int32_t)(FLAGS_AT + offsetof(Flags, field)))
 #define CONTROL(index) ((int32_t)(offsetof(VM, control) + 4 * (index)))
 #define FIELD(field) ((int32_t)offsetof(VM, field))
 #define REG(number) ((int32_t)(offsetof(VM, registers) + 4 * (number)))
 
 // Compiled code keeps temporaries in the 8 bytes at [rsp]: slow paths at [rsp] and addresses it goes to after
-// them at [rsp + GO_SLOT]
+// them at [rsp + GO_SLOT]. The context follows at [rsp + 8] and a copy of its flags at [rsp + FLAGS_AT].
 #define GO_SLOT 4
+#define FLAGS_AT 16
+// with 8 bytes more than a multiple of 16, so that calls find the stack aligned
+#define FRAME_SIZE ((FLAGS_AT + (int32_t)sizeof(Flags) + 7) / 16 * 16 + 8)
 
 typedef struct {
     uint8_t *p;
@@ -306,28 +308,38 @@ static void write_entry(struct Jit *jit, Code *c) {
         rex(c, 0, 0, 0, saved[i]);
         put(c, 0x50 + (uint32_t)(saved[i] & 7));
     }
-    // sub rsp, 8 keeps the stack aligned for calls and gives compiled code 8 bytes at [rsp]
     rex(c, 1, 0, 0, HSP);
     put(c, 0x83);
     put(c, 0xEC);
-    put(c, 8);
-    mov64(c, HBP, HDI);
-    op_mem(c, 1, 0x8B, H12, HBP, (int32_t)offsetof(Context, memory));
-    op_mem(c, 1, 0x8B, H13, HBP, (int32_t)offsetof(Context, vm));
+    put(c, FRAME_SIZE);
+    op_mem(c, 1, 0x89, HDI, HSP, 8);
+    op_mem(c, 1, 0x8B, H12, HDI, (int32_t)offsetof(Context, memory));
+    op_mem(c, 1, 0x8B, H13, HDI, (int32_t)offsetof(Context, vm));
+    op_mem(c, 1, 0x8B, H15, HDI, (int32_t)offsetof(Context, entries));
+    load(c, H14, HDI, (int32_t)offsetof(Context, left));
+    for (int32_t at = 0; at < (int32_t)sizeof(Flags); at += 8) {
+        op_mem(c, 1, 0x8B, HAX, HDI, (int32_t)offsetof(Context, flags) + at);
+        op_mem(c, 1, 0x89, HAX, HSP, FLAGS_AT + at);
+    }
     load(c, HBX, H13, REG(R2_SP));
-    op_mem(c, 1, 0x8B, H15, HBP, (int32_t)offsetof(Context, entries));
-    load(c, H14, HBP, (int32_t)offsetof(Context, left));
+    load(c, HBP, H13, REG(R0_ACC));
     jmp_reg(c, HSI);
 
     jit->exit = c->p;
     store(c, H13, REG(R2_SP), HBX);
-    store(c, HBP, (int32_t)offsetof(Context, next), HAX);
-    store(c, HBP, (int32_t)offsetof(Context, how), HDX);
-    store(c, HBP, (int32_t)offsetof(Context, left), H14);
+    store(c, H13, REG(R0_ACC), HBP);
+    op_mem(c, 1, 0x8B, HDI, HSP, 8);
+    store(c, HDI, (int32_t)offsetof(Context, next), HAX);
+    store(c, HDI, (int32_t)offsetof(Context, how), HDX);
+    store(c, HDI, (int32_t)offsetof(Context, left), H14);
+    for (int32_t at = 0; at < (int32_t)sizeof(Flags); at += 8) {
+        op_mem(c, 1, 0x8B, HCX, HSP, FLAGS_AT + at);
+        op_mem(c, 1, 0x89, HCX, HDI, (int32_t)offsetof(Context, flags) + at);
+    }
     rex(c, 1, 0, 0, HSP);
     put(c, 0x83);
     put(c, 0xC4);
-    put(c, 8);
+    put(c, FRAME_SIZE);
     for (int i = 5; i >= 0; i--) {
         rex(c, 0, 0, 0, saved[i]);
         put(c, 0x58 + (uint32_t)(saved[i] & 7));
@@ -337,17 +349,17 @@ static void write_entry(struct Jit *jit, Code *c) {
 
 // Helpers that compiled code calls
 
-static uint32_t holds_for(Context *context, uint32_t cond) {
-    return (uint32_t)holds(context->registers, (uint16_t)cond, &context->flags);
+static uint32_t holds_for(VM *vm, Flags *flags, uint32_t cond) {
+    return (uint32_t)holds(vm->registers, (uint16_t)cond, flags);
 }
 
-static void partial_for(Context *context, uint32_t result, uint32_t changed, uint32_t bits) {
+static void partial_for(Flags *flags, uint32_t result, uint32_t changed, uint32_t bits) {
     FlagUpdate f = { changed, bits };
-    partial(result, &f, &context->flags);
+    partial(result, &f, flags);
 }
 
-static uint32_t binary_for(Context *context, uint32_t opcode, uint32_t x, uint32_t y) {
-    return binary((uint8_t)opcode, context->registers, x, y, &context->flags);
+static uint32_t binary_for(VM *vm, Flags *flags, uint32_t opcode, uint32_t x, uint32_t y) {
+    return binary((uint8_t)opcode, vm->registers, x, y, flags);
 }
 
 static void push_frame_for(VM *vm, uint32_t site, uint32_t back) {
@@ -459,17 +471,22 @@ static void refund(Code *c, uint32_t count) {
     }
 }
 
+// The host register that holds a VM register while compiled code runs, or -1 if it stays in memory
+static int held(uint32_t number) {
+    return number == R2_SP ? HBX : number == R0_ACC ? HBP : -1;
+}
+
 static void load_reg(Compiler *k, int host, uint32_t number) {
-    if (number == R2_SP) {
-        mov(&k->c, host, HBX);
+    if (held(number) >= 0) {
+        mov(&k->c, host, held(number));
     } else {
         load(&k->c, host, H13, REG(number));
     }
 }
 
 static void store_reg(Compiler *k, uint32_t number, int host) {
-    if (number == R2_SP) {
-        mov(&k->c, HBX, host);
+    if (held(number) >= 0) {
+        mov(&k->c, held(number), host);
     } else {
         store(&k->c, H13, REG(number), host);
     }
@@ -542,9 +559,9 @@ static void keep_flags(Compiler *k, uint32_t j, int kind) {
         k->state = -1;
         return;
     }
-    store(c, HBP, FLAGS(a), HAX);
-    store(c, HBP, FLAGS(b), HCX);
-    store_imm(c, HBP, FLAGS(kind), (uint32_t)kind);
+    store(c, HSP, FLAGS(a), HAX);
+    store(c, HSP, FLAGS(b), HCX);
+    store_imm(c, HSP, FLAGS(kind), (uint32_t)kind);
     k->state = kind;
 }
 
@@ -557,28 +574,28 @@ static void keep_partial(Compiler *k, uint32_t j) {
         return;
     }
     if (k->state == FLAGS_ADD || k->state == FLAGS_SUB) {
-        load(c, H8, HBP, FLAGS(a));
-        store(c, HBP, FLAGS(sa), H8);
-        load(c, H8, HBP, FLAGS(b));
-        store(c, HBP, FLAGS(sb), H8);
-        store_imm(c, HBP, FLAGS(source), (uint32_t)k->state);
+        load(c, H8, HSP, FLAGS(a));
+        store(c, HSP, FLAGS(sa), H8);
+        load(c, H8, HSP, FLAGS(b));
+        store(c, HSP, FLAGS(sb), H8);
+        store_imm(c, HSP, FLAGS(source), (uint32_t)k->state);
         shift_imm(c, 4, HDX, 16);
         alu(c, OR, HDX, HCX);
-        store(c, HBP, FLAGS(b), HDX);
-        store_imm(c, HBP, FLAGS(kind), FLAGS_NZ);
-        store(c, HBP, FLAGS(a), HAX);
+        store(c, HSP, FLAGS(b), HDX);
+        store_imm(c, HSP, FLAGS(kind), FLAGS_NZ);
+        store(c, HSP, FLAGS(a), HAX);
     } else if (k->state == FLAGS_NZ) {
         mov(c, H8, HDX);
         shift_imm(c, 4, H8, 16);
-        alu_load(c, OR, H8, HBP, FLAGS(b));
+        alu_load(c, OR, H8, HSP, FLAGS(b));
         unary(c, 2, HDX);
         alu(c, AND, H8, HDX);
         alu(c, OR, H8, HCX);
-        store(c, HBP, FLAGS(b), H8);
-        store(c, HBP, FLAGS(a), HAX);
+        store(c, HSP, FLAGS(b), H8);
+        store(c, HSP, FLAGS(a), HAX);
     } else {
         mov(c, HSI, HAX);
-        mov64(c, HDI, HBP);
+        lea(c, 1, HDI, HSP, FLAGS_AT);
         call(c, (void *)partial_for);
     }
     k->state = FLAGS_NZ;
@@ -613,8 +630,8 @@ static int host_flags(Compiler *k) {
     if (k->state != FLAGS_ADD && k->state != FLAGS_SUB) {
         return 0;
     }
-    load(c, HAX, HBP, FLAGS(a));
-    alu_load(c, k->state == FLAGS_SUB ? CMP : ADD, HAX, HBP, FLAGS(b));
+    load(c, HAX, HSP, FLAGS(a));
+    alu_load(c, k->state == FLAGS_SUB ? CMP : ADD, HAX, HSP, FLAGS(b));
     return 1;
 }
 
@@ -626,8 +643,9 @@ static void jump_if(Compiler *k, uint16_t cond, Stub *(*make)(Compiler *, uint8_
         make(k, jcc(c, cc), j);
         return;
     }
-    mov64(c, HDI, HBP);
-    mov_imm(c, HSI, cond);
+    mov64(c, HDI, H13);
+    lea(c, 1, HSI, HSP, FLAGS_AT);
+    mov_imm(c, HDX, cond);
     call(c, (void *)holds_for);
     op_reg(c, 0, 0x85, HAX, HAX);
     make(k, jcc(c, CC_NE), j);
@@ -894,9 +912,9 @@ static void compile_item(Compiler *k, uint32_t j) {
                 store_reg(k, d->a, HAX);
             }
             if (k->items[j].flags_read) {
-                store(c, HBP, FLAGS(a), HAX);
-                store_imm(c, HBP, FLAGS(b), 0);
-                store_imm(c, HBP, FLAGS(kind), FLAGS_ADD);
+                store(c, HSP, FLAGS(a), HAX);
+                store_imm(c, HSP, FLAGS(b), 0);
+                store_imm(c, HSP, FLAGS(kind), FLAGS_ADD);
                 k->state = FLAGS_ADD;
             } else {
                 k->state = -1;
@@ -906,9 +924,11 @@ static void compile_item(Compiler *k, uint32_t j) {
         case D_BINARY_V:
         case D_BINARY_M:
             value_operand(k, j, memory);
-            load_reg(k, HDX, d->a);
-            mov_imm(c, HSI, d->op);
-            mov64(c, HDI, HBP);
+            mov(c, H8, HCX);
+            load_reg(k, HCX, d->a);
+            mov_imm(c, HDX, d->op);
+            lea(c, 1, HSI, HSP, FLAGS_AT);
+            mov64(c, HDI, H13);
             call(c, (void *)binary_for);
             store_reg(k, d->a, HAX);
             k->state = -1;
@@ -1039,8 +1059,9 @@ static void compile_item(Compiler *k, uint32_t j) {
                 setcc(c, cc, HAX);
                 movzx8(c, HAX, HAX);
             } else {
-                mov64(c, HDI, HBP);
-                mov_imm(c, HSI, d->cond);
+                mov64(c, HDI, H13);
+                lea(c, 1, HSI, HSP, FLAGS_AT);
+                mov_imm(c, HDX, d->cond);
                 call(c, (void *)holds_for);
             }
             store_reg(k, d->a, HAX);
@@ -1123,8 +1144,8 @@ static void compile_item(Compiler *k, uint32_t j) {
             break;
         case D_LOOP:
         case D_LOOP_OUT:
-            if (d->a == R2_SP) {
-                alu_imm(c, SUB, HBX, 1);
+            if (held(d->a) >= 0) {
+                alu_imm(c, SUB, held(d->a), 1);
             } else {
                 alu_mem_imm(c, SUB, H13, REG(d->a), 1);
             }
@@ -1497,7 +1518,7 @@ int jit_compile(VM *vm, uint32_t index) {
 
 uint32_t jit_run(VM *vm, uint32_t index, uint32_t *left, Flags *flags, uint32_t *how) {
     struct Jit *jit = vm->jit;
-    Context context = { vm->registers, vm->memory, vm, jit->entries, *flags, *left, 0, 0 };
+    Context context = { vm->memory, vm, jit->entries, *flags, *left, 0, 0 };
     jit->enter(&context, jit->entries[index]);
     *left = context.left;
     *flags = context.flags;
