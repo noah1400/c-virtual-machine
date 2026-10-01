@@ -5,6 +5,7 @@
 #include "cpu.h"
 #include "jit.h"
 #include "memory.h"
+#include "syscalls.h"
 #include "vm.h"
 
 // The JIT turns the instructions from a word that jumps go to often into x86-64 code, up to an instruction
@@ -56,6 +57,7 @@ struct Jit {
     uint32_t words;
     uint32_t low;           // the bytes that compiled code came from
     uint32_t high;
+    uint32_t flushes;       // how often all compiled code was dropped
     uint32_t *waiting;      // for every word, 1 + the first link that waits for compiled code there, or 0
     Link *links;
     uint32_t link_count;
@@ -376,6 +378,16 @@ static uint32_t binary_for(VM *vm, Flags *flags, uint32_t opcode, uint32_t x, ui
     return binary((uint8_t)opcode, vm->registers, x, y, flags);
 }
 
+// A heap or copy syscall of supervisor mode as cpu_run runs it at address; tells whether it dropped compiled code
+static uint32_t syscall_for(VM *vm, Flags *flags, uint32_t number, uint32_t address, uint32_t next) {
+    uint32_t flushes = vm->jit->flushes;
+    vm->error_pc = address;
+    vm->registers[R3_PC] = next;
+    settle(vm->registers, flags);
+    syscall_dispatch(vm, number);
+    return vm->jit->flushes != flushes;
+}
+
 static void push_frame_for(VM *vm, uint32_t site, uint32_t back) {
     cpu_push_frame(vm, site, back, -1);
 }
@@ -399,6 +411,7 @@ enum {
     STUB_GO,                // the instruction goes to the address it left at [rsp + GO_SLOT]
     STUB_REACH,             // checks the access of size bytes, extra the access, at edx in the heap or with cpu_reach
     STUB_WRITTEN,           // the store of size bytes at edx changed decoded instructions
+    STUB_AFTER,             // leaves after the instruction, which changed decoded instructions or compiled code
     STUB_PUSH,              // asks cpu_push_slot for a push of the value in ecx
     STUB_POP,               // asks cpu_pop_slot for a pop at ecx
     STUB_FRAME,             // the shadow call stack is full
@@ -760,8 +773,8 @@ static int memory_kind(uint8_t kind) {
 }
 
 // Whether the compiler compiles a kind
-static int compiles(uint8_t kind) {
-    switch (kind) {
+static int compiles(const Decoded *d) {
+    switch (d->kind) {
         case D_NOP: case D_LOAD_V: case D_LOAD_M: case D_LOADB_V: case D_LOADB_M: case D_LOADW_V: case D_LOADW_M:
         case D_STORE: case D_STOREB: case D_STOREW: case D_LEA: case D_ADD_V: case D_ADD_M: case D_SUB_V:
         case D_SUB_M: case D_CMP_V: case D_CMP_M: case D_TEST_V: case D_TEST_M: case D_BINARY_V: case D_BINARY_M:
@@ -770,8 +783,11 @@ static int compiles(uint8_t kind) {
         case D_GOTO: case D_JZ: case D_JNZ: case D_JC: case D_JAE: case D_JBE: case D_JA: case D_JL: case D_JGE:
         case D_JLE: case D_JG: case D_CALL: case D_CALL_OUT: case D_CALL_V: case D_CALL_M: case D_RET:
         case D_LOOP: case D_LOOP_OUT: case D_PUSH_V: case D_PUSH_M: case D_POP: case D_ENTER: case D_LEAVE:
-        case D_PUSHM: case D_POPM:
+        case D_PUSHM: case D_POPM: case D_MEMCPY: case D_MEMSET:
             return 1;
+        case D_SYSCALL:
+            // The heap and copy syscalls, which cpu_run runs itself in supervisor mode
+            return d->imm >= SYS_ALLOC && d->imm <= SYS_MEMCPY;
         default:
             return 0;
     }
@@ -826,6 +842,7 @@ static int leaves_before(uint8_t kind) {
     switch (kind) {
         case D_STORE: case D_STOREB: case D_STOREW: case D_DIVIDE_V: case D_CALL: case D_CALL_OUT: case D_CALL_V:
         case D_RET: case D_PUSH_V: case D_POP: case D_ENTER: case D_LEAVE: case D_PUSHM: case D_POPM:
+        case D_MEMCPY: case D_MEMSET: case D_SYSCALL:
             return 1;
         default:
             return memory_kind(kind);
@@ -834,7 +851,8 @@ static int leaves_before(uint8_t kind) {
 
 static int leaves_after(const Decoded *d) {
     switch (d->kind) {
-        case D_STORE: case D_STOREB: case D_STOREW: case D_LOOP: case D_LOOP_OUT:
+        case D_STORE: case D_STOREB: case D_STOREW: case D_LOOP: case D_LOOP_OUT: case D_MEMCPY: case D_MEMSET:
+        case D_SYSCALL:
             return 1;
         default:
             return ends_block(d) || reads_flags(d);
@@ -1258,6 +1276,41 @@ static void compile_item(Compiler *k, uint32_t j) {
             }
             break;
         }
+        case D_MEMCPY:
+        case D_MEMSET:
+            if (d->mask) {
+                load_reg(k, HCX, d->op);
+            } else {
+                mov_imm(c, HCX, d->imm);
+            }
+            load_reg(k, HDX, d->b);
+            load_reg(k, HSI, d->a);
+            mov_imm(c, H8, d->kind == D_MEMCPY);
+            mov64(c, HDI, H13);
+            call(c, (void *)cpu_fill);
+            alu_imm(c, CMP, HAX, 1);
+            stub(k, jcc(c, CC_B), STUB_HERE, j);
+            stub(k, jcc(c, CC_A), STUB_AFTER, j);
+            break;
+        case D_SYSCALL:
+            // User mode leaves it to vm_step
+            op_mem(c, 0, 0xF7, 0, H13, REG(R4_SR));
+            put32(c, SYS_FLAG);
+            stub(k, jcc(c, CC_E), STUB_HERE, j);
+            store(c, H13, REG(R2_SP), HBX);
+            store(c, H13, REG(R0_ACC), HBP);
+            mov64(c, HDI, H13);
+            lea(c, 1, HSI, HSP, FLAGS_AT);
+            mov_imm(c, HDX, d->imm);
+            mov_imm(c, HCX, k->items[j].index * 4);
+            mov_imm(c, H8, (k->items[j].index + d->len) * 4);
+            call(c, (void *)syscall_for);
+            load(c, HBX, H13, REG(R2_SP));
+            load(c, HBP, H13, REG(R0_ACC));
+            op_reg(c, 0, 0x85, HAX, HAX);
+            stub(k, jcc(c, CC_NE), STUB_AFTER, j);
+            k->state = -1;
+            break;
     }
     k->host = host;
 }
@@ -1339,6 +1392,8 @@ static void compile_stub(Compiler *k, Stub *s) {
             mov(c, HSI, HDX);
             mov_imm(c, HDX, s->size);
             call(c, (void *)cpu_forget);
+            // fall through
+        case STUB_AFTER:
             refund(c, after);
             mov_imm(c, HAX, it->index + it->d.len);
             leave_with(c, k->jit, JIT_NEXT);
@@ -1388,6 +1443,7 @@ static void compile_stub(Compiler *k, Stub *s) {
 }
 
 static void forget_code(struct Jit *jit, VM *vm) {
+    jit->flushes++;
     for (uint32_t i = 0; i < jit->start_count; i++) {
         uint32_t word = jit->starts[i];
         jit->entries[word] = NULL;
@@ -1480,7 +1536,7 @@ static uint8_t *compile_block(struct Jit *jit, VM *vm, uint32_t word, uint32_t *
         if (d->kind == D_JIT) {
             it->d.kind = jit->kinds[index];
         }
-        if (!compiles(it->d.kind)) {
+        if (!compiles(&it->d)) {
             *after = index + d->len;
             break;
         }

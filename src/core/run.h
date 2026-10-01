@@ -143,4 +143,8 @@ uint8_t *cpu_reach(VM *vm, uint32_t address, uint32_t size, uint32_t access);
 uint8_t *cpu_push_slot(VM *vm, uint32_t sp);
 uint8_t *cpu_pop_slot(VM *vm, uint32_t sp);
 
+// MEMCPY when copy is set and MEMSET when not, as cpu_run runs them: 0 if they would fault, 2 if they wrote
+// decoded instructions, else 1
+uint32_t cpu_fill(VM *vm, uint32_t to, uint32_t from, uint32_t size, uint32_t copy);
+
 #endif // _RUN_H_

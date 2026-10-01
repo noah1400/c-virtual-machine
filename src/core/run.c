@@ -242,6 +242,10 @@ uint8_t *cpu_pop_slot(VM *vm, uint32_t sp) {
     return pop_slot(vm, sp);
 }
 
+uint32_t cpu_fill(VM *vm, uint32_t to, uint32_t from, uint32_t size, uint32_t copy) {
+    return fill(vm, to, from, size, (int)copy);
+}
+
 // The number of words below the heap and the end of memory that start an instruction whose extension word
 // can be fetched without checks as well
 static uint32_t fetch_words(const VM *vm) {
