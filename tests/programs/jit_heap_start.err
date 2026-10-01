@@ -1,0 +1,2 @@
+vm: error: Memory access to unallocated heap: address 0x00DD
+vm: at 0x0014 <.loop> tests/programs/jit_heap_start.asm:12: LOAD R8, [R9]
