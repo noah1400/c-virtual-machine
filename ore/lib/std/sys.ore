@@ -32,3 +32,13 @@ pub fn seed(value: u32) {
 pub fn memory_size() int {
     return syscall(23).value;
 }
+
+// How many bytes the heap has free
+pub fn free_heap() int {
+    return syscall(23).r6;
+}
+
+// The largest block that new can get
+pub fn largest_free() int {
+    return syscall(23).r7;
+}

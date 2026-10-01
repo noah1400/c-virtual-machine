@@ -556,7 +556,7 @@ static void gen_builtin(Gen *g, Expr *e) {
             break;
         case BUILTIN_SYSCALL: {
             static const char *const registers[] = { "R0", "R5", "R6" };
-            int temp = alloc_frame(g, 8);
+            int temp = alloc_frame(g, 16);
             for (int i = 1; i < e->arg_count; i++) {
                 gen_expr(g, e->args[i]);
                 emit(g, "    PUSH R0\n");
@@ -564,8 +564,9 @@ static void gen_builtin(Gen *g, Expr *e) {
             for (int i = e->arg_count - 1; i >= 1; i--) {
                 emit(g, "    POP %s\n", registers[i - 1]);
             }
-            emit(g, "    SYSCALL #%d\n    STORE R0, [BP%+d]\n    STORE R5, [BP%+d]\n    LEA R0, [BP%+d]\n",
-                 (int)e->args[0]->value, temp, temp + 4, temp);
+            emit(g, "    SYSCALL #%d\n    STORE R0, [BP%+d]\n    STORE R5, [BP%+d]\n    STORE R6, [BP%+d]\n"
+                    "    STORE R7, [BP%+d]\n    LEA R0, [BP%+d]\n",
+                 (int)e->args[0]->value, temp, temp + 4, temp + 8, temp + 12, temp);
             break;
         }
     }

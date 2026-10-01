@@ -1,0 +1,12 @@
+// A syscall's result holds R0, R5, R6 and R7, which syscall 23 fills with the memory size and the free heap
+import "std/sys";
+
+fn main() int {
+    var info = syscall(23);
+    print(info.value == sys.memory_size(), " ", info.status, " ", info.r6 > 0, " ", info.r7 <= info.r6, "\n");
+    var block = new(u8, 1000);
+    print(sys.free_heap() < info.r6, " ", sys.largest_free() <= sys.free_heap(), "\n");
+    free(block);
+    print(sys.free_heap() == info.r6, "\n");
+    return 0;
+}

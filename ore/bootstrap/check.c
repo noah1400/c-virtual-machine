@@ -18,9 +18,11 @@ static Type t_u32 = { .kind = TY_INT, .size = 4, .align = 4, .name = "u32" };
 static Type t_f32 = { .kind = TY_FLOAT, .size = 4, .align = 4, .name = "f32" };
 static Type t_null = { .kind = TY_NULL, .size = 4, .align = 4, .name = "null" };
 static Type t_untyped = { .kind = TY_UNTYPED, .size = 4, .align = 4, .name = "a number" };
-static Field syscall_fields[] = { { "value", &t_i32, 0, 0 }, { "status", &t_i32, 4, 0 } };
-static Type t_syscall = { .kind = TY_STRUCT, .size = 8, .align = 4, .name = "SyscallResult",
-                          .fields = syscall_fields, .field_count = 2, .state = 2 };
+static Field syscall_fields[] = {
+    { "value", &t_i32, 0, 0 }, { "status", &t_i32, 4, 0 }, { "r6", &t_i32, 8, 0 }, { "r7", &t_i32, 12, 0 },
+};
+static Type t_syscall = { .kind = TY_STRUCT, .size = 16, .align = 4, .name = "SyscallResult",
+                          .fields = syscall_fields, .field_count = 4, .state = 2 };
 
 Type *type_void = &t_void, *type_bool = &t_bool, *type_int = &t_i32, *type_u8 = &t_u8, *type_u32 = &t_u32,
      *type_syscall = &t_syscall;

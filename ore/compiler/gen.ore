@@ -1722,13 +1722,14 @@ fn gen_builtin(g: *Gen, e: *ast.Expr) {
         }
         case ast.Builtin.SYSCALL {
             gen_syscall(g, e);
-            var temp = alloc_frame(g, 8);
-            emitd(g, "    STORE R0, [BP%+d]\n    STORE R5, [BP%+d]\n    LEA R0, [BP%+d]\n", []int { temp, temp + 4, temp });
+            var temp = alloc_frame(g, 16);
+            emitd(g, "    STORE R0, [BP%+d]\n    STORE R5, [BP%+d]\n    STORE R6, [BP%+d]\n    STORE R7, [BP%+d]\n",
+                  []int { temp, temp + 4, temp + 8, temp + 12 });
+            emitd(g, "    LEA R0, [BP%+d]\n", []int { temp });
         }
     }
 }
 
-// Leaves the two words of the result in R0 and R5
 // The one argument of a syscall that needs code, 0 when none does, or -1 when the others cannot go to their
 // registers after it without a change to what they are or to the order of their null checks
 fn computed_syscall_argument(e: *ast.Expr) int {

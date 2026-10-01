@@ -18,12 +18,14 @@ var t_u32 = ast.Type { kind: ast.TypeKind.INT, size: 4, align: 4, name: "u32" };
 var t_f32 = ast.Type { kind: ast.TypeKind.FLOAT, size: 4, align: 4, name: "f32" };
 var t_null = ast.Type { kind: ast.TypeKind.NULL, size: 4, align: 4, name: "null" };
 var t_untyped = ast.Type { kind: ast.TypeKind.UNTYPED, size: 4, align: 4, name: "a number" };
-var syscall_fields = [2]ast.Field {
+var syscall_fields = [4]ast.Field {
     ast.Field { name: "value", type: &t_i32 },
     ast.Field { name: "status", type: &t_i32, offset: 4 },
+    ast.Field { name: "r6", type: &t_i32, offset: 8 },
+    ast.Field { name: "r7", type: &t_i32, offset: 12 },
 };
 var t_syscall = ast.Type {
-    kind: ast.TypeKind.STRUCT, size: 8, align: 4, name: "SyscallResult", fields: syscall_fields, state: 2,
+    kind: ast.TypeKind.STRUCT, size: 16, align: 4, name: "SyscallResult", fields: syscall_fields, state: 2,
 };
 
 var universe = [15]ast.Symbol {

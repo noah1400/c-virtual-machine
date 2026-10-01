@@ -336,7 +336,7 @@ Integer overflow is not an error. It wraps around.
 | `sizeof(T)` | The size of `T` in bytes, a constant |
 | `panic(message)` | Stop with a runtime error |
 | `assert(condition)` | Stop with a runtime error if the condition is false |
-| `syscall(n, a, b, c)` | Make syscall *n*, a constant, with R0, R5 and R6 set to `a`, `b` and `c`, all optional: integers, floats, pointers, booleans or enums. Returns a `SyscallResult` with fields `value` (R0) and `status` (R5) |
+| `syscall(n, a, b, c)` | Make syscall *n*, a constant, with R0, R5 and R6 set to `a`, `b` and `c`, all optional: integers, floats, pointers, booleans or enums. Returns a `SyscallResult` with fields `value` (R0), `status` (R5), and `r6` and `r7` for the syscalls that return more, such as 23 |
 
 A `u8` prints as a number; `print("a")` prints a character.
 
@@ -410,6 +410,7 @@ A `Builder` collects text on the heap:
 | `sleep(milliseconds: int)` | |
 | `random(limit: u32) u32`, `seed(value: u32)` | A number below limit, or any 32-bit value for 0. The sequence repeats unless seeded |
 | `memory_size() int` | The size of the VM's memory in bytes |
+| `free_heap() int`, `largest_free() int` | How many bytes the heap has free, and the largest block that `new` can get |
 
 ### std/math
 
