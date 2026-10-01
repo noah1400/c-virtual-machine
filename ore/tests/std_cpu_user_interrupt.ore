@@ -1,7 +1,8 @@
-// std/cpu: code that enter_user runs gets device interrupts when its caller has them on, here the one for
-// Ctrl-C, which a key script types while the code spins
+// std/cpu: code that enter_user runs gets device interrupts when its caller has them on: the keyboard's,
+// whose handler looks at a Ctrl-C that a key script types while the code spins, and then the one for Ctrl-C
 import "std/cpu";
 
+const KEY_STATUS = 0x60;
 const KEY_VECTOR_PORT = 0x62;
 const CTRL_C_PORT = 0x63;
 const KEYS = 0x21;
@@ -10,6 +11,7 @@ const CTRL_C = 0x23;
 var user_stack: [1024]u32;
 
 interrupt fn on_keys(frame: *cpu.Frame) {
+    cpu.read_port(KEY_STATUS);
 }
 
 interrupt fn on_ctrl_c(frame: *cpu.Frame) {

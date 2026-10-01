@@ -122,15 +122,10 @@ static int escape_key(int final, int number) {
 }
 
 // Moves waiting input into the queue; a terminal sends a whole escape sequence at once, so an
-// escape that nothing follows yet, or another escape, is the Escape key. Ctrl-C requests the program's
-// interrupt for it, when it has one.
-static void keyboard_poll(VM *vm, KeyboardState *keyboard) {
+// escape that nothing follows yet, or another escape, is the Escape key
+static void keyboard_poll(const VM *vm, KeyboardState *keyboard) {
     int byte;
     while (keyboard->count < KEYBOARD_QUEUE_SIZE && (byte = next_byte(vm, keyboard)) >= 0) {
-        if (byte == KEY_CTRL_C && vm->ctrl_c_vector) {
-            vm_ctrl_c(vm);
-            continue;
-        }
         if (byte != KEY_ESCAPE) {
             add_key(keyboard, byte);
             continue;
@@ -168,6 +163,15 @@ static uint32_t keyboard_read(VM *vm, IODevice *device, uint16_t offset) {
     keyboard_claim(keyboard);
     if (keyboard->count == 0 && offset < 2) {
         keyboard_poll(vm, keyboard);
+    }
+    // A Ctrl-C that the program has read up to requests its interrupt instead of arriving as a key
+    while (offset < 2 && keyboard->count && keyboard->keys[keyboard->first] == KEY_CTRL_C && vm->ctrl_c_vector) {
+        keyboard->first = (keyboard->first + 1) % KEYBOARD_QUEUE_SIZE;
+        keyboard->count--;
+        vm_ctrl_c(vm);
+        if (keyboard->count == 0) {
+            keyboard_poll(vm, keyboard);
+        }
     }
     switch (offset) {
         case 0:

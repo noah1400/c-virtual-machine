@@ -400,7 +400,7 @@ $ ./vm -s snake.bin 0 < keys.txt | tail -26 | head -4
 
 #### Keyboard
 
-The keyboard reads stdin directly. The first access to one of its ports switches a terminal to unbuffered input without echo, and `vm` restores the terminal when the program ends. Ctrl-C stops the machine, while the other control keys, Ctrl-Z, Ctrl-S and Ctrl-Q among them, reach the program. A program that writes a vector to port 0x63 gets that interrupt for Ctrl-C instead, and only a second Ctrl-C before it has entered the handler stops the machine. A Ctrl-C byte from a pipe or a key script requests the interrupt as well, when the program reads the keyboard. Keys are the bytes typed, except for the arrow and editing keys:
+The keyboard reads stdin directly. The first access to one of its ports switches a terminal to unbuffered input without echo, and `vm` restores the terminal when the program ends. Ctrl-C stops the machine, while the other control keys, Ctrl-Z, Ctrl-S and Ctrl-Q among them, reach the program. A program that writes a vector to port 0x63 gets that interrupt for Ctrl-C instead, and only a second Ctrl-C before it has entered the handler stops the machine. A Ctrl-C byte from a pipe or a key script requests the interrupt as well, once the program has read the keys before it. Keys are the bytes typed, except for the arrow and editing keys:
 
 | Key | Code |
 |---|---|
