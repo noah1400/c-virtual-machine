@@ -16,6 +16,7 @@
 # assemble with -c and link with the program, and "; expect-link-error:" a message the link must fail
 # with. -u rewrites NAME.out and an existing NAME.err from the actual output of every program that
 # exits as expected.
+# VM_FLAGS adds options to every run of the VM, as VM_FLAGS='-j 1' compiles code from the first jump to it.
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 vm="$root/vm"
@@ -57,9 +58,9 @@ expectation() {
 compile_ore() {
     name=$1
     shift
-    (cd "$root" && "$vm" -m 262144 -S 8192 ./vmc.bin -S "$@" -o "$tmp/$name.asm" 2> "$tmp/$name.log")
+    (cd "$root" && "$vm" $VM_FLAGS -m 262144 -S 8192 ./vmc.bin -S "$@" -o "$tmp/$name.asm" 2> "$tmp/$name.log")
     status=$?
-    (cd "$root" && "$vm" -m 262144 -S 8192 ./vmc1.bin -S "$@" -o "$tmp/$name.stage1.asm" 2> "$tmp/$name.stage1.log")
+    (cd "$root" && "$vm" $VM_FLAGS -m 262144 -S 8192 ./vmc1.bin -S "$@" -o "$tmp/$name.stage1.asm" 2> "$tmp/$name.stage1.log")
     stage1=$?
     (cd "$root" && ./vmc0 -S "$@" -o "$tmp/vmc0/$name.asm" 2> "$tmp/$name.vmc0.log")
     vmc0=$?
@@ -101,7 +102,7 @@ execute() {
         dd if=/dev/zero of="$dir/$name.img" bs=512 count="$sectors" 2> /dev/null
         args="$args -b $name.img"
     fi
-    (cd "$dir" && "$vm" -n 10000000 $args "$name.bin" $program_args < "$input" > "$name.out" 2> "$name.err")
+    (cd "$dir" && "$vm" $VM_FLAGS -n 10000000 $args "$name.bin" $program_args < "$input" > "$name.out" 2> "$name.err")
     status=$?
 }
 
@@ -316,7 +317,7 @@ for src in "$root"/tests/minidos/*.in; do
         programs_built=1
     fi
     dd if=/dev/zero of="$dir/disk.img" bs=512 count=2048 2> /dev/null
-    (cd "$dir" && "$vm" -n 100000000 -m 4096 -b disk.img "$root/minidos.bin" -e < "$src" > "$session.out" 2>&1)
+    (cd "$dir" && "$vm" $VM_FLAGS -n 100000000 -m 4096 -b disk.img "$root/minidos.bin" -e < "$src" > "$session.out" 2>&1)
     status=$?
     expected="$root/tests/minidos/$session.out"
     if [ "$update" -eq 1 ] && [ "$status" -eq 0 ] && ! cmp -s "$expected" "$dir/$session.out"; then
