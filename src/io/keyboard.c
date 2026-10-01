@@ -16,10 +16,16 @@
 #define KEYBOARD_KEY_WAITING 0x01
 #define KEYBOARD_INPUT_ENDED 0x02
 
-// Keys are the bytes read from stdin, except that the arrow keys become 0x100 (up), 0x101 (down),
-// 0x102 (right) and 0x103 (left) and other escape sequences are dropped
-#define KEY_ESCAPE 0x1B
-#define KEY_UP     0x100
+// Keys are the bytes read from stdin, except that the escape sequences of the arrow and editing keys
+// become the codes from 0x100 on, and other escape sequences are dropped
+#define KEY_ESCAPE    0x1B
+#define KEY_UP        0x100
+#define KEY_HOME      0x104
+#define KEY_END       0x105
+#define KEY_INSERT    0x106
+#define KEY_DELETE    0x107
+#define KEY_PAGE_UP   0x108
+#define KEY_PAGE_DOWN 0x109
 
 // Keys of a script that arrive once the VM has executed a number of instructions
 typedef struct {
@@ -97,6 +103,20 @@ static void add_key(KeyboardState *keyboard, int key) {
     }
 }
 
+// The key of an escape sequence by its final byte and the number before it, or 0 for one that stands for
+// no key here
+static int escape_key(int final, int number) {
+    static const int numbered[] = { 0, KEY_HOME, KEY_INSERT, KEY_DELETE, KEY_END, KEY_PAGE_UP, KEY_PAGE_DOWN,
+                                    KEY_HOME, KEY_END };
+    if (final >= 'A' && final <= 'D') {
+        return KEY_UP + final - 'A';
+    }
+    if (final == 'H' || final == 'F') {
+        return final == 'H' ? KEY_HOME : KEY_END;
+    }
+    return final == '~' && number >= 1 && number <= 8 ? numbered[number] : 0;
+}
+
 // Moves waiting input into the queue; a terminal sends a whole escape sequence at once, so an
 // escape that nothing follows yet is the Escape key
 static void keyboard_poll(const VM *vm, KeyboardState *keyboard) {
@@ -114,12 +134,16 @@ static void keyboard_poll(const VM *vm, KeyboardState *keyboard) {
             }
             continue;
         }
-        int final = next_byte(vm, keyboard);
+        int final = next_byte(vm, keyboard), number = 0;
         while (final >= 0x20 && final < 0x40) {
+            if (final >= '0' && final <= '9' && number < 100) {
+                number = number * 10 + final - '0';
+            }
             final = next_byte(vm, keyboard);
         }
-        if (final >= 'A' && final <= 'D') {
-            add_key(keyboard, KEY_UP + final - 'A');
+        int key = escape_key(final, number);
+        if (key) {
+            add_key(keyboard, key);
         }
     }
 }
