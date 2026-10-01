@@ -404,7 +404,9 @@ int syscall_dispatch(VM *vm, uint32_t number) {
             break;
         case SYS_SLEEP:
             fflush(stdout);
-            sleep_ms(arg0);
+            if (!vm->skip_sleep) {
+                sleep_ms(arg0);
+            }
             break;
         case SYS_TIME:
             r[R0_ACC] = (uint32_t)(monotonic_ms() - vm->start_ms);

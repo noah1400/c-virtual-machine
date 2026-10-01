@@ -299,6 +299,7 @@ int keyboard_script(VM *vm, IODevice *device, const char *path) {
     keyboard->event_count = count;
     keyboard->next_event = keyboard->event_offset = 0;
     keyboard->ended = count == 0;
+    vm->skip_sleep = 1;
     return VM_ERROR_NONE;
 }
 

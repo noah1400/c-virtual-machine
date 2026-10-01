@@ -89,6 +89,7 @@ typedef struct {
     uint32_t exit_code;      // Set by the exit syscall
     uint64_t start_ms;       // Host clock when the VM started
     int64_t fixed_clock;     // The local time that the clock shows without moving, or -1 for the host's
+    int skip_sleep;          // A key script times input in instructions, so sleeping would only wait
     uint32_t entry_point;    // Where execution starts and RESET returns to
     uint32_t code_end;       // End of the loaded code
     uint32_t image_end;      // End of the loaded code and data, where the heap starts

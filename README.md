@@ -426,7 +426,7 @@ When stdin is a file or a pipe, its bytes arrive as keys and the status reports 
 +20000 q
 ```
 
-With a script, the keyboard leaves the terminal and stdin alone, and looks for keys after every instruction, so an interrupt comes at the exact count.
+With a script, the keyboard leaves the terminal and stdin alone, and looks for keys after every instruction, so an interrupt comes at the exact count. As only instructions count, the sleep syscall returns at once.
 
 #### Disk
 
