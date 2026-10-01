@@ -1,0 +1,6 @@
+// expect-error: embed takes a string literal that names a file
+const NAME = "embedded.dat";
+
+fn main() {
+    print(embed(NAME));
+}

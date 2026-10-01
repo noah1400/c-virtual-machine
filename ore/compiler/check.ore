@@ -1,4 +1,6 @@
 // Resolves the names of a program, checks its types and computes its constants
+import "std/io";
+import "std/str";
 import "ast";
 import "float";
 import "lexer";
@@ -28,7 +30,7 @@ var t_syscall = ast.Type {
     kind: ast.TypeKind.STRUCT, size: 16, align: 4, name: "SyscallResult", fields: syscall_fields, state: 2,
 };
 
-var universe = [15]ast.Symbol {
+var universe = [16]ast.Symbol {
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "i8", type: &t_i8 },
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "i16", type: &t_i16 },
     ast.Symbol { kind: ast.SymbolKind.TYPE, name: "i32", type: &t_i32 },
@@ -44,6 +46,7 @@ var universe = [15]ast.Symbol {
     ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "assert", builtin: ast.Builtin.ASSERT },
     ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "free", builtin: ast.Builtin.FREE },
     ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "syscall", builtin: ast.Builtin.SYSCALL },
+    ast.Symbol { kind: ast.SymbolKind.BUILTIN, name: "embed", builtin: ast.Builtin.EMBED },
 };
 
 struct Checker {
@@ -864,7 +867,51 @@ fn check_args(c: *Checker, e: *ast.Expr, function: *ast.Type) {
     }
 }
 
+// The bytes of a file that lies next to the module's file or in an -I directory, or a slice without a pointer
+fn embedded(c: *Checker, name: []u8) []u8 {
+    var none: []u8;
+    var slash = str.find_last_byte(c.m.path, '/');
+    var path = ast.cat([][]u8 { c.m.path[:slash + 1], name });
+    for (var i = -1; i < c.program.include_dirs.len; i += 1) {
+        if (i >= 0) {
+            var dir = c.program.include_dirs[i];
+            path = ast.cat([][]u8 { dir, "/", name });
+            if (dir.len > 0 && dir[dir.len - 1] == '/') {
+                path = ast.cat([][]u8 { dir, name });
+            }
+        }
+        var handle = io.open(path, io.READ);
+        if (handle >= 0) {
+            io.close(handle);
+            var bytes = io.read_file(path);
+            if (bytes.ptr == null) {
+                return "";
+            }
+            return bytes;
+        }
+    }
+    return none;
+}
+
+// embed("file") turns into a string literal of the file's bytes
+fn check_embed(c: *Checker, e: *ast.Expr) *ast.Type {
+    if (e.args.len != 1 || e.args[0].kind != ast.ExprKind.STRING) {
+        error(c, e.line, "embed takes a string literal that names a file");
+    }
+    var bytes = embedded(c, e.args[0].bytes);
+    if (bytes.ptr == null) {
+        error(c, e.line, ast.cat([][]u8 { "cannot read ", e.args[0].bytes }));
+    }
+    e.kind = ast.ExprKind.STRING;
+    e.bytes = bytes;
+    e.builtin = ast.Builtin.NONE;
+    return check_expr(c, e);
+}
+
 fn check_builtin(c: *Checker, e: *ast.Expr, builtin: ast.Builtin) *ast.Type {
+    if (builtin == ast.Builtin.EMBED) {
+        return check_embed(c, e);
+    }
     e.builtin = builtin;
     for (var i = 0; i < e.args.len; i += 1) {
         check_expr(c, e.args[i]);

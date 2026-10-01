@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "ore.h"
 
@@ -43,6 +44,7 @@ static Symbol universe[] = {
     { .kind = SYM_BUILTIN, .name = "assert", .builtin = BUILTIN_ASSERT },
     { .kind = SYM_BUILTIN, .name = "free", .builtin = BUILTIN_FREE },
     { .kind = SYM_BUILTIN, .name = "syscall", .builtin = BUILTIN_SYSCALL },
+    { .kind = SYM_BUILTIN, .name = "embed", .builtin = BUILTIN_EMBED },
 };
 
 typedef struct {
@@ -788,7 +790,62 @@ static void check_args(Checker *c, Expr *e, Type *fn) {
     }
 }
 
+// The bytes of a file next to the module's file or in an -I directory, or NULL; *size receives their number
+static char *embedded(Checker *c, const char *name, int *size) {
+    const char *slash = strrchr(c->m->path, '/');
+    size_t dir_length = slash ? (size_t)(slash - c->m->path) + 1 : 0;
+    for (int i = -1; i < c->program->include_dir_count; i++) {
+        const char *dir = i < 0 ? c->m->path : c->program->include_dirs[i];
+        size_t length = i < 0 ? dir_length : strlen(dir);
+        int separator = length > 0 && dir[length - 1] != '/';
+        char *path = allocate(length + strlen(name) + 2);
+        snprintf(path, length + strlen(name) + 2, "%.*s%s%s", (int)length, dir, separator ? "/" : "", name);
+        FILE *file = fopen(path, "rb");
+        free(path);
+        if (!file) {
+            continue;
+        }
+        size_t capacity = 4096, count = 0;
+        char *bytes = allocate(capacity);
+        for (size_t n; (n = fread(bytes + count, 1, capacity - count, file)) > 0;) {
+            count += n;
+            if (count == capacity) {
+                capacity *= 2;
+                grow((void **)&bytes, (int)capacity, 1);
+            }
+        }
+        int failed = ferror(file);
+        fclose(file);
+        if (failed || count > MAX_SIZE) {
+            free(bytes);
+            return NULL;
+        }
+        *size = (int)count;
+        return bytes;
+    }
+    return NULL;
+}
+
+// embed("file") turns into a string literal of the file's bytes
+static Type *check_embed(Checker *c, Expr *e) {
+    if (e->arg_count != 1 || e->args[0]->kind != EX_STRING) {
+        error(c, e->line, "embed takes a string literal that names a file");
+    }
+    int size = 0;
+    char *bytes = embedded(c, e->args[0]->bytes, &size);
+    if (!bytes) {
+        error(c, e->line, "cannot read %s", e->args[0]->bytes);
+    }
+    e->kind = EX_STRING;
+    e->bytes = bytes;
+    e->size = size;
+    return check_expr(c, e);
+}
+
 static Type *check_builtin(Checker *c, Expr *e, Builtin builtin) {
+    if (builtin == BUILTIN_EMBED) {
+        return check_embed(c, e);
+    }
     e->builtin = builtin;
     for (int i = 0; i < e->arg_count; i++) {
         check_expr(c, e->args[i]);
@@ -823,6 +880,8 @@ static Type *check_builtin(Checker *c, Expr *e, Builtin builtin) {
                 error(c, e->line, "free takes a pointer or a slice from new, not %s", type_name(e->args[0]->type));
             }
             return e->type = &t_void;
+        case BUILTIN_EMBED:
+            break;
         case BUILTIN_SYSCALL:
             if (e->arg_count < 1 || e->arg_count > 4) {
                 error(c, e->line, "syscall takes a syscall number and up to three values");

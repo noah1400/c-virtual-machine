@@ -554,6 +554,8 @@ static void gen_builtin(Gen *g, Expr *e) {
             gen_expr(g, e->args[0]);
             emit(g, "    PUSH R0\n    CALL rt.free\n    ADD SP, #4\n");
             break;
+        case BUILTIN_EMBED:
+            break;
         case BUILTIN_SYSCALL: {
             static const char *const registers[] = { "R0", "R5", "R6" };
             int temp = alloc_frame(g, 16);

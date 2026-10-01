@@ -56,7 +56,7 @@ pub struct Type {
 
 pub enum SymbolKind { LOCAL, GLOBAL, FN, CONST, TYPE, MODULE, BUILTIN }
 
-pub enum Builtin { NONE, PRINT, PANIC, ASSERT, FREE, SYSCALL }
+pub enum Builtin { NONE, PRINT, PANIC, ASSERT, FREE, SYSCALL, EMBED }
 
 pub struct Symbol {
     kind: SymbolKind;

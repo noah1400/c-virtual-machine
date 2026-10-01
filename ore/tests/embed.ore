@@ -1,0 +1,9 @@
+// embed puts the bytes of a file into the program as a string, even bytes that a literal cannot hold
+const DATA = embed("embedded.dat");
+
+var copy = embed("embedded.dat");
+
+fn main() int {
+    print(DATA.len, " ", copy.len, " ", DATA[3], " ", DATA[4:], DATA[:3], "\n");
+    return 0;
+}

@@ -336,6 +336,7 @@ Integer overflow is not an error. It wraps around.
 | `sizeof(T)` | The size of `T` in bytes, a constant |
 | `panic(message)` | Stop with a runtime error |
 | `assert(condition)` | Stop with a runtime error if the condition is false |
+| `embed("file")` | The bytes of a file as a string literal, which a constant can hold too. The file lies next to the module's file or in an `-I` directory |
 | `syscall(n, a, b, c)` | Make syscall *n*, a constant, with R0, R5 and R6 set to `a`, `b` and `c`, all optional: integers, floats, pointers, booleans or enums. Returns a `SyscallResult` with fields `value` (R0), `status` (R5), and `r6` and `r7` for the syscalls that return more, such as 23 |
 
 A `u8` prints as a number; `print("a")` prints a character.

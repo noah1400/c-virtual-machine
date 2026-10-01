@@ -1,0 +1,4 @@
+// expect-error: cannot read nothing.dat
+fn main() {
+    print(embed("nothing.dat"));
+}
