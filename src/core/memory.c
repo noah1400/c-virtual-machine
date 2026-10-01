@@ -94,6 +94,7 @@ void memory_heap_reset(VM *vm) {
     }
     vm->heap_spare = NULL;
     vm->heap_blocks = NULL;
+    vm->heap_first = NULL;
     vm->heap_freed = NULL;
     vm->heap_last = NULL;
     free(vm->heap_rights);
@@ -170,6 +171,44 @@ static struct HeapNode *merge(struct HeapNode *a, struct HeapNode *b) {
     b->left = merge(a, b->left);
     update(b);
     return b;
+}
+
+static struct HeapNode *rotate_right(struct HeapNode *node) {
+    struct HeapNode *left = node->left;
+    node->left = left->right;
+    left->right = node;
+    update(node);
+    return left;
+}
+
+static struct HeapNode *rotate_left(struct HeapNode *node) {
+    struct HeapNode *right = node->right;
+    node->right = right->left;
+    right->left = node;
+    update(node);
+    return right;
+}
+
+// Puts a node into a treap in address order, above the nodes of lower priority on its way
+static struct HeapNode *insert_node(struct HeapNode *root, struct HeapNode *node) {
+    if (!root) {
+        node->left = node->right = NULL;
+        update(node);
+        return node;
+    }
+    if (node->start < root->start) {
+        root->left = insert_node(root->left, node);
+        if (root->left->priority > root->priority) {
+            root = rotate_right(root);
+        }
+    } else {
+        root->right = insert_node(root->right, node);
+        if (root->right->priority > root->priority) {
+            root = rotate_left(root);
+        }
+    }
+    update(root);
+    return root;
 }
 
 static struct HeapNode *first_node(struct HeapNode *node) {
@@ -555,23 +594,26 @@ static void forget_freed(VM *vm, uint32_t low, uint32_t high) {
     vm->heap_freed = merge(before, after);
 }
 
-// Adds an allocated block, forgetting freed blocks whose space it reuses
-static int insert_block(VM *vm, uint32_t start, uint32_t size) {
+// Adds an allocated block in the room after the block before it, or before the first block, forgetting
+// freed blocks whose space it reuses. The block before lies on the way the new one takes into the treap,
+// which updates it there.
+static int insert_block(VM *vm, uint32_t start, uint32_t size, struct HeapNode *before) {
     struct HeapNode *block = new_node(vm);
     if (!block) {
         return 0;
     }
     forget_freed(vm, start - HEAP_GUARD, start + size);
 
-    struct HeapNode *before, *after;
-    split(vm->heap_blocks, start, &before, &after);
     *block = (struct HeapNode){ .start = start, .size = size, .priority = next_priority(vm), .protection = PROT_ALL };
-    block->room = room_after(vm, (uint64_t)start + size, first_node(after));
-    update(block);
     if (before) {
-        set_last_room(vm, before, block);
+        int64_t limit = (int64_t)before->start + before->size + HEAP_GUARD + before->room;
+        block->room = limit - ((int64_t)start + size + HEAP_GUARD);
+        before->room = room_after(vm, (uint64_t)before->start + before->size, block);
+    } else {
+        block->room = room_after(vm, (uint64_t)start + size, vm->heap_first);
+        vm->heap_first = block;
     }
-    vm->heap_blocks = merge(merge(before, block), after);
+    vm->heap_blocks = insert_node(vm->heap_blocks, block);
     vm->heap_last = block;
     set_rights(vm, start, size, HEAP_UNIT_USED | PROT_ALL);
     return 1;
@@ -603,11 +645,12 @@ uint32_t memory_allocate(VM *vm, uint32_t size) {
     // First fit: before the first block, or in the lowest gap after a block that has room
     uint64_t base = ((uint64_t)low + HEAP_ALIGNMENT - 1) & ~(uint64_t)(HEAP_ALIGNMENT - 1);
     uint64_t candidate;
-    if (room_after(vm, base, first_node(vm->heap_blocks)) >= (int64_t)needed) {
+    struct HeapNode *before = NULL;
+    if (room_after(vm, base, vm->heap_first) >= (int64_t)needed) {
         candidate = base + HEAP_GUARD;
     } else if (most_room(vm->heap_blocks) >= (int64_t)needed) {
-        struct HeapNode *block = first_fit(vm->heap_blocks, (int64_t)needed);
-        candidate = (uint64_t)block->start + block->size + HEAP_GUARD;
+        before = first_fit(vm->heap_blocks, (int64_t)needed);
+        candidate = (uint64_t)before->start + before->size + HEAP_GUARD;
     } else {
         vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Out of heap memory allocating %u bytes", size);
         return 0;
@@ -615,7 +658,7 @@ uint32_t memory_allocate(VM *vm, uint32_t size) {
     if (access_range(vm, (uint32_t)candidate, NULL, (uint32_t)needed, PROT_WRITE, 0) != VM_ERROR_NONE) {
         return 0;
     }
-    if (!insert_block(vm, (uint32_t)candidate, (uint32_t)needed)) {
+    if (!insert_block(vm, (uint32_t)candidate, (uint32_t)needed, before)) {
         vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Out of host memory for heap blocks");
         return 0;
     }
@@ -676,6 +719,9 @@ int memory_free(VM *vm, uint32_t address) {
         set_last_room(vm, before, first_node(after));
     }
     vm->heap_blocks = merge(before, after);
+    if (vm->heap_first == block) {
+        vm->heap_first = first_node(after);
+    }
     if (vm->heap_last == block) {
         vm->heap_last = NULL;
     }

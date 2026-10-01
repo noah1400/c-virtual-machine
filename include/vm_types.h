@@ -92,6 +92,7 @@ typedef struct {
     uint32_t code_end;       // End of the loaded code
     uint32_t image_end;      // End of the loaded code and data, where the heap starts
     struct HeapNode *heap_blocks;  // allocated heap blocks, by address
+    struct HeapNode *heap_first;   // the one with the lowest address
     struct HeapNode *heap_freed;   // freed heap blocks whose space is not reused yet
     struct HeapNode *heap_last;    // the block of the latest heap access
     struct HeapNode *heap_spare;   // nodes to reuse
