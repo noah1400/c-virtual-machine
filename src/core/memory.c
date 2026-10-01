@@ -646,7 +646,13 @@ uint32_t memory_allocate(VM *vm, uint32_t size) {
         return 0;
     }
 
-    memory_set(vm, (uint32_t)candidate, 0, (uint32_t)needed);
+    // Without paging, the check above already found the block inside memory
+    if (vm->control[CR_PTB]) {
+        memory_set(vm, (uint32_t)candidate, 0, (uint32_t)needed);
+    } else {
+        memset(vm->memory + candidate, 0, needed);
+        cpu_forget(vm, (uint32_t)candidate, (uint32_t)needed);
+    }
     return (uint32_t)candidate;
 }
 
