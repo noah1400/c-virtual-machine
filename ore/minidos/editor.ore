@@ -15,10 +15,10 @@ const TEXT_ROWS = ROWS - 2;         // between the title and the status line
 const TAB_STOP = 8;
 
 const TITLE_COLORS: u8 = 0x70;      // black on white
-const TEXT_COLORS: u8 = 0x1F;       // bright white on blue
-const CURSOR_COLORS: u8 = 0x71;     // blue on white
-const STATUS_COLORS: u8 = 0x30;     // black on cyan
-const ANSWER_CURSOR_COLORS: u8 = 0x03;
+const TEXT_COLORS: u8 = 0x4F;       // bright white on blue
+const CURSOR_COLORS: u8 = 0x74;     // blue on white
+const STATUS_COLORS: u8 = 0x60;     // black on cyan
+const ANSWER_CURSOR_COLORS: u8 = 0x06;
 
 const CTRL_F = 0x06;
 const CTRL_G = 0x07;
