@@ -184,6 +184,28 @@ INLINE void written(VM *vm, uint32_t address, uint32_t size) {
     }
 }
 
+// MEMCPY when copy is set and MEMSET when not, of size bytes to an address: 0 if they would fault, 2 if they
+// wrote decoded instructions, else 1
+INLINE uint32_t fill(VM *vm, uint32_t to, uint32_t from, uint32_t size, int copy) {
+    uint8_t *slot, *source = NULL;
+    if (size == 0) {
+        return 1;
+    }
+    if (!reach(vm, to, size, PROT_WRITE, &slot) || (copy && !reach(vm, from, size, PROT_READ, &source))) {
+        return 0;
+    }
+    if (copy) {
+        memmove(slot, source, size);
+    } else {
+        memset(slot, (uint8_t)from, size);
+    }
+    if (to < vm->decoded_high) {
+        cpu_forget(vm, to, size);
+        return 2;
+    }
+    return 1;
+}
+
 // Where a push at sp writes, or NULL if it would fault
 OUTLINE uint8_t *push_slot(VM *vm, uint32_t sp) {
     uint32_t low = vm->control[CR_SLO];
@@ -1146,25 +1168,17 @@ dispatch:
             r[R2_SP] = sp + d->imm;
             NEXT();
         }
+        // MEMCPY and MEMSET know what they are without d->kind, which is D_JIT where compiled code hands them back
         TARGET(D_MEMCPY):
-        TARGET(D_MEMSET): {
-            uint32_t size = (r[d->op] & d->mask) + d->imm, from = r[d->b], to = r[d->a];
-            uint8_t *source = NULL;
-            if (size == 0) {
-                NEXT();
-            }
-            if (!reach(vm, to, size, PROT_WRITE, &slot) ||
-                (d->kind == D_MEMCPY && !reach(vm, from, size, PROT_READ, &source))) {
+            if (!fill(vm, r[d->a], r[d->b], (r[d->op] & d->mask) + d->imm, 1)) {
                 goto stop;
             }
-            if (d->kind == D_MEMCPY) {
-                memmove(slot, source, size);
-            } else {
-                memset(slot, (uint8_t)from, size);
-            }
-            written(vm, to, size);
             NEXT();
-        }
+        TARGET(D_MEMSET):
+            if (!fill(vm, r[d->a], r[d->b], (r[d->op] & d->mask) + d->imm, 0)) {
+                goto stop;
+            }
+            NEXT();
         TARGET(D_SYSCALL):
             // The heap and copy syscalls of supervisor mode, which report errors in R5 instead of faulting
             if (!(r[R4_SR] & SYS_FLAG) || d->imm < SYS_ALLOC || d->imm > SYS_MEMCPY) {
