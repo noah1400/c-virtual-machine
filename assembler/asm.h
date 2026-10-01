@@ -215,6 +215,7 @@ typedef struct {
     const SourceLine *structure_line;
 
     int object;         // assembling an object file, where addresses are relative to their section
+    uint32_t memory_kb; // the memory the program asks for, 0 for none
     Relocation *relocations;
     size_t relocation_count;
     size_t relocation_capacity;

@@ -156,6 +156,7 @@ fn usage(handle: int) {
     io.write(handle, "  -S        write the assembly instead, to FILE or the program with .asm\n");
     io.write(handle, "  -g0       leave out the .loc lines and the binary's debug information\n");
     io.write(handle, "  -b ADDR   put the program at ADDR instead of 0, as vmasm -b does\n");
+    io.write(handle, "  -m KB     ask for KB of memory, as vmasm -m does\n");
     io.write(handle, "  -I DIR    look for imported modules in DIR as well\n");
     io.write(handle, "  -L DIR    take the runtime and the standard library from DIR\n");
     io.write(handle, "  -h        show this help\n");
@@ -189,9 +190,9 @@ fn main(args: [][]u8) int {
             assembly_only = true;
         } else if (str.equal(arg, "-g0")) {
             program.no_loc = true;
-        } else if ((str.equal(arg, "-o") || str.equal(arg, "-I") || str.equal(arg, "-L") || str.equal(arg, "-b")) &&
-                   i + 1 < args.len) {
-            // The vmc script gives the base address to vmasm
+        } else if ((str.equal(arg, "-o") || str.equal(arg, "-I") || str.equal(arg, "-L") || str.equal(arg, "-b") ||
+                    str.equal(arg, "-m")) && i + 1 < args.len) {
+            // The vmc script gives the base address and the memory to vmasm
             i += 1;
             if (arg[1] == 'o') {
                 output = args[i];

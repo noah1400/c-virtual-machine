@@ -192,6 +192,7 @@ static void usage(FILE *out) {
                  "  -S        write the assembly instead, to FILE or the program with .asm\n"
                  "  -g0       leave out the .loc lines and the binary's debug information\n"
                  "  -b ADDR   put the program at ADDR instead of 0, as vmasm -b does\n"
+                 "  -m KB     ask for KB of memory, as vmasm -m does\n"
                  "  -I DIR    look for imported modules in DIR as well\n"
                  "  -L DIR    take the runtime and the standard library from DIR\n"
                  "  -h        show this help\n");
@@ -223,14 +224,19 @@ static int write_file(const char *path, const char *text, size_t size) {
 
 // Runs vmasm from the directory vmc0 lives in, or else from the PATH. Assembly files given with
 // relative paths are found from the current directory.
-static int assemble(const char *self, const char *library, const char *base, const char *source,
-                    const char *output, int no_debug) {
+static int assemble(const char *self, const char *library, const char *base, const char *memory,
+                    const char *source, const char *output, int no_debug) {
     const char *slash = strrchr(self, '/');
     char *vmasm = slash ? join(self, (size_t)(slash - self), "vmasm", "") : copy_text("vmasm", 5);
-    char *args[12] = { vmasm, "-I", (char *)library, "-I", ".", (char *)source, "-o", (char *)output, "-b",
+    char *args[14] = { vmasm, "-I", (char *)library, "-I", ".", (char *)source, "-o", (char *)output, "-b",
                        (char *)base };
+    int count = 10;
+    if (memory) {
+        args[count++] = "-m";
+        args[count++] = (char *)memory;
+    }
     if (no_debug) {
-        args[10] = "-S";
+        args[count++] = "-S";
     }
 
     fflush(stdout);
@@ -249,7 +255,7 @@ static int assemble(const char *self, const char *library, const char *base, con
 
 int main(int argc, char **argv) {
     Program program = { 0 };
-    const char *source = NULL, *output = NULL, *base = "0";
+    const char *source = NULL, *output = NULL, *base = "0", *memory = NULL;
     int assembly_only = 0;
 
     // The runtime and the standard library live in ore/lib next to vmc0
@@ -267,11 +273,13 @@ int main(int argc, char **argv) {
         } else if (strcmp(arg, "-g0") == 0) {
             program.no_loc = 1;
         } else if ((strcmp(arg, "-o") == 0 || strcmp(arg, "-I") == 0 || strcmp(arg, "-L") == 0 ||
-                    strcmp(arg, "-b") == 0) && i + 1 < argc) {
+                    strcmp(arg, "-b") == 0 || strcmp(arg, "-m") == 0) && i + 1 < argc) {
             if (arg[1] == 'o') {
                 output = argv[++i];
             } else if (arg[1] == 'b') {
                 base = argv[++i];
+            } else if (arg[1] == 'm') {
+                memory = argv[++i];
             } else if (arg[1] == 'I') {
                 program.include_dirs[program.include_dir_count++] = argv[++i];
             } else {
@@ -308,7 +316,7 @@ int main(int argc, char **argv) {
     if (assembly_only) {
         return 0;
     }
-    if (!assemble(argv[0], program.library, base, path, output, program.no_loc)) {
+    if (!assemble(argv[0], program.library, base, memory, path, output, program.no_loc)) {
         fprintf(stderr, "vmc0: error: vmasm could not assemble %s\n", path);
         return 1;
     }

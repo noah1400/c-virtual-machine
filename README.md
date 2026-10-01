@@ -105,7 +105,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-j COUNT` | [Compile code](#compiled-code) into host instructions once COUNT jumps went to it, 1 to 255, or never with 0 (default 32) |
 | `-k FILE` | Take [keyboard](#keyboard) input from a key script |
 | `-L SPEC` | Print values each time execution reaches a location (see below). Can be given up to 32 times |
-| `-m KB` | Memory size in KB, 128 to 1048576 (default 1024) |
+| `-m KB` | Memory size in KB, 128 to 1048576 (default: what the program asks for, or else 1024) |
 | `-n COUNT` | Stop with an error after COUNT instructions |
 | `-p` | Print an execution profile on stderr when the program stops |
 | `-s` | Print [display](#display) frames as plain text instead of drawing them |
@@ -864,6 +864,7 @@ The runtime of Ore programs and `std/cpu` are libraries.
 | `-o FILE` | Output file (default: the input with a `.bin` extension, or `.o` with `-c`) |
 | `-c` | Write an object file for [vmld](#linking) instead of a program |
 | `-b ADDR` | Put the code at ADDR, a multiple of 4096 below 0x80000000, for a program that shares memory with another one at 0 |
+| `-m KB` | Ask for KB of memory, 128 to 1048576, which `vm` then gives the program unless its own `-m` says otherwise |
 | `-l FILE` | Write a listing: line number, address, encoded bytes and source. Lines from macros are marked with `+` |
 | `-I DIR` | Also search DIR for included files |
 | `-D NAME[=VALUE]` | Define a constant, 1 unless a value is given |
@@ -925,6 +926,7 @@ An address may be added to or subtracted from a number, and two addresses in the
 | `-o FILE` | Output file (default: the first object file with a `.bin` extension) |
 | `-e NAME` | Start at the exported code label NAME |
 | `-b ADDR` | Put the code at ADDR, a multiple of 4096 below 0x80000000 |
+| `-m KB` | Ask for KB of memory, as `vmasm -m` does |
 | `-M` | Print where each file's sections and exported symbols went |
 | `-S` | Leave out debug information |
 | `-h` | Show help |
@@ -947,6 +949,7 @@ Usage: vmc [options] program.ore [file.asm...]
   -S        write the assembly instead, to FILE or the program with .asm
   -g0       leave out the .loc lines and the binary's debug information
   -b ADDR   put the program at ADDR instead of 0, as vmasm -b does
+  -m KB     ask for KB of memory, as vmasm -m does
   -I DIR    look for imported modules in DIR as well
   -L DIR    take the runtime and the standard library from DIR
 ```
@@ -977,7 +980,7 @@ The error messages of both compilers name the file and line of the first problem
 [MiniDos](docs/minidos.md) is a small DOS written in Ore, in `ore/minidos`. It lives above the first megabyte, built with `vmc -b 0x100000`, and runs programs below it in user mode, so any program `vmc` builds runs under it unchanged: their syscalls arrive at MiniDos as privilege violations, and it serves them from its own disk and console. `make` builds `minidos.bin` and `minidos.img`, a 4 MB disk with the programs `SORT` and `FIND` on it:
 
 ```console
-$ ./vm -m 4096 -b minidos.img minidos.bin
+$ ./vm -b minidos.img minidos.bin
 
 Starting MiniDos...
 
@@ -1136,16 +1139,17 @@ All fields are little-endian.
 |---|---|---|
 | 0 | 4 | Magic `VM32` |
 | 4 | 2 | Major version (2) |
-| 6 | 2 | Minor version (0) |
-| 8 | 4 | Header size (36) |
+| 6 | 2 | Minor version (1) |
+| 8 | 4 | Header size (40) |
 | 12 | 4 | Code base |
 | 16 | 4 | Code size |
 | 20 | 4 | Data base |
 | 24 | 4 | Data size |
 | 28 | 4 | Size of the debug information |
 | 32 | 4 | Entry point |
+| 36 | 4 | Memory in KB that the program asks for, or 0 |
 
-The VM loads code and data at their bases, which must leave room for the stack at the top of memory. It rejects other major versions, since their instruction encoding differs.
+The VM loads code and data at their bases, which must leave room for the stack at the top of memory. Unless `vm -m` says otherwise, it gives the program the memory it asks for, or else 1 MB. Headers of version 2.0 end at offset 36 and ask for no memory. The VM rejects other major versions, since their instruction encoding differs.
 
 The debug information holds the symbols, then the source lines, then the code that `.inline` marked, which files from before inlining leave out. Each string is stored as a 16-bit length followed by its bytes:
 

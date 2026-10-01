@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "asm.h"
+#include "binfmt.h"
 #include "vm_types.h"
 
 static void print_usage(FILE *out, const char *name) {
@@ -10,6 +11,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -o FILE   Write the binary to FILE (default: input with a .bin extension)\n");
     fprintf(out, "  -c        Write an object file for vmld instead (default extension .o)\n");
     fprintf(out, "  -b ADDR   Put the code at ADDR, a multiple of 4096 below 0x80000000, and the data after it\n");
+    fprintf(out, "  -m KB     Ask for KB of memory, which vm gives the program unless its -m says otherwise\n");
     fprintf(out, "  -l FILE   Write a listing to FILE\n");
     fprintf(out, "  -I DIR    Also search DIR for included files\n");
     fprintf(out, "  -D NAME[=VALUE]  Define a constant, 1 unless a value is given\n");
@@ -43,7 +45,7 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
         int takes_value = strcmp(arg, "-o") == 0 || strcmp(arg, "-l") == 0 || strcmp(arg, "-b") == 0 ||
-                          strncmp(arg, "-I", 2) == 0 || strncmp(arg, "-D", 2) == 0;
+                          strcmp(arg, "-m") == 0 || strncmp(arg, "-I", 2) == 0 || strncmp(arg, "-D", 2) == 0;
         // -I and -D also accept their value attached, as in -DNAME
         const char *value = takes_value && arg[2] != '\0' ? arg + 2 : NULL;
 
@@ -66,6 +68,13 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             base = (uint32_t)address;
+        } else if (strcmp(arg, "-m") == 0) {
+            as.memory_kb = vm32_memory_kb(value);
+            if (!as.memory_kb) {
+                fprintf(stderr, "vmasm: error: the memory size must be between %d and %d KB\n", VM32_MIN_MEMORY_KB,
+                        VM32_MAX_MEMORY_KB);
+                return 1;
+            }
         } else if (strncmp(arg, "-I", 2) == 0) {
             if (as.include_dir_count == ASM_MAX_INCLUDE_DIRS) {
                 fprintf(stderr, "vmasm: error: too many include directories\n");
@@ -105,8 +114,8 @@ int main(int argc, char *argv[]) {
         print_usage(stderr, argv[0]);
         return 1;
     }
-    if (base && as.object) {
-        fprintf(stderr, "vmasm: error: -b places a program, not an object file; give it to vmld instead\n");
+    if ((base || as.memory_kb) && as.object) {
+        fprintf(stderr, "vmasm: error: -b and -m describe a program, not an object file; give them to vmld instead\n");
         return 1;
     }
     as.sections[SECTION_TEXT].base = base;

@@ -54,6 +54,7 @@ typedef struct {
     int count;
     int errors;
     uint32_t base;      // where the code starts
+    uint32_t memory_kb; // what the program asks for, or 0
 } Linker;
 
 static void link_error(Linker *ld, const char *path, const char *format, const char *detail) {
@@ -419,7 +420,7 @@ static int link_program(Linker *ld, const char *output, const char *entry_name, 
     int ok = 0;
     if (ld->errors == 0) {
         Buffer b = { 0 };
-        vm32_write_header(&b, ld->base, code_end - ld->base, data_start, end - data_start, entry);
+        vm32_write_header(&b, ld->base, code_end - ld->base, data_start, end - data_start, entry, ld->memory_kb);
         buffer_put(&b, image, code_end - ld->base);
         buffer_put(&b, image + (data_start - ld->base), end - data_start);
         size_t symbols_start = b.size;
@@ -446,6 +447,7 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -o FILE   Write the program to FILE (default: the first object file with a .bin extension)\n");
     fprintf(out, "  -e NAME   Start at the exported code label NAME\n");
     fprintf(out, "  -b ADDR   Put the code at ADDR, a multiple of 4096 below 0x80000000, and the data after it\n");
+    fprintf(out, "  -m KB     Ask for KB of memory, which vm gives the program unless its -m says otherwise\n");
     fprintf(out, "  -M        Print where the sections and exported symbols went\n");
     fprintf(out, "  -S        Leave out debug information\n");
     fprintf(out, "  -h        Show this help\n");
@@ -486,6 +488,14 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
             ld.base = (uint32_t)address;
+        } else if (strcmp(arg, "-m") == 0 && i + 1 < argc) {
+            ld.memory_kb = vm32_memory_kb(argv[++i]);
+            if (!ld.memory_kb) {
+                fprintf(stderr, "vmld: error: the memory size must be between %d and %d KB\n", VM32_MIN_MEMORY_KB,
+                        VM32_MAX_MEMORY_KB);
+                free(ld.objects);
+                return 1;
+            }
         } else if (strcmp(arg, "-M") == 0) {
             map = 1;
         } else if (strcmp(arg, "-S") == 0) {

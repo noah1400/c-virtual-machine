@@ -72,7 +72,7 @@ int output_binary(Assembler *as, const char *path, int with_debug) {
     uint32_t data_size = data->end - data->base;
     Buffer b = { 0 };
 
-    vm32_write_header(&b, code->base, code_size, data->base, data_size, (uint32_t)as->entry);
+    vm32_write_header(&b, code->base, code_size, data->base, data_size, (uint32_t)as->entry, as->memory_kb);
     buffer_put(&b, code->bytes, code_size);
     buffer_put(&b, data->bytes, data_size);
 

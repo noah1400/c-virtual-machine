@@ -6,7 +6,7 @@
 #include "objfmt.h"
 
 void vm32_write_header(Buffer *b, uint32_t code_base, uint32_t code_size, uint32_t data_base, uint32_t data_size,
-                       uint32_t entry) {
+                       uint32_t entry, uint32_t memory_kb) {
     buffer_put(b, VM32_MAGIC, 4);
     buffer_u16(b, VM32_VERSION_MAJOR);
     buffer_u16(b, VM32_VERSION_MINOR);
@@ -17,6 +17,16 @@ void vm32_write_header(Buffer *b, uint32_t code_base, uint32_t code_size, uint32
     buffer_u32(b, data_size);
     buffer_u32(b, 0);
     buffer_u32(b, entry);
+    buffer_u32(b, memory_kb);
+}
+
+uint32_t vm32_memory_kb(const char *text) {
+    char *end;
+    unsigned long kb = strtoul(text, &end, 10);
+    if (*text < '0' || *text > '9' || *end != '\0' || kb < VM32_MIN_MEMORY_KB || kb > VM32_MAX_MEMORY_KB) {
+        return 0;
+    }
+    return (uint32_t)kb;
 }
 
 void vm32_finish(Buffer *b, size_t symbols_start) {
@@ -59,7 +69,7 @@ const char *vm32_parse(const uint8_t *image, uint32_t size, Vm32Image *out) {
     if (!vm32_is_image(image, size)) {
         return "Not a VM32 binary";
     }
-    if (size < VM32_HEADER_SIZE) {
+    if (size < VM32_MIN_HEADER_SIZE) {
         return "Truncated VM32 header";
     }
 
@@ -75,10 +85,11 @@ const char *vm32_parse(const uint8_t *image, uint32_t size, Vm32Image *out) {
     if (out->version_major != VM32_VERSION_MAJOR) {
         return "Unsupported VM32 format version";
     }
-    if (out->header_size < VM32_HEADER_SIZE || out->header_size > size) {
+    if (out->header_size < VM32_MIN_HEADER_SIZE || out->header_size > size) {
         return "Invalid header size in program file";
     }
     out->entry = read_le32(image + 32);
+    out->memory_kb = out->header_size >= VM32_HEADER_SIZE ? read_le32(image + 36) : 0;
     if ((uint64_t)out->header_size + out->code_size + out->data_size + out->symbol_size > size) {
         return "Segment sizes exceed program file size";
     }

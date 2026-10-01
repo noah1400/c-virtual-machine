@@ -42,9 +42,9 @@ vmc.bin: vmc1.bin vm vmasm
 	./vmasm -I ./ore/lib -I . $@.asm -o $@
 	rm -f $@.asm
 
-# MiniDos lives above the programs it runs, which start at 0
+# MiniDos lives above the programs it runs, which start at 0, and asks for 4 MB of memory
 minidos.bin: vmc.bin vm vmasm $(MINIDOS_SRC) $(ORE_LIB)
-	./vmc -b 0x100000 ore/minidos/main.ore -o $@
+	./vmc -b 0x100000 -m 4096 ore/minidos/main.ore -o $@
 
 # MiniDos only loads the code and data of a program, so its programs leave out debug information
 $(BUILD)/minidos/%.bin: ore/minidos/programs/%.ore vmc.bin vm vmasm $(ORE_LIB)
@@ -56,7 +56,7 @@ minidos.img: minidos.bin $(MINIDOS_PROGRAMS)
 	dd if=/dev/zero of=$@ bs=512 count=8192 2> /dev/null
 	(echo FORMAT MINIDOS; for p in $(MINIDOS_PROGRAMS); do \
 	    echo "IMPORT $$p $$(basename $$p .bin | tr a-z A-Z).EXE"; done; echo EXIT) | \
-	    ./vm -m 4096 -b $@ minidos.bin > /dev/null
+	    ./vm -b $@ minidos.bin > /dev/null
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)

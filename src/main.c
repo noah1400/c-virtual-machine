@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "binfmt.h"
 #include "cpu.h"
 #include "debug.h"
 #include "debugger.h"
@@ -12,8 +13,8 @@
 
 #define DEFAULT_MEMORY_KB 1024
 #define DEFAULT_STACK_KB  (VM_STACK_SIZE / 1024)
-#define MIN_MEMORY_KB     (VM_MIN_MEMORY_SIZE / 1024)
-#define MAX_MEMORY_KB     1048576
+#define MIN_MEMORY_KB     VM32_MIN_MEMORY_KB
+#define MAX_MEMORY_KB     VM32_MAX_MEMORY_KB
 #define MAX_HISTORY       1000000
 #define MAX_LOGPOINTS     32
 
@@ -52,8 +53,8 @@ static void print_usage(FILE *out, const char *name) {
                  "            never (default %d)\n", VM_JIT_THRESHOLD);
     fprintf(out, "  -k FILE   Take keyboard input from a key script that releases keys at instruction counts\n");
     fprintf(out, "  -L SPEC   Print values each time execution reaches a location, as in -L 'loop:R8,[count]:d'\n");
-    fprintf(out, "  -m KB     Memory size in KB, %d to %d (default %d)\n", MIN_MEMORY_KB, MAX_MEMORY_KB,
-            DEFAULT_MEMORY_KB);
+    fprintf(out, "  -m KB     Memory size in KB, %d to %d (default what the program asks for, or %d)\n",
+            MIN_MEMORY_KB, MAX_MEMORY_KB, DEFAULT_MEMORY_KB);
     fprintf(out, "  -n COUNT  Stop with an error after COUNT instructions\n");
     fprintf(out, "  -p        Print an execution profile by label on stderr\n");
     fprintf(out, "  -s        Print display frames as plain text instead of drawing them\n");
@@ -67,7 +68,6 @@ static void print_usage(FILE *out, const char *name) {
 // Returns 1 to run, 0 to exit successfully, -1 on a usage error
 static int parse_options(int argc, char **argv, Options *opts) {
     memset(opts, 0, sizeof(*opts));
-    opts->memory_size = DEFAULT_MEMORY_KB * 1024;
     opts->stack_size = DEFAULT_STACK_KB * 1024;
     opts->jit_threshold = VM_JIT_THRESHOLD;
 
@@ -177,11 +177,21 @@ static int parse_options(int argc, char **argv, Options *opts) {
         print_usage(stderr, argv[0]);
         return -1;
     }
-    if (opts->stack_size >= opts->memory_size) {
-        fprintf(stderr, "vm: the stack size must be at least 4 KB and less than the memory\n");
-        return -1;
-    }
     return 1;
+}
+
+// The memory a binary asks for in its header, or else the default
+static uint32_t requested_memory(const char *path) {
+    uint32_t size, kb = 0;
+    const char *problem;
+    uint8_t *image = read_binary_file(path, &size, &problem);
+    Vm32Image bin;
+    if (image && vm32_is_image(image, size) && !vm32_parse(image, size, &bin) && bin.memory_kb >= MIN_MEMORY_KB &&
+        bin.memory_kb <= MAX_MEMORY_KB) {
+        kb = bin.memory_kb;
+    }
+    free(image);
+    return (kb ? kb : DEFAULT_MEMORY_KB) * 1024;
 }
 
 static void report_fault(const VM *vm) {
@@ -201,6 +211,14 @@ int main(int argc, char *argv[]) {
 
     if (opts.disassemble) {
         return disassemble_file(opts.program);
+    }
+
+    if (!opts.memory_size) {
+        opts.memory_size = requested_memory(opts.program);
+    }
+    if (opts.stack_size >= opts.memory_size) {
+        fprintf(stderr, "vm: the stack size must be at least 4 KB and less than the memory\n");
+        return 1;
     }
 
     VM vm;

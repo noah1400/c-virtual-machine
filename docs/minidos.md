@@ -4,7 +4,7 @@ MiniDos is a small DOS for VM32, written in [Ore](language.md). It keeps its fil
 
 ```console
 $ make
-$ ./vm -m 4096 -b minidos.img minidos.bin
+$ ./vm -b minidos.img minidos.bin
 
 Starting MiniDos...
 
@@ -17,7 +17,7 @@ A:\>DIR | FIND "TXT"
 FRUIT    TXT            11
 ```
 
-`make` builds `minidos.bin` and `minidos.img`, a 4 MB disk that MiniDos formatted itself and filled with the programs in `ore/minidos/programs`, `SORT.EXE` and `FIND.EXE`. Another disk takes `dd if=/dev/zero of=disk.img bs=512 count=8192` and `FORMAT`. MiniDos needs 2 MB of memory or more, so `vm` has to be given `-m`.
+`make` builds `minidos.bin` and `minidos.img`, a 4 MB disk that MiniDos formatted itself and filled with the programs in `ore/minidos/programs`, `SORT.EXE` and `FIND.EXE`. Another disk takes `dd if=/dev/zero of=disk.img bs=512 count=8192` and `FORMAT`. MiniDos asks for 4 MB of memory, which `vm` gives it.
 
 - **Starting:** MiniDos runs `\AUTOEXEC.BAT` when the disk has one. `-e` after `minidos.bin` shows each command after the prompt, for sessions that come from a file.
 - **Stopping:** `EXIT` or the end of the input stops MiniDos and the VM.
@@ -95,7 +95,7 @@ A new program is any Ore program that reads and writes with `std/io`, best built
 
 ```console
 $ ./vmc -g0 hello.ore
-$ ./vm -m 4096 -b minidos.img minidos.bin
+$ ./vm -b minidos.img minidos.bin
 A:\>IMPORT hello.bin HELLO.EXE
 A:\>HELLO
 ```

@@ -7,9 +7,12 @@
 // VM32 binary layout: header, code bytes, data bytes, symbol table
 #define VM32_MAGIC           "VM32"
 #define VM32_VERSION_MAJOR   2
-#define VM32_VERSION_MINOR   0
-#define VM32_HEADER_SIZE     36
+#define VM32_VERSION_MINOR   1
+#define VM32_HEADER_SIZE     40
+#define VM32_MIN_HEADER_SIZE 36     // headers of version 2.0 end before the memory field
 #define VM32_MAX_FILE_SIZE   (16u * 1024 * 1024)
+#define VM32_MIN_MEMORY_KB   128
+#define VM32_MAX_MEMORY_KB   1048576
 
 typedef struct {
     uint16_t version_major;
@@ -21,6 +24,7 @@ typedef struct {
     uint32_t data_size;
     uint32_t symbol_size;
     uint32_t entry;
+    uint32_t memory_kb;     // the memory the program asks for, 0 for the VM's default
     const uint8_t *code;
     const uint8_t *data;
     const uint8_t *symbols;
@@ -50,7 +54,10 @@ struct Buffer;
 
 // Writes a header; code, data and the symbol table follow, and vm32_finish records the table's size
 void vm32_write_header(struct Buffer *b, uint32_t code_base, uint32_t code_size, uint32_t data_base,
-                       uint32_t data_size, uint32_t entry);
+                       uint32_t data_size, uint32_t entry, uint32_t memory_kb);
+
+// A memory size in KB as -m takes it, or 0 when text is no number between the limits
+uint32_t vm32_memory_kb(const char *text);
 void vm32_finish(struct Buffer *b, size_t symbols_start);
 
 // The symbol table holds a count of symbols, the symbols, a count of source lines and the lines, and then a

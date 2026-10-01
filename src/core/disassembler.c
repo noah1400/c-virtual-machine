@@ -224,6 +224,9 @@ int disassemble_file(const char *filename) {
         printf("VM32 binary v%u.%u\n", bin.version_major, bin.version_minor);
     }
     printf("  Entry point:  0x%04X\n", bin.entry);
+    if (bin.memory_kb) {
+        printf("  Memory:       %u KB\n", bin.memory_kb);
+    }
     printf("  Code:         0x%04X, %u bytes\n", bin.code_base, bin.code_size);
     printf("  Data:         0x%04X, %u bytes\n", bin.data_base, bin.data_size);
     printf("  Symbol table: %u bytes", bin.symbol_size);
