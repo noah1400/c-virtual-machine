@@ -58,6 +58,17 @@ void vm_catch_signals(void) {
     sigaction(SIGHUP, &action, NULL);
 }
 
+// Requests the interrupt that the program chose for Ctrl-C; 0 when it chose none, or has not entered the
+// handler since the last Ctrl-C, which then stops the VM
+int vm_ctrl_c(VM *vm) {
+    if (!vm->ctrl_c_vector || vm->ctrl_c_waiting) {
+        return 0;
+    }
+    vm->ctrl_c_waiting = 1;
+    cpu_request_interrupt(vm, vm->ctrl_c_vector);
+    return 1;
+}
+
 // cpu_run stops at least this often to let vm_step notice a stop signal
 #define RUN_CHUNK (1u << 20)
 
@@ -133,6 +144,9 @@ int vm_step(VM *vm) {
     if (vm->instruction_limit && vm->instruction_count >= vm->instruction_limit) {
         vm->error_pc = vm->registers[R3_PC];
         return vm_raise(vm, VM_ERROR_INSTRUCTION_LIMIT, "Instruction limit of %u reached", vm->instruction_limit);
+    }
+    if (stop_signal == SIGINT && vm_ctrl_c(vm)) {
+        stop_signal = 0;
     }
     if (stop_signal) {
         vm->error_pc = vm->registers[R3_PC];

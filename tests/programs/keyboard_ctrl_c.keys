@@ -1,0 +1,3 @@
+# Ctrl-C between two keys, and once more later
+100 a\x03b
++500 \x03

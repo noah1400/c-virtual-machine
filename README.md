@@ -372,6 +372,7 @@ Syscall buffers and heap blocks are virtual addresses too. The vector table is r
 | 0x60 | Keyboard status | Bit 0: a key is waiting. Bit 1: the input has ended | Ignored |
 | 0x61 | Keyboard data | The next key, or 0 if none is waiting | Ignored |
 | 0x62 | Keyboard vector | Current vector | Sets the vector requested while keys wait; 0 turns it off |
+| 0x63 | Ctrl-C vector | Current vector | Sets the vector that Ctrl-C requests instead of stopping the machine; 0 turns it off |
 | 0x70 | Disk sector | First sector | Sets the first sector of the next transfer |
 | 0x71 | Disk buffer | Buffer address | Sets the address of the transfer buffer |
 | 0x72 | Disk count | Sector count | Sets the number of sectors per transfer (default 1) |
@@ -399,7 +400,7 @@ $ ./vm -s snake.bin 0 < keys.txt | tail -26 | head -4
 
 #### Keyboard
 
-The keyboard reads stdin directly. The first access to one of its ports switches a terminal to unbuffered input without echo, and `vm` restores the terminal when the program ends. Ctrl-C still stops the machine, while the other control keys, Ctrl-Z, Ctrl-S and Ctrl-Q among them, reach the program. Keys are the bytes typed, except for the arrow and editing keys:
+The keyboard reads stdin directly. The first access to one of its ports switches a terminal to unbuffered input without echo, and `vm` restores the terminal when the program ends. Ctrl-C stops the machine, while the other control keys, Ctrl-Z, Ctrl-S and Ctrl-Q among them, reach the program. A program that writes a vector to port 0x63 gets that interrupt for Ctrl-C instead, and only a second Ctrl-C before it has entered the handler stops the machine. A Ctrl-C byte from a pipe or a key script requests the interrupt as well, when the program reads the keyboard. Keys are the bytes typed, except for the arrow and editing keys:
 
 | Key | Code |
 |---|---|

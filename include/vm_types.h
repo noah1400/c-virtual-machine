@@ -67,6 +67,8 @@ typedef struct {
     uint8_t break_requested; // Set by the DEBUG instruction for the debugger
     uint32_t irq_mask[8];    // Device interrupts waiting for the interrupt flag, one bit per vector
     uint8_t irq_pending;     // Some bit of irq_mask is set
+    uint8_t ctrl_c_vector;   // The interrupt that Ctrl-C requests instead of stopping the VM, or 0
+    uint8_t ctrl_c_waiting;  // Ctrl-C requested it, and the program has not entered its handler yet
     uint8_t entered_interrupt;  // The current step entered an interrupt handler
     uint8_t exception;          // Vector of a fault the current step delivered to its handler, or 0
     char exception_message[256];

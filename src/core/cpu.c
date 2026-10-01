@@ -245,6 +245,9 @@ int cpu_deliver_interrupt(VM *vm) {
     if (vector < 0) {
         return 0;
     }
+    if (vector == vm->ctrl_c_vector) {
+        vm->ctrl_c_waiting = 0;
+    }
     cpu_interrupt(vm, (uint8_t)vector);
     return 1;
 }

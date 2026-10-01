@@ -18,6 +18,7 @@
 
 // Keys are the bytes read from stdin, except that the escape sequences of the arrow and editing keys
 // become the codes from 0x100 on, and other escape sequences are dropped
+#define KEY_CTRL_C    0x03
 #define KEY_ESCAPE    0x1B
 #define KEY_UP        0x100
 #define KEY_HOME      0x104
@@ -121,10 +122,15 @@ static int escape_key(int final, int number) {
 }
 
 // Moves waiting input into the queue; a terminal sends a whole escape sequence at once, so an
-// escape that nothing follows yet, or another escape, is the Escape key
-static void keyboard_poll(const VM *vm, KeyboardState *keyboard) {
+// escape that nothing follows yet, or another escape, is the Escape key. Ctrl-C requests the program's
+// interrupt for it, when it has one.
+static void keyboard_poll(VM *vm, KeyboardState *keyboard) {
     int byte;
     while (keyboard->count < KEYBOARD_QUEUE_SIZE && (byte = next_byte(vm, keyboard)) >= 0) {
+        if (byte == KEY_CTRL_C && vm->ctrl_c_vector) {
+            vm_ctrl_c(vm);
+            continue;
+        }
         if (byte != KEY_ESCAPE) {
             add_key(keyboard, byte);
             continue;
@@ -155,8 +161,8 @@ static void keyboard_poll(const VM *vm, KeyboardState *keyboard) {
     }
 }
 
-// Port 0 reads the status bits, port 1 the next key (0 if none waits) and port 2 holds the
-// interrupt vector that is requested while keys wait (0 for none)
+// Port 0 reads the status bits, port 1 the next key (0 if none waits), port 2 holds the interrupt
+// vector that is requested while keys wait and port 3 the one that Ctrl-C requests (0 for none)
 static uint32_t keyboard_read(VM *vm, IODevice *device, uint16_t offset) {
     KeyboardState *keyboard = device->state;
     keyboard_claim(keyboard);
@@ -177,6 +183,8 @@ static uint32_t keyboard_read(VM *vm, IODevice *device, uint16_t offset) {
         }
         case 2:
             return keyboard->vector;
+        case 3:
+            return vm->ctrl_c_vector;
         default:
             return 0;
     }
@@ -189,6 +197,9 @@ static void keyboard_write(VM *vm, IODevice *device, uint16_t offset, uint32_t v
         keyboard->vector = (uint8_t)value;
         keyboard->countdown = KEYBOARD_POLL_INTERVAL;
         io_set_ticking(vm, device, keyboard->vector != 0);
+    } else if (offset == 3) {
+        vm->ctrl_c_vector = (uint8_t)value;
+        vm->ctrl_c_waiting = 0;
     }
 }
 
@@ -304,7 +315,7 @@ int keyboard_script(VM *vm, IODevice *device, const char *path) {
 }
 
 int keyboard_device(VM *vm, IODevice *device) {
-    *device = (IODevice){ .name = "keyboard", .base_port = IO_PORT_KEYBOARD, .port_count = 3,
+    *device = (IODevice){ .name = "keyboard", .base_port = IO_PORT_KEYBOARD, .port_count = 4,
                           .read = keyboard_read, .write = keyboard_write, .tick = keyboard_tick,
                           .cleanup = keyboard_cleanup, .state = calloc(1, sizeof(KeyboardState)) };
     return device->state ? VM_ERROR_NONE : vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Failed to allocate the keyboard");
