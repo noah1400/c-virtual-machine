@@ -1,0 +1,2 @@
+vm: error: Instruction limit of 3000 reached
+vm: at 0x00DC <.spin+4> tests/programs/jit.asm:81: SHL R8, #0x1
