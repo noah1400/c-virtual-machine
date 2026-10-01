@@ -102,6 +102,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-d` | Start the interactive [debugger](#debugger) |
 | `-D` | Disassemble the program instead of running it |
 | `-H COUNT` | When the program stops with an error, first show the last COUNT instructions and the registers they changed |
+| `-j COUNT` | [Compile code](#compiled-code) into host instructions once COUNT jumps went to it, 1 to 255, or never with 0 (default 32) |
 | `-k FILE` | Take [keyboard](#keyboard) input from a key script |
 | `-L SPEC` | Print values each time execution reaches a location (see below). Can be given up to 32 times |
 | `-m KB` | Memory size in KB, 128 to 1048576 (default 1024) |
@@ -203,6 +204,14 @@ log 0x0674 <find_file> R6="a.txt" [R7+24]=0
 ```
 
 `-D` prints the header, then the code with its labels, then a hex dump of the data. A file without a VM32 header is treated as raw code and loaded at address 0.
+
+### Compiled code
+
+On x86-64 Linux and macOS, `vm` compiles the code that jumps go to often into host instructions. Once 32 jumps, or as many as `-j` says, went to an address, the instructions from there up to one that always goes elsewhere become one block, and blocks go straight on to the blocks they jump to. The machine stays exact: compiled code counts every instruction, so `-n` stops a program at the same instruction, and it hands an instruction that would fault back to the interpreter, which reports the fault as before. The instructions it does not compile, such as `SYSCALL`, `MEMCPY`, `MEMSET`, `POPCNT` and the float instructions, run in the interpreter too. When the program writes over code that was compiled, `vm` drops the compiled code and compiles it again once jumps go there often enough.
+
+Whatever has to happen between two instructions makes `vm` step through them without compiled code: the debugger, `-t`, `-p`, `-c`, `-H` and logpoints, paging, the trap flag, and the timer or a keyboard interrupt while they are on. `-j 0` turns compiling off, and on other hosts `vm` interprets every instruction.
+
+With compiled code, the Ore programs of the [benchmarks](#benchmarks) run 2.7 to 3.6 times as fast, and `vmc` compiles itself in 0.33 instead of 0.49 seconds.
 
 ## The machine
 
@@ -945,7 +954,7 @@ Usage: vmc [options] program.ore [file.asm...]
 Two compilers take these options:
 
 - **`vmc`** is written in Ore, in `ore/compiler`, and optimizes. It copies the body of a function into its calls where the call costs about as much as the body, where the call runs in a loop and the body is small, and where it is the only call, which leaves the function unused; a backtrace still shows such a call. It keeps scalar locals and parameters, the pointer and length of slices, and values that wait while another is computed in registers where that saves more than it costs, with locals that live at different times sharing one, uses variables, fields and slice lengths as operands where instructions can take them, checks a pointer for `null` once until something changes it, and not at all for a pointer parameter that every call passes an address, new memory or another such pointer. It leaves out the bounds checks of indexes that a counting loop or their type keeps in range, and of a local index that an earlier check against the same slice or array already covers while neither changed, branches on conditions without first making values of them, makes the value of `&&` and `||` once, after branching on their operands, tests the condition of a loop after each round instead of jumping back to it, computes arithmetic that a loop does not change in front of it, keeps a multiple of the counter of a loop in a local that steps along with the counter instead of multiplying, and gives a function that keeps no locals in memory no frame. A function saves the registers it uses with one `PUSHM` and restores them with one `POPM` in each of its returns, and a local that a comparison loaded into R0 is not loaded again right after it. Unsigned division and remainder by a power of two become a shift and a mask, `x & y` and `x % 2^k` compared with 0 test bits instead of computing a value, and a `switch` with at least four values close together jumps through a table of addresses. Its code executes less than half as many instructions as `vmc0`'s and is a third smaller. `make` builds it in two stages: `vmc0` compiles it into `vmc1.bin`, which compiles it again into `vmc.bin`, and `vmc.bin` compiles itself into the very same file. The `vmc` script runs `vmc.bin` on the VM with 256 MB of memory and an 8 MB stack and assembles the program it writes with `vmasm`.
-- **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. Its code keeps every local in the frame. It runs natively, so it compiles much faster: `vmc` takes half a second to turn its own 9,300 lines into assembly, `vmc0` 0.06 seconds.
+- **`vmc0`** is written in C, in `ore/bootstrap`, and exists to compile `vmc` when there is no `vmc.bin` yet. Its code keeps every local in the frame. It runs natively, so it compiles much faster: `vmc` takes a third of a second to turn its own 9,400 lines into assembly, `vmc0` 0.05 seconds.
 
 - **How it compiles:** the compiler writes the whole program as one assembly file, with only the functions and globals that `main` reaches, directly or through others, and those that the program's assembly names: a program that calls `io.write` gets that function and not the rest of `std/io`. That file includes `ore/lib/runtime.asm`, any assembly files named on the command line, and the assembly that imported modules bring along for their `extern fn` functions. It is then assembled with the `vmasm` next to the compiler, which leaves out the routines of the runtime and `std/cpu` that the program does not use, since they are [libraries](#libraries).
 - **Standard library:** `import "std/io"` and the other [standard modules](docs/language.md#standard-library) come from `ore/lib/std`.
@@ -1197,7 +1206,7 @@ Comment lines in a test adjust the checks:
 
 A file `NAME.x` next to a test holds [debugger](#debugger) commands, which the program then runs under with `-x`, and `NAME.keys` is passed as a key script with `-k`. When `NAME.err` exists, stderr has to match it as a whole.
 
-`make test T="display disk"` or `sh tests/run.sh display disk` runs only the tests named. `sh tests/run.sh -u NAME` rewrites `NAME.out`, and `NAME.err` if there is one, from the actual output, provided the program exits with the expected status; a failing test shows the first lines of the difference with control characters made visible.
+`VM_FLAGS` adds options to every run of the VM, so `VM_FLAGS='-j 1' make test` runs the suite with code compiled from the first jump to it. `make test T="display disk"` or `sh tests/run.sh display disk` runs only the tests named. `sh tests/run.sh -u NAME` rewrites `NAME.out`, and `NAME.err` if there is one, from the actual output, provided the program exits with the expected status; a failing test shows the first lines of the difference with control characters made visible.
 
 Programs run inside a temporary directory, so any files they create are discarded. They also run with a limit of 10 million instructions, so a program stuck in a loop fails instead of hanging the suite. The `example_*` tests include the programs from `assembler/examples`.
 
@@ -1213,7 +1222,7 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `src/monitor.c` | Tracing and profiling while a program runs |
 | `src/vm.c` | Machine setup, program loading, the fetch-execute step and the loop that runs a program |
 | `src/debugger.c` | The interactive debugger |
-| `src/core/` | CPU helpers, instruction execution, the fast loop for the common instructions, memory and heap, syscalls, disassembler, debug info |
+| `src/core/` | CPU helpers, instruction execution, the fast loop for the common instructions and the compiler that turns them into x86-64 code, memory and heap, syscalls, disassembler, debug info |
 | `src/io/` | The I/O devices: console, timer, display, keyboard and disk |
 | `src/common/` | Instruction table, encoding, byte buffers and the binary format, shared by all three tools |
 | `assembler/` | `vmasm`: lexer, expressions, symbols, includes and macros, the two passes, output and the register check |
