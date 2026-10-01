@@ -24,7 +24,7 @@
 #define BLOCK_LIMIT 256
 #define STUB_LIMIT (4 * BLOCK_LIMIT)
 
-// What compiled code works with; the code reaches it through rbp
+// What the entry code gets from cpu_run and gives back to it
 typedef struct {
     uint8_t *memory;
     VM *vm;
@@ -36,6 +36,13 @@ typedef struct {
 } Context;
 
 typedef void (*Enter)(Context *context, void *code);
+
+// A jump in compiled code to a word that had no compiled code yet
+typedef struct {
+    uint32_t word;
+    uint32_t at;            // where its displacement lies in the code
+    uint32_t next;          // 1 + the next link that waits for the same word, or 0
+} Link;
 
 struct Jit {
     uint8_t *code;          // executable memory
@@ -49,12 +56,16 @@ struct Jit {
     uint32_t words;
     uint32_t low;           // the bytes that compiled code came from
     uint32_t high;
+    uint32_t *waiting;      // for every word, 1 + the first link that waits for compiled code there, or 0
+    Link *links;
+    uint32_t link_count;
+    uint32_t link_room;
     Enter enter;
     uint8_t *exit;          // leaves compiled code with the word or address in eax and how in edx
 };
 
-// Host registers. Compiled code keeps SP in ebx, R0 in ebp, VM memory at r12, the VM in r13, the budget in
-// r14d and the table of compiled entries in r15.
+// Host registers. Compiled code keeps SP in ebx, R0 in ebp, VM memory at r12, the VM in r13 and the budget
+// in r14d.
 enum { HAX, HCX, HDX, HBX, HSP, HBP, HSI, HDI, H8, H9, H10, H11, H12, H13, H14, H15 };
 
 // x86 conditions
@@ -70,9 +81,11 @@ enum { ADD = 0, OR = 1, AND = 4, SUB = 5, XOR = 6, CMP = 7 };
 #define REG(number) ((int32_t)(offsetof(VM, registers) + 4 * (number)))
 
 // Compiled code keeps temporaries in the 8 bytes at [rsp]: slow paths at [rsp] and addresses it goes to after
-// them at [rsp + GO_SLOT]. The context follows at [rsp + 8] and a copy of its flags at [rsp + FLAGS_AT].
+// them at [rsp + GO_SLOT]. The context follows at [rsp + 8], the table of compiled entries at
+// [rsp + ENTRIES_AT] and a copy of the flags at [rsp + FLAGS_AT].
 #define GO_SLOT 4
-#define FLAGS_AT 16
+#define ENTRIES_AT 16
+#define FLAGS_AT 24
 // with 8 bytes more than a multiple of 16, so that calls find the stack aligned
 #define FRAME_SIZE ((FLAGS_AT + (int32_t)sizeof(Flags) + 7) / 16 * 16 + 8)
 
@@ -315,7 +328,8 @@ static void write_entry(struct Jit *jit, Code *c) {
     op_mem(c, 1, 0x89, HDI, HSP, 8);
     op_mem(c, 1, 0x8B, H12, HDI, (int32_t)offsetof(Context, memory));
     op_mem(c, 1, 0x8B, H13, HDI, (int32_t)offsetof(Context, vm));
-    op_mem(c, 1, 0x8B, H15, HDI, (int32_t)offsetof(Context, entries));
+    op_mem(c, 1, 0x8B, HAX, HDI, (int32_t)offsetof(Context, entries));
+    op_mem(c, 1, 0x89, HAX, HSP, ENTRIES_AT);
     load(c, H14, HDI, (int32_t)offsetof(Context, left));
     for (int32_t at = 0; at < (int32_t)sizeof(Flags); at += 8) {
         op_mem(c, 1, 0x8B, HAX, HDI, (int32_t)offsetof(Context, flags) + at);
@@ -411,8 +425,12 @@ typedef struct {
     int state;              // the flags as compiled code keeps them at this point, -1 if not known here
     int host;               // the x86 flags hold the flags of the instruction compiled last
     uint32_t end;           // the word after the last instruction
+    uint32_t start;
+    uint8_t *entry;
+    uint32_t link_count;
     Item items[BLOCK_LIMIT];
     Stub stubs[STUB_LIMIT];
+    Link links[BLOCK_LIMIT + 1];
 } Compiler;
 
 static Stub *stub(Compiler *k, uint8_t *jump, uint8_t type, uint32_t item) {
@@ -436,15 +454,23 @@ static void leave_with(Code *c, struct Jit *jit, uint32_t how) {
 // Goes on with a word: the compiled code there if there is some, else cpu_run
 static void chain(Compiler *k, uint32_t word) {
     Code *c = &k->c;
-    if (word < k->jit->words) {
-        op_mem(c, 1, 0x8B, HAX, H15, (int32_t)(8 * word));
-        op_reg(c, 1, 0x85, HAX, HAX);
-        uint8_t *none = jcc(c, CC_E);
-        jmp_reg(c, HAX);
-        patch(c, none, c->p);
+    struct Jit *jit = k->jit;
+    if (word == k->start) {
+        jmp_to(c, k->entry);
+        return;
+    }
+    if (word < jit->words && jit->entries[word]) {
+        jmp_to(c, jit->entries[word]);
+        return;
+    }
+    if (word < jit->words && k->link_count < BLOCK_LIMIT + 1) {
+        // Compiling the word later points this jump at its code; until then it leaves
+        uint8_t *at = jmp(c);
+        patch(c, at, c->p);
+        k->links[k->link_count++] = (Link){ word, (uint32_t)(at - jit->code), 0 };
     }
     mov_imm(c, HAX, word);
-    leave_with(c, k->jit, JIT_NEXT);
+    leave_with(c, jit, JIT_NEXT);
 }
 
 // Goes on at the address in eax
@@ -454,7 +480,8 @@ static void go(Compiler *k) {
     shift_imm(c, 1, HCX, 2);
     alu_load(c, CMP, HCX, H13, FIELD(decoded_words));
     uint8_t *out = jcc(c, CC_AE);
-    op_index(c, 1, 0x8B, HDX, H15, HCX, 3);
+    op_mem(c, 1, 0x8B, HDX, HSP, ENTRIES_AT);
+    op_index(c, 1, 0x8B, HDX, HDX, HCX, 3);
     op_reg(c, 1, 0x85, HDX, HDX);
     uint8_t *none = jcc(c, CC_E);
     jmp_reg(c, HDX);
@@ -1370,6 +1397,10 @@ static void forget_code(struct Jit *jit, VM *vm) {
         }
     }
     jit->start_count = 0;
+    for (uint32_t i = 0; i < jit->link_count; i++) {
+        jit->waiting[jit->links[i].word] = 0;
+    }
+    jit->link_count = 0;
     jit->used = jit->base;
     jit->low = UINT32_MAX;
     jit->high = 0;
@@ -1392,12 +1423,14 @@ static struct Jit *jit_for(VM *vm) {
     void *code = mmap(NULL, CODE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, flags, -1, 0);
     jit->entries = calloc(vm->decoded_words ? vm->decoded_words : 1, sizeof(void *));
     jit->kinds = calloc(vm->decoded_words ? vm->decoded_words : 1, 1);
-    if (code == MAP_FAILED || !jit->entries || !jit->kinds) {
+    jit->waiting = calloc(vm->decoded_words ? vm->decoded_words : 1, sizeof(uint32_t));
+    if (code == MAP_FAILED || !jit->entries || !jit->kinds || !jit->waiting) {
         if (code != MAP_FAILED) {
             munmap(code, CODE_SIZE);
         }
         free(jit->entries);
         free(jit->kinds);
+        free(jit->waiting);
         free(jit);
         return NULL;
     }
@@ -1466,6 +1499,8 @@ static uint8_t *compile_block(struct Jit *jit, VM *vm, uint32_t word, uint32_t *
     k.c.p = jit->code + jit->used;
     k.c.end = jit->code + CODE_SIZE;
     uint8_t *entry = k.c.p;
+    k.start = word;
+    k.entry = entry;
     endbr(&k.c);
     alu_imm(&k.c, SUB, H14, k.count);
     stub(&k, jcc(&k.c, CC_B), STUB_BUDGET, 0);
@@ -1481,6 +1516,21 @@ static uint8_t *compile_block(struct Jit *jit, VM *vm, uint32_t word, uint32_t *
     if (k.failed || k.c.p > k.c.end) {
         *full = 1;
         return NULL;
+    }
+    for (uint32_t i = 0; i < k.link_count; i++) {
+        if (jit->link_count == jit->link_room) {
+            uint32_t room = jit->link_room ? 2 * jit->link_room : 256;
+            Link *links = realloc(jit->links, room * sizeof(*links));
+            if (!links) {
+                break;
+            }
+            jit->links = links;
+            jit->link_room = room;
+        }
+        Link *link = &jit->links[jit->link_count++];
+        *link = k.links[i];
+        link->next = jit->waiting[link->word];
+        jit->waiting[link->word] = jit->link_count;
     }
     jit->used = ((size_t)(k.c.p - jit->code) + 15) & ~(size_t)15;
     uint32_t first = word * 4, last = index * 4 + 4;
@@ -1509,6 +1559,11 @@ int jit_compile(VM *vm, uint32_t index) {
         jit->kinds[index] = d->kind;
         jit->entries[index] = entry;
         d->kind = D_JIT;
+        for (uint32_t i = jit->waiting[index]; i; i = jit->links[i - 1].next) {
+            uint8_t *at = jit->code + jit->links[i - 1].at;
+            write_le32(at, (uint32_t)(entry - (at + 4)));
+        }
+        jit->waiting[index] = 0;
         // The instructions after one that the block stops at only run when cpu_run comes back from that one,
         // so they get compiled now
         index = after;
@@ -1549,6 +1604,8 @@ void jit_free(VM *vm) {
     free(jit->entries);
     free(jit->kinds);
     free(jit->starts);
+    free(jit->waiting);
+    free(jit->links);
     free(jit);
     vm->jit = NULL;
 }
