@@ -341,7 +341,7 @@ static uint32_t holds_for(Context *context, uint32_t cond) {
 }
 
 static void partial_for(Context *context, uint32_t result, uint32_t changed, uint32_t bits) {
-    FlagUpdate f = { changed, bits, 0 };
+    FlagUpdate f = { changed, bits };
     partial(result, &f, &context->flags);
 }
 

@@ -19,18 +19,16 @@ static inline uint32_t zero_negative(uint32_t result) {
     return (result == 0 ? ZERO_FLAG : 0) | (result >> 31 ? NEG_FLAG : 0);
 }
 
-// The C and O flags that an instruction changes and in bits the values it gives them, and the Z and N
-// flags of its result, which every such instruction sets
+// The C and O flags that an instruction changes and in bits the values it gives them; every such instruction
+// also sets Z and N from its result
 typedef struct {
     uint32_t changed;
     uint32_t bits;
-    uint32_t zero_negative;
 } FlagUpdate;
 
 static inline uint32_t updated(FlagUpdate *f, uint32_t changed, uint32_t bits, uint32_t result) {
     f->changed = changed;
     f->bits = bits;
-    f->zero_negative = zero_negative(result);
     return result;
 }
 
@@ -146,7 +144,7 @@ static inline uint32_t alu_result(uint8_t opcode, uint32_t a, uint32_t b, uint32
 static inline uint32_t alu_binary(uint8_t opcode, uint32_t *sr, uint32_t a, uint32_t b) {
     FlagUpdate f;
     uint32_t result = alu_result(opcode, a, b, *sr, &f);
-    set_flags(sr, f.changed | ZERO_FLAG | NEG_FLAG, f.bits | f.zero_negative);
+    set_flags(sr, f.changed | ZERO_FLAG | NEG_FLAG, f.bits | zero_negative(result));
     return result;
 }
 
@@ -180,7 +178,7 @@ static inline uint32_t alu_unary_result(uint8_t opcode, uint32_t a, FlagUpdate *
 static inline uint32_t alu_unary(uint8_t opcode, uint32_t *sr, uint32_t a) {
     FlagUpdate f;
     uint32_t result = alu_unary_result(opcode, a, &f);
-    set_flags(sr, f.changed | ZERO_FLAG | NEG_FLAG, f.bits | f.zero_negative);
+    set_flags(sr, f.changed | ZERO_FLAG | NEG_FLAG, f.bits | zero_negative(result));
     return result;
 }
 
