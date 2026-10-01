@@ -275,9 +275,32 @@ static int memory_fault(VM *vm, int code, uint32_t address, const char *format, 
     return vm_raise(vm, code, "%s", message);
 }
 
+// Whether the units of a short access all belong to allocated blocks that allow it, which keeps the access
+// inside one block, as a guard without rights precedes every block
+static int heap_units_allow(const VM *vm, uint32_t address, uint32_t size, uint8_t access) {
+    if (address < vm->heap_rights_base) {
+        return 0;
+    }
+    uint32_t first = (address - vm->heap_rights_base) / HEAP_UNIT;
+    uint64_t last = ((uint64_t)address + size - 1 - vm->heap_rights_base) / HEAP_UNIT;
+    if (last >= vm->heap_rights_count || last - first >= 16) {
+        return 0;
+    }
+    uint8_t needed = (uint8_t)(HEAP_UNIT_USED | access);
+    for (uint32_t unit = first; unit <= last; unit++) {
+        if ((vm->heap_rights[unit] & needed) != needed) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 // Any access touching the heap must stay inside one allocated block that permits it
 static int heap_check(VM *vm, uint32_t address, uint32_t size, uint8_t access) {
     if (size == 0 || !in_heap(vm, address, size)) {
+        return VM_ERROR_NONE;
+    }
+    if (heap_units_allow(vm, address, size, access)) {
         return VM_ERROR_NONE;
     }
 
