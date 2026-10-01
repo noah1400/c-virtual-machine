@@ -370,7 +370,7 @@ enum {
     STUB_TAKEN,             // the instruction jumps to the word target
     STUB_LEAVE,             // the instruction goes to the address target
     STUB_GO,                // the instruction goes to the address it left at [rsp + GO_SLOT]
-    STUB_REACH,             // asks cpu_reach for the access of size bytes, extra the access, at edx
+    STUB_REACH,             // checks the access of size bytes, extra the access, at edx in the heap or with cpu_reach
     STUB_WRITTEN,           // the store of size bytes at edx changed decoded instructions
     STUB_PUSH,              // asks cpu_push_slot for a push at eax of the value in ecx
     STUB_POP,               // asks cpu_pop_slot for a pop at ecx
@@ -379,7 +379,7 @@ enum {
 
 typedef struct {
     uint8_t *jump;          // the displacement that leads to the stub
-    uint8_t *also;          // another one, or NULL
+    uint8_t *also;          // for STUB_REACH, the one of an access in the heap
     uint8_t type;
     uint32_t item;
     uint32_t target;
@@ -1194,9 +1194,6 @@ static void compile_stub(Compiler *k, Stub *s) {
     const Item *it = &k->items[s->item];
     uint32_t n = k->count, after = n - s->item - 1;
     patch(c, s->jump, c->p);
-    if (s->also) {
-        patch(c, s->also, c->p);
-    }
     switch (s->type) {
         case STUB_BUDGET:
             mov_imm(c, HAX, it->index);
@@ -1222,6 +1219,31 @@ static void compile_stub(Compiler *k, Stub *s) {
             go(k);
             break;
         case STUB_REACH: {
+            // An access in the heap goes on when the rights of its first and its last 8 bytes allow it, as in
+            // memory_heap_allows; anything else asks cpu_reach
+            uint8_t *slow[4];
+            slow[0] = jmp(c);
+            patch(c, s->also, c->p);
+            mov(c, HSI, HDX);
+            alu_load(c, SUB, HSI, H13, FIELD(heap_rights_base));
+            slow[1] = jcc(c, CC_B);
+            lea(c, 0, HCX, HSI, (int32_t)s->size - 1);
+            shift_imm(c, 5, HCX, (uint32_t)__builtin_ctz(HEAP_UNIT));
+            alu_load(c, CMP, HCX, H13, FIELD(heap_rights_count));
+            slow[2] = jcc(c, CC_AE);
+            shift_imm(c, 5, HSI, (uint32_t)__builtin_ctz(HEAP_UNIT));
+            op_mem(c, 1, 0x8B, HDI, H13, FIELD(heap_rights));
+            op_index(c, 0, 0x0FB6, HAX, HDI, HSI, 0);
+            op_index(c, 0, 0x0FB6, HCX, HDI, HCX, 0);
+            alu(c, AND, HAX, HCX);
+            alu_imm(c, AND, HAX, HEAP_UNIT_USED | s->extra);
+            alu_imm(c, CMP, HAX, HEAP_UNIT_USED | s->extra);
+            slow[3] = jcc(c, CC_NE);
+            op_index(c, 1, 0x8D, HAX, H12, HDX, 0);
+            jmp_to(c, s->resume);
+            for (int i = 0; i < 4; i++) {
+                patch(c, slow[i], c->p);
+            }
             store(c, HSP, 0, HDX);
             mov64(c, HDI, H13);
             mov(c, HSI, HDX);
