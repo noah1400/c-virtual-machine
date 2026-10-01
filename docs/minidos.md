@@ -38,7 +38,7 @@ AUTOEXEC BAT            22 10-01-26   9:30a
 
 `vm` creates `work.img` when it does not exist, as a disk without sectors, and MiniDos offers to format it. Formatting makes the disk as large as asked, puts the system programs `SORT` and `FIND` into `\DOS` and writes an `AUTOEXEC.BAT` that adds `\DOS` to `PATH`. The next start finds the formatted disk and goes straight to the prompt.
 
-`make` also builds `minidos.img`, a 4 MB disk formatted the same way, labelled `MINIDOS`. MiniDos asks for 4 MB of memory in its binary's header, which `vm` gives it without `-m`.
+`make` also builds `minidos.img`, a 4 MB disk formatted the same way, labelled `MINIDOS`. It builds that disk anew whenever MiniDos changes, so files of your own belong on a disk like `work.img`, where `SYS A:` brings the system programs up to date. MiniDos asks for 4 MB of memory in its binary's header, which `vm` gives it without `-m`.
 
 - **More drives:** each further `-b` attaches the next drive, up to `D:`, as in `./vm -b work.img -b data.img minidos.bin`. MiniDos says which disks are not formatted yet, and `FORMAT B:` prepares one.
 - **Host files:** `IMPORT` and `EXPORT` copy files between a MiniDos disk and the directory `vm` runs in.
