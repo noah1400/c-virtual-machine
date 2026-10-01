@@ -1,0 +1,35 @@
+// std/cpu: code that enter_user runs gets device interrupts when its caller has them on, here the one for
+// Ctrl-C, which a key script types while the code spins
+import "std/cpu";
+
+const KEY_VECTOR_PORT = 0x62;
+const CTRL_C_PORT = 0x63;
+const KEYS = 0x21;
+const CTRL_C = 0x23;
+
+var user_stack: [1024]u32;
+
+interrupt fn on_keys(frame: *cpu.Frame) {
+}
+
+interrupt fn on_ctrl_c(frame: *cpu.Frame) {
+    if ((frame.sr & 0x40) == 0) {
+        cpu.leave_user(99);
+    }
+}
+
+fn spinning() {
+    for (;;) {
+    }
+}
+
+fn main() {
+    cpu.set_handler(KEYS, on_keys as u32);
+    cpu.set_handler(CTRL_C, on_ctrl_c as u32);
+    cpu.write_port(KEY_VECTOR_PORT, KEYS);
+    cpu.write_port(CTRL_C_PORT, CTRL_C);
+    cpu.write_control(cpu.SLO, &user_stack[0] as u32);
+    cpu.enable_interrupts();
+    var status = cpu.enter_user(spinning as u32, &user_stack[0] as u32 + 4096);
+    print("the spinning code ended with ", status, "\n");
+}

@@ -85,7 +85,8 @@ halt:
     HALT
 
 ; enter_user(pc, sp) saves what the caller needs back, makes its stack the one for interrupts from user
-; mode and switches with POPF, which keeps the caller's frames in backtraces, unlike IRET
+; mode and switches with POPF, which keeps the caller's frames in backtraces, unlike IRET, and keeps the
+; caller's interrupt flag
 enter_user:
     PUSHF
     PUSH BP
@@ -105,6 +106,8 @@ enter_user:
     MTCR KSP, R0
     LOAD R6, [SP+52]
     LOAD R7, [SP+56]
+    LOAD R0, [SP+44]
+    AND R0, #0x10
     LOAD BP, #0
     LOAD R8, #0
     LOAD R9, #0
@@ -116,9 +119,9 @@ enter_user:
     LOAD R15, #0
     LOAD R5, #0
     MOVE SP, R7
-    LOAD R0, #0
     PUSH R0
     POPF
+    LOAD R0, #0
     JMP R6
 .back:
     POP R6

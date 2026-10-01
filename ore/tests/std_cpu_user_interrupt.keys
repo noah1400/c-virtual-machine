@@ -1,0 +1,2 @@
+# Ctrl-C while the code in user mode spins
+50000 \x03

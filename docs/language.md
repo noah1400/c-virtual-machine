@@ -435,7 +435,7 @@ These need supervisor mode, which programs start in.
 | `set_handler(vector: int, handler: u32)` | Makes `handler`, the address of an `interrupt fn` (`on_tick as u32`), the handler of vector. The first call sets up a vector table if there is none |
 | `read_control(register: int) u32`, `write_control(register: int, value: u32)` | Control registers, numbered by the constants `IVTB`, `KSP`, `PTB`, `FADDR`, `ECODE`, `SLO`, `SHI`, `HEAPLO` and `HEAPHI` |
 | `halt()` | Stops the machine |
-| `enter_user(pc: u32, sp: u32) u32` | Runs code in user mode from pc, with its stack at sp and interrupts off, until a handler of an interrupt from it calls `leave_user`, and returns the value given there. Interrupts from the code use the stack below the caller's, so sp has to lie below that and within `SLO` and `SHI`. Handlers may call it again |
+| `enter_user(pc: u32, sp: u32) u32` | Runs code in user mode from pc, with its stack at sp and device interrupts on if the caller has them on, until a handler of an interrupt from it calls `leave_user`, and returns the value given there. Interrupts from the code use the stack below the caller's, so sp has to lie below that and within `SLO` and `SHI`. Handlers may call it again |
 | `leave_user(value: u32)` | Ends the code `enter_user` started. Only a handler of an interrupt from that code may call it |
 | `Frame` | The registers an interrupt saved: `r0`, `bp`, `sp`, `pc`, `sr`, `r5` to `r14` and `lr`, each a `u32` |
 
