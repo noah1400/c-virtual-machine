@@ -27,6 +27,15 @@ struct HeapNode {
     struct HeapNode *right;
 };
 
+// Nodes come in chunks, which the heap frees all at once when it is reset
+#define HEAP_CHUNK_NODES 1024
+
+struct HeapChunk {
+    struct HeapChunk *next;
+    uint32_t used;
+    struct HeapNode nodes[HEAP_CHUNK_NODES];
+};
+
 int memory_init(VM *vm, uint32_t size) {
     if (size < VM_MIN_MEMORY_SIZE) {
         return vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Memory size must be at least %u bytes", VM_MIN_MEMORY_SIZE);
@@ -48,17 +57,42 @@ void memory_cleanup(VM *vm) {
     memory_heap_reset(vm);
 }
 
-static void free_nodes(struct HeapNode *node) {
+static struct HeapNode *new_node(VM *vm) {
+    struct HeapNode *node = vm->heap_spare;
     if (node) {
-        free_nodes(node->left);
-        free_nodes(node->right);
-        free(node);
+        vm->heap_spare = node->left;
+        return node;
+    }
+    struct HeapChunk *chunk = vm->heap_chunks;
+    if (!chunk || chunk->used == HEAP_CHUNK_NODES) {
+        chunk = malloc(sizeof(*chunk));
+        if (!chunk) {
+            return NULL;
+        }
+        chunk->next = vm->heap_chunks;
+        chunk->used = 0;
+        vm->heap_chunks = chunk;
+    }
+    return &chunk->nodes[chunk->used++];
+}
+
+// Keeps the nodes of a treap for reuse
+static void release_nodes(VM *vm, struct HeapNode *node) {
+    if (node) {
+        release_nodes(vm, node->left);
+        release_nodes(vm, node->right);
+        node->left = vm->heap_spare;
+        vm->heap_spare = node;
     }
 }
 
 void memory_heap_reset(VM *vm) {
-    free_nodes(vm->heap_blocks);
-    free_nodes(vm->heap_freed);
+    while (vm->heap_chunks) {
+        struct HeapChunk *next = vm->heap_chunks->next;
+        free(vm->heap_chunks);
+        vm->heap_chunks = next;
+    }
+    vm->heap_spare = NULL;
     vm->heap_blocks = NULL;
     vm->heap_freed = NULL;
     vm->heap_last = NULL;
@@ -511,19 +545,19 @@ static void forget_freed(VM *vm, uint32_t low, uint32_t high) {
     struct HeapNode *before, *others, *inside, *after;
     split(vm->heap_freed, low, &before, &others);
     split(others, high, &inside, &after);
-    free_nodes(inside);
+    release_nodes(vm, inside);
     // Freed blocks do not overlap, so only the last one before low can reach into the range
     struct HeapNode *last = last_node(before);
     if (last && (uint64_t)last->start + last->size > low) {
         split(before, last->start, &before, &inside);
-        free_nodes(inside);
+        release_nodes(vm, inside);
     }
     vm->heap_freed = merge(before, after);
 }
 
 // Adds an allocated block, forgetting freed blocks whose space it reuses
 static int insert_block(VM *vm, uint32_t start, uint32_t size) {
-    struct HeapNode *block = malloc(sizeof(*block));
+    struct HeapNode *block = new_node(vm);
     if (!block) {
         return 0;
     }

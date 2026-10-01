@@ -94,6 +94,8 @@ typedef struct {
     struct HeapNode *heap_blocks;  // allocated heap blocks, by address
     struct HeapNode *heap_freed;   // freed heap blocks whose space is not reused yet
     struct HeapNode *heap_last;    // the block of the latest heap access
+    struct HeapNode *heap_spare;   // nodes to reuse
+    struct HeapChunk *heap_chunks; // where the nodes come from
     uint32_t heap_seed;            // for the priorities that shape the heap treaps
     uint8_t *heap_rights;          // for every 8 bytes of the heap up to the blocks so far, the rights of their block
     uint32_t heap_rights_base;     // the address of the first 8 bytes
