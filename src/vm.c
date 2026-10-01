@@ -23,6 +23,7 @@ int vm_init(VM *vm, uint32_t memory_size, uint32_t stack_size) {
     cpu_reset(vm);
     syscalls_init(vm);
     vm->rng_state = VM_RNG_DEFAULT_SEED;
+    vm->jit_threshold = VM_JIT_THRESHOLD;
     return io_init(vm);
 }
 

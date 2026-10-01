@@ -3,6 +3,7 @@
 #include "alu.h"
 #include "binfmt.h"
 #include "cpu.h"
+#include "jit.h"
 #include "memory.h"
 #include "run.h"
 #include "syscalls.h"
@@ -206,6 +207,19 @@ OUTLINE uint8_t *pop_slot(VM *vm, uint32_t sp) {
     return reach(vm, sp, 4, PROT_READ, &slot) ? slot : NULL;
 }
 
+uint8_t *cpu_reach(VM *vm, uint32_t address, uint32_t size, uint32_t access) {
+    uint8_t *host;
+    return reach(vm, address, size, (uint8_t)access, &host) ? host : NULL;
+}
+
+uint8_t *cpu_push_slot(VM *vm, uint32_t sp) {
+    return push_slot(vm, sp);
+}
+
+uint8_t *cpu_pop_slot(VM *vm, uint32_t sp) {
+    return pop_slot(vm, sp);
+}
+
 // The number of words below the heap and the end of memory that start an instruction whose extension word
 // can be fetched without checks as well
 static uint32_t fetch_words(const VM *vm) {
@@ -221,6 +235,9 @@ INLINE uint32_t word_index(uint32_t address) {
 void cpu_forget(VM *vm, uint32_t address, uint32_t size) {
     if (address >= vm->decoded_high || size == 0) {
         return;
+    }
+    if (vm->jit) {
+        jit_written(vm, address, size);
     }
     uint32_t first = address >> 2;
     uint64_t last = ((uint64_t)address + size - 1) >> 2;
@@ -239,6 +256,7 @@ void cpu_forget(VM *vm, uint32_t address, uint32_t size) {
 }
 
 void cpu_forget_all(VM *vm) {
+    jit_free(vm);
     free(vm->decoded);
     vm->decoded = NULL;
     vm->decoded_words = 0;
@@ -514,6 +532,14 @@ static void decode(VM *vm, Decoded *d, uint32_t index, uint32_t words) {
     }
 }
 
+Decoded *cpu_decoded_at(VM *vm, uint32_t index) {
+    Decoded *d = vm->decoded + index;
+    if (d->kind == D_DECODE) {
+        decode(vm, d, index, vm->decoded_words);
+    }
+    return d;
+}
+
 INLINE uint32_t operand(const uint32_t *r, const Decoded *d) {
     return (r[d->b] & d->mask) + d->imm;
 }
@@ -597,6 +623,15 @@ INLINE int jumps(const uint32_t *r, const Decoded *d, const Flags *p) {
         DISPATCH();        \
     } while (0)
 
+// Makes a word that a jump goes to the next instruction, and compiles the code there once enough jumps went there
+#define JUMP_TO(word)                   \
+    do {                                \
+        next = code + (word);           \
+        if (++next->heat == hot) {      \
+            jit_compile(vm, (word));    \
+        }                               \
+    } while (0)
+
 // Runs up to limit instructions and returns how many it ran. The caller makes sure that nothing has to
 // happen between them: no paging, trap, deliverable interrupt or device that counts instructions.
 uint32_t cpu_run(VM *vm, uint32_t limit) {
@@ -605,6 +640,7 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
     uint32_t left = limit, words = fetch_words(vm), index = word_index(r[R3_PC]), value;
     Flags flags = { FLAGS_SET, 0, 0, FLAGS_SET, 0, 0 };
     FlagUpdate f;
+    const uint32_t hot = vm->jit_threshold ? vm->jit_threshold : 256;
 
     if (!prepared) {
         prepare();
@@ -648,6 +684,7 @@ uint32_t cpu_run(VM *vm, uint32_t limit) {
         [D_PUSH_M] = &&run_D_PUSH_M,         [D_POP] = &&run_D_POP,               [D_ENTER] = &&run_D_ENTER,
         [D_LEAVE] = &&run_D_LEAVE,           [D_PUSHM] = &&run_D_PUSHM,           [D_POPM] = &&run_D_POPM,
         [D_MEMCPY] = &&run_D_MEMCPY,         [D_MEMSET] = &&run_D_MEMSET,         [D_SYSCALL] = &&run_D_SYSCALL,
+        [D_JIT] = &&run_D_JIT,
     };
 #endif
     Decoded *code = vm->decoded, *d = code + index, *next = d + d->len;
@@ -659,6 +696,35 @@ dispatch:
             decode(vm, d, (uint32_t)(d - code), words);
             next = d + d->len;
             goto dispatch;
+#ifdef __GNUC__
+        TARGET(D_JIT): {
+            // Compiled code starts here and runs as far as it can
+            uint32_t rest = left, how;
+            Flags kept = flags;
+            uint32_t to = jit_run(vm, (uint32_t)(d - code), &rest, &kept, &how);
+            left = rest;
+            flags = kept;
+            if (how == JIT_LEAVE) {
+                r[R3_PC] = to;
+                settle(r, &flags);
+                vm->instruction_count += limit - left;
+                return limit - left;
+            }
+            d = code + to;
+            if (left == 0) {
+                goto stop;
+            }
+            if (how == JIT_HERE) {
+                next = d + d->len;
+                goto *targets[d->kind == D_JIT ? jit_kind(vm, to) : d->kind];
+            }
+            if (++d->heat == hot) {
+                jit_compile(vm, to);
+            }
+            next = d + d->len;
+            DISPATCH();
+        }
+#endif
         TARGET(D_STOP):
         default:
             goto stop;
@@ -856,19 +922,19 @@ dispatch:
             NEXT();
         TARGET(D_JUMP):
             if (jumps(r, d, &flags)) {
-                next = code + d->imm;
+                JUMP_TO(d->imm);
             }
             NEXT();
         TARGET(D_GOTO):
-            next = code + d->imm;
+            JUMP_TO(d->imm);
             NEXT();
         // A jump after a compare decides its condition from what was compared, and after TEST or a sum Z from
         // the sum
-#define JUMP_IF(jump, compared, summed)                                                                         \
-        TARGET(jump):                                                                                             \
+#define JUMP_IF(jump, compared, summed)                                                                            \
+        TARGET(jump):                                                                                              \
             if (flags.kind == FLAGS_SUB ? (compared) : flags.kind == FLAGS_ADD ? (summed) : jumps(r, d, &flags)) { \
-                next = code + d->imm;                                                                             \
-            }                                                                                                     \
+                JUMP_TO(d->imm);                                                                                   \
+            }                                                                                                      \
             NEXT();
         JUMP_IF(D_JZ, flags.a == flags.b, flags.a + flags.b == 0)
         JUMP_IF(D_JNZ, flags.a != flags.b, flags.a + flags.b != 0)
@@ -905,7 +971,7 @@ dispatch:
             if (!call(vm, code, d)) {
                 goto stop;
             }
-            next = code + d->imm;
+            JUMP_TO(d->imm);
             NEXT();
         TARGET(D_CALL_OUT):
             if (!call(vm, code, d)) {
@@ -934,7 +1000,7 @@ dispatch:
             goto go;
         TARGET(D_LOOP):
             if (--r[d->a] != 0) {
-                next = code + d->imm;
+                JUMP_TO(d->imm);
             }
             NEXT();
         TARGET(D_LOOP_OUT):
@@ -1110,7 +1176,7 @@ go:
     if (index >= words) {
         goto leave;
     }
-    next = code + index;
+    JUMP_TO(index);
     NEXT();
 stop:
     r[R3_PC] = (uint32_t)(d - code) * 4;

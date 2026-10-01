@@ -31,6 +31,7 @@ enum {
     D_CALL, D_CALL_OUT, D_CALL_V, D_CALL_M, D_RET,
     D_LOOP, D_LOOP_OUT,
     D_PUSH_V, D_PUSH_M, D_POP, D_ENTER, D_LEAVE, D_PUSHM, D_POPM, D_MEMCPY, D_MEMSET, D_SYSCALL,
+    D_JIT,
 };
 
 // An instruction as cpu_run runs it. Its operand, or the address of its operand, is (r[b] & mask) + imm.
@@ -43,6 +44,7 @@ struct Decoded {
     uint32_t imm;       // the immediate or displacement, or the word a jump goes to
     uint16_t cond;      // one bit for each value of the Z, N, C and O flags under which a jump or SET holds
     uint8_t len;        // the words the instruction takes
+    uint8_t heat;       // how often jumps went here, which decides when the code here gets compiled
 };
 
 typedef struct Decoded Decoded;
@@ -131,5 +133,14 @@ INLINE uint32_t binary(uint8_t opcode, const uint32_t *r, uint32_t x, uint32_t y
     uint32_t flags = opcode == ADDC_OP || opcode == SUBC_OP ? flag_bits(r[R4_SR], p) : 0;
     return partial(alu_result(opcode, x, y, flags, &f), &f, p);
 }
+
+// The decoded instruction at a word below the words cpu_run runs, which it decodes first if it has to
+Decoded *cpu_decoded_at(VM *vm, uint32_t index);
+
+// The checks of cpu_run, for compiled code where its own quick checks do not suffice: where size bytes at an
+// address are, or a push at sp writes, or a pop at sp reads; NULL if the access would fault
+uint8_t *cpu_reach(VM *vm, uint32_t address, uint32_t size, uint32_t access);
+uint8_t *cpu_push_slot(VM *vm, uint32_t sp);
+uint8_t *cpu_pop_slot(VM *vm, uint32_t sp);
 
 #endif // _RUN_H_

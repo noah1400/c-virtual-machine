@@ -32,6 +32,7 @@ typedef struct {
     uint32_t memory_size;
     uint32_t stack_size;
     uint32_t instruction_limit;
+    int jit_threshold;
     int debug;
     int disassemble;
     int trace;
@@ -47,6 +48,8 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -d        Start the interactive debugger\n");
     fprintf(out, "  -D        Disassemble the program instead of running it\n");
     fprintf(out, "  -H COUNT  Show the last COUNT instructions when the program stops with an error\n");
+    fprintf(out, "  -j COUNT  Compile code into host instructions after COUNT jumps went there, 1 to 255 or 0 for\n"
+                 "            never (default %d)\n", VM_JIT_THRESHOLD);
     fprintf(out, "  -k FILE   Take keyboard input from a key script that releases keys at instruction counts\n");
     fprintf(out, "  -L SPEC   Print values each time execution reaches a location, as in -L 'loop:R8,[count]:d'\n");
     fprintf(out, "  -m KB     Memory size in KB, %d to %d (default %d)\n", MIN_MEMORY_KB, MAX_MEMORY_KB,
@@ -66,6 +69,7 @@ static int parse_options(int argc, char **argv, Options *opts) {
     memset(opts, 0, sizeof(*opts));
     opts->memory_size = DEFAULT_MEMORY_KB * 1024;
     opts->stack_size = DEFAULT_STACK_KB * 1024;
+    opts->jit_threshold = VM_JIT_THRESHOLD;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -146,6 +150,14 @@ static int parse_options(int argc, char **argv, Options *opts) {
                 return -1;
             }
             opts->logpoints[opts->logpoint_count++] = argv[++i];
+        } else if (strcmp(arg, "-j") == 0) {
+            char *end = NULL;
+            long count = i + 1 < argc ? strtol(argv[++i], &end, 10) : -1;
+            if (!end || *end != '\0' || count < 0 || count > 255) {
+                fprintf(stderr, "vm: the jump count for compiling code must be between 0 and 255\n");
+                return -1;
+            }
+            opts->jit_threshold = (int)count;
         } else if (strcmp(arg, "-n") == 0) {
             char *end = NULL;
             unsigned long long count = i + 1 < argc ? strtoull(argv[++i], &end, 10) : 0;
@@ -199,6 +211,7 @@ int main(int argc, char *argv[]) {
     }
     vm.debug_mode = (uint8_t)opts.debug;
     vm.instruction_limit = opts.instruction_limit;
+    vm.jit_threshold = (uint32_t)opts.jit_threshold;
     vm.arg_count = opts.arg_count;
     vm.args = opts.args;
 

@@ -39,6 +39,9 @@
 
 #define VM_CALL_FRAMES          1024
 
+// How many jumps to a word make cpu_run compile the code from there into host instructions, at most 255
+#define VM_JIT_THRESHOLD        32
+
 // A call or interrupt that has not returned yet, kept for backtraces
 typedef struct {
     uint32_t site;          // the CALL, or the instruction the interrupt came before
@@ -104,6 +107,8 @@ typedef struct {
     uint32_t decoded_end;          // the end of the words that decoded instructions can take
     uint32_t decoded_high;         // the end of the words that the instructions decoded so far take
     uint32_t stack_span;           // how far SP may lie above SLO for cpu_run to push and pop without other checks
+    struct Jit *jit;               // host code that cpu_run compiled from the decoded instructions
+    uint32_t jit_threshold;        // how many jumps to a word make cpu_run compile the code there, 0 for none
 
     struct DebugInfo *debug_info;  // Debug information (NULL if not loaded)
     CallFrame call_frames[VM_CALL_FRAMES];  // shadow call stack, innermost last
