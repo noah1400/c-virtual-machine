@@ -7,6 +7,7 @@ import "std/str";
 import "args";
 import "console";
 import "fs";
+import "time";
 
 // Programs live below this address and MiniDos above it, as make builds it with vmc -b
 pub const LIMIT = 0x100000;
@@ -373,6 +374,9 @@ fn serve(frame: *cpu.Frame, number: u32) {
             console.screen(user_string(a));
             console.screen("\n");
             end(ABORTED);
+        }
+        case 36 {
+            frame.r0 = time.now();
         }
         case 40 {
             frame.r0 = syscall(40, a).value as u32;

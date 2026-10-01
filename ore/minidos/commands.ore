@@ -54,6 +54,12 @@ var table = []Command {
         "  /Y           Replaces existing files without asking, as batch files always do",
         "  /-Y          Asks before replacing a file",
     } },
+    Command { name: "DATE", run: system.date_command, help: [][]u8 {
+        "Shows or sets the date",
+        "DATE [date | /T]",
+        "  date  The new date, as mm-dd-yy or mm-dd-yyyy",
+        "  /T    Shows the date without asking for a new one",
+    } },
     Command { name: "DEL", alias: "ERASE", run: files.delete, help: [][]u8 {
         "Deletes files",
         "DEL files [/P]",
@@ -161,8 +167,9 @@ var table = []Command {
     Command { name: "PROMPT", run: shell.prompt_command, help: [][]u8 {
         "Changes the prompt",
         "PROMPT [text]",
-        "  $P drive and directory   $N drive   $G >   $L <   $B |   $Q =   $$ $   $_ new line",
-        "  $V version   $E escape   $H backspace. PROMPT alone brings back $P$G.",
+        "  $P drive and directory   $N drive   $D date   $T time   $V version",
+        "  $G >   $L <   $B |   $Q =   $$ $   $_ new line   $E escape   $H backspace",
+        "PROMPT alone brings back $P$G.",
     } },
     Command { name: "RD", alias: "RMDIR", run: files.remove_directory, help: [][]u8 {
         "Removes an empty directory",
@@ -190,6 +197,12 @@ var table = []Command {
         "SYS drive:",
         "  The programs go into \\DOS, and an AUTOEXEC.BAT that adds \\DOS to PATH into the root",
         "  directory unless it has one",
+    } },
+    Command { name: "TIME", run: system.time_command, help: [][]u8 {
+        "Shows or sets the time",
+        "TIME [time | /T]",
+        "  time  The new time, as hh:mm[:ss[.xx]] with an a or p after it for the 12-hour clock",
+        "  /T    Shows the time without asking for a new one",
     } },
     Command { name: "TREE", run: files.tree, help: [][]u8 {
         "Draws the directories of a disk as a tree",

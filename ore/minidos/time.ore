@@ -1,8 +1,16 @@
-// The date and time that MiniDos shows and gives to files
+// The date and time that MiniDos shows and gives to files: the VM's clock, moved by what DATE and TIME set
+import "std/str";
 import "std/sys";
 
+var offset: u32 = 0;        // what DATE and TIME added to the VM's clock
+
 pub fn now() u32 {
-    return sys.clock();
+    return sys.clock() + offset;
+}
+
+// Makes the clock show a date and time from now on
+pub fn set(clock: u32) {
+    offset = clock - sys.clock();
 }
 
 fn two_digits(buffer: []u8, at: int, value: int) {
@@ -41,4 +49,146 @@ pub fn short_time(clock: u32, buffer: []u8) []u8 {
         buffer[length + 4] = 'p';
     }
     return buffer[:length + 5];
+}
+
+const WEEKDAYS = "SunMonTueWedThuFriSat";
+
+// The date of a clock value as Thu 10-01-2026, in buffer, which takes 14 bytes
+pub fn long_date(clock: u32, buffer: []u8) []u8 {
+    var t = sys.date_time(clock);
+    for (var i = 0; i < 3; i += 1) {
+        buffer[i] = WEEKDAYS[t.weekday * 3 + i];
+    }
+    buffer[3] = ' ';
+    two_digits(buffer, 4, t.month);
+    buffer[6] = '-';
+    two_digits(buffer, 7, t.day);
+    buffer[9] = '-';
+    two_digits(buffer, 10, t.year / 100);
+    two_digits(buffer, 12, t.year % 100);
+    return buffer[:14];
+}
+
+// The time of a clock value as 9:30:05.00a, in buffer, which takes 12 bytes
+pub fn long_time(clock: u32, buffer: []u8) []u8 {
+    var short: [6]u8;
+    var text = short_time(clock, short);
+    var length = text.len - 1;
+    for (var i = 0; i < length; i += 1) {
+        buffer[i] = text[i];
+    }
+    var t = sys.date_time(clock);
+    buffer[length] = ':';
+    two_digits(buffer, length + 1, t.second);
+    buffer[length + 3] = '.';
+    buffer[length + 4] = '0';
+    buffer[length + 5] = '0';
+    buffer[length + 6] = text[text.len - 1];
+    return buffer[:length + 7];
+}
+
+fn days_in(month: int, year: int) int {
+    if (month == 2) {
+        if (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
+            return 29;
+        }
+        return 28;
+    }
+    if (month == 4 || month == 6 || month == 9 || month == 11) {
+        return 30;
+    }
+    return 31;
+}
+
+// The numbers of text separated by any of the separators, at most count of them; how many it found, or -1
+fn numbers(text: []u8, separators: []u8, values: []int) int {
+    var count = 0;
+    var i = 0;
+    while (i < text.len) {
+        var start = i;
+        while (i < text.len && str.is_digit(text[i])) {
+            i += 1;
+        }
+        if (i == start || count == values.len) {
+            return -1;
+        }
+        values[count] = str.parse_int(text[start:i]).value;
+        count += 1;
+        if (i < text.len) {
+            if (str.find_byte(separators, text[i]) < 0) {
+                return -1;
+            }
+            i += 1;
+            if (i == text.len) {
+                return -1;
+            }
+        }
+    }
+    return count;
+}
+
+// Makes the clock show the date in text, written mm-dd-yy or mm-dd-yyyy, and keeps its time of day; false for
+// anything else
+pub fn set_date(text: []u8) bool {
+    var values: [3]int;
+    if (numbers(text, "-/.", values) != 3) {
+        return false;
+    }
+    var year = values[2];
+    if (year < 100) {
+        year += 2000;
+        if (values[2] >= 80) {
+            year -= 100;
+        }
+    }
+    if (year < 1980 || year > 2099 || values[0] < 1 || values[0] > 12 || values[1] < 1 ||
+        values[1] > days_in(values[0], year)) {
+        return false;
+    }
+    var t = sys.date_time(now());
+    t.year = year;
+    t.month = values[0];
+    t.day = values[1];
+    set(sys.clock_of(t));
+    return true;
+}
+
+// Makes the clock show the time in text, written hh:mm, hh:mm:ss or hh:mm:ss.xx with an a or p after it for
+// the 12-hour clock; false for anything else
+pub fn set_time(text: []u8) bool {
+    var t = text;
+    var half = 0;
+    if (t.len > 0 && (t[t.len - 1] == 'a' || t[t.len - 1] == 'A' || t[t.len - 1] == 'p' || t[t.len - 1] == 'P')) {
+        half = 1;
+        if (t[t.len - 1] == 'p' || t[t.len - 1] == 'P') {
+            half = 2;
+        }
+        t = str.trim(t[:t.len - 1]);
+    }
+    var values: [4]int;
+    var count = numbers(t, ":.", values);
+    if (count < 1) {
+        return false;
+    }
+    for (var i = count; i < values.len; i += 1) {
+        values[i] = 0;
+    }
+    var hour = values[0];
+    if (half > 0 && (hour < 1 || hour > 12)) {
+        return false;
+    }
+    if (half == 1 && hour == 12) {
+        hour = 0;
+    } else if (half == 2 && hour < 12) {
+        hour += 12;
+    }
+    if (hour > 23 || values[1] > 59 || values[2] > 59) {
+        return false;
+    }
+    var now_parts = sys.date_time(now());
+    now_parts.hour = hour;
+    now_parts.minute = values[1];
+    now_parts.second = values[2];
+    set(sys.clock_of(now_parts));
+    return true;
 }

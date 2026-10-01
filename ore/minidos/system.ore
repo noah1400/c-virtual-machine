@@ -9,6 +9,7 @@ import "fs";
 import "names";
 import "program";
 import "shell";
+import "time";
 
 struct SystemFile {
     name: []u8;
@@ -89,6 +90,44 @@ pub fn memory(a: *args.Args) {
     console.number(sys.free_heap(), 12);
     console.line(" bytes free for programs to allocate");
     console.write("\n");
+}
+
+// Shows the date or time, then sets it to what was typed after the command or, without that, to the answer of
+// a question, which ENTER leaves unanswered. The text is taken as typed, as a date may hold /.
+fn change_clock(a: *args.Args, current: []u8, show: fn(u32, []u8) []u8, set: fn([]u8) bool, question: []u8,
+                invalid: []u8) {
+    var given = str.trim(a.text);
+    var shown: [14]u8;
+    if (given.len == 2 && given[0] == '/' && names.upper_byte(given[1]) == 'T') {
+        console.line(show(time.now(), shown));
+        return;
+    }
+    if (given.len == 0) {
+        console.write(current);
+        console.line(show(time.now(), shown));
+    }
+    var buffer: [80]u8;
+    for (;;) {
+        if (given.len == 0) {
+            given = console.ask(question, buffer);
+            if (given.len == 0) {
+                return;
+            }
+        }
+        if (set(given)) {
+            return;
+        }
+        console.error(invalid);
+        given = "";
+    }
+}
+
+pub fn date_command(a: *args.Args) {
+    change_clock(a, "Current date is ", time.long_date, time.set_date, "Enter new date (mm-dd-yy): ", "Invalid date");
+}
+
+pub fn time_command(a: *args.Args) {
+    change_clock(a, "Current time is ", time.long_time, time.set_time, "Enter new time: ", "Invalid time");
 }
 
 // IMPORT host [name] copies a file of the host into MiniDos. Host paths may hold /, which elsewhere starts a

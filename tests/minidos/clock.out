@@ -1,0 +1,82 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A: /V:CLOCK
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>DATE /T
+Thu 10-01-2026
+A:\>TIME /T
+9:30:00.00a
+A:\>DATE
+Current date is Thu 10-01-2026
+Enter new date (mm-dd-yy): 
+A:\>TIME
+Current time is 9:30:00.00a
+Enter new time: 1:05p
+A:\>TIME /T
+1:05:00.00p
+A:\>DATE 12-24-99
+A:\>DATE /T
+Fri 12-24-1999
+A:\>DATE 13-01-26
+Invalid date
+Enter new date (mm-dd-yy): 02-29-2027
+Invalid date
+Enter new date (mm-dd-yy): 02-29-2028
+A:\>DATE 12/31/2027
+A:\>TIME 25:00
+Invalid time
+Enter new time: 23:59:59
+A:\>ECHO stamped > NEW.TXT
+A:\>DATE 01-02-30
+A:\>TIME 7:45a
+A:\>COPY NEW.TXT KEPT.TXT
+        1 file(s) copied
+A:\>ECHO later > LATER.TXT
+A:\>MD SUB
+A:\>DIR
+
+ Volume in drive A is CLOCK
+ Directory of A:\
+
+NEW      TXT             8 12-31-27  11:59p
+KEPT     TXT             8 12-31-27  11:59p
+LATER    TXT             6 01-02-30   7:45a
+SUB             <DIR>      01-02-30   7:45a
+        3 file(s)             22 bytes
+        1 dir(s)       1,037,312 bytes free
+A:\>DIR /O:D /B
+NEW.TXT
+KEPT.TXT
+LATER.TXT
+SUB
+A:\>DIR /O:-D /B
+LATER.TXT
+SUB
+NEW.TXT
+KEPT.TXT
+A:\>IMPORT today.bin TODAY.EXE
+        1 file(s) imported
+A:\>TODAY
+2030-1-2 7:45:0
+A:\>PROMPT $D $T$G
+Wed 01-02-2030 7:45:00.00a>PROMPT
+A:\>DATE /?
+Shows or sets the date
+
+DATE [date | /T]
+  date  The new date, as mm-dd-yy or mm-dd-yyyy
+  /T    Shows the date without asking for a new one
+A:\>EXIT

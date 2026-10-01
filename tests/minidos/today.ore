@@ -1,0 +1,8 @@
+// Shows the date and time that MiniDos gives programs
+import "std/sys";
+
+fn main() int {
+    var t = sys.date_time(sys.clock());
+    print(t.year, "-", t.month, "-", t.day, " ", t.hour, ":", t.minute, ":", t.second, "\n");
+    return 0;
+}

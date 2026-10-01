@@ -7,6 +7,7 @@ import "console";
 import "fs";
 import "names";
 import "program";
+import "time";
 
 pub const VERSION = "MiniDos Version 3.0";
 
@@ -92,6 +93,14 @@ fn prompt() {
             }
             case 'V' {
                 console.write(VERSION);
+            }
+            case 'D' {
+                var date: [14]u8;
+                console.write(time.long_date(time.now(), date));
+            }
+            case 'T' {
+                var clock: [12]u8;
+                console.write(time.long_time(time.now(), clock));
             }
             case 'E' {
                 console.write_byte(0x1B);
