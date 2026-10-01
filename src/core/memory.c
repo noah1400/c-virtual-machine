@@ -76,14 +76,9 @@ static struct HeapNode *new_node(VM *vm) {
     return &chunk->nodes[chunk->used++];
 }
 
-// Keeps the nodes of a treap for reuse
-static void release_nodes(VM *vm, struct HeapNode *node) {
-    if (node) {
-        release_nodes(vm, node->left);
-        release_nodes(vm, node->right);
-        node->left = vm->heap_spare;
-        vm->heap_spare = node;
-    }
+static void release_node(VM *vm, struct HeapNode *node) {
+    node->left = vm->heap_spare;
+    vm->heap_spare = node;
 }
 
 void memory_heap_reset(VM *vm) {
@@ -140,21 +135,6 @@ static void update(struct HeapNode *node) {
     }
     if (most_room(node->right) > node->most_room) {
         node->most_room = node->right->most_room;
-    }
-}
-
-// Splits a treap into the nodes that start before key and the others
-static void split(struct HeapNode *node, uint32_t key, struct HeapNode **before, struct HeapNode **others) {
-    if (!node) {
-        *before = *others = NULL;
-    } else if (node->start < key) {
-        *before = node;
-        split(node->right, key, &node->right, others);
-        update(node);
-    } else {
-        *others = node;
-        split(node->left, key, before, &node->left);
-        update(node);
     }
 }
 
@@ -236,13 +216,6 @@ static void refresh(struct HeapNode *node, uint32_t key) {
 static struct HeapNode *first_node(struct HeapNode *node) {
     while (node && node->left) {
         node = node->left;
-    }
-    return node;
-}
-
-static struct HeapNode *last_node(struct HeapNode *node) {
-    while (node && node->right) {
-        node = node->right;
     }
     return node;
 }
@@ -591,19 +564,17 @@ int memory_set(VM *vm, uint32_t address, uint8_t value, uint32_t size) {
     return vm->last_error;
 }
 
-// Forgets the freed blocks that overlap the addresses from low up to high
+// Forgets the freed blocks that overlap the addresses from low up to high. Freed blocks do not overlap each
+// other, so only the last one that starts before high can, until it is gone.
 static void forget_freed(VM *vm, uint32_t low, uint32_t high) {
-    struct HeapNode *before, *others, *inside, *after;
-    split(vm->heap_freed, low, &before, &others);
-    split(others, high, &inside, &after);
-    release_nodes(vm, inside);
-    // Freed blocks do not overlap, so only the last one before low can reach into the range
-    struct HeapNode *last = last_node(before);
-    if (last && (uint64_t)last->start + last->size > low) {
-        split(before, last->start, &before, &inside);
-        release_nodes(vm, inside);
+    for (;;) {
+        struct HeapNode *freed = node_before(vm->heap_freed, high - 1);
+        if (!freed || (uint64_t)freed->start + freed->size <= low) {
+            return;
+        }
+        vm->heap_freed = remove_node(vm->heap_freed, freed->start);
+        release_node(vm, freed);
     }
-    vm->heap_freed = merge(before, after);
 }
 
 // Adds an allocated block in the room after the block before it, or before the first block, forgetting
