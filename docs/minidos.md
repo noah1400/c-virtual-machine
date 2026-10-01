@@ -141,7 +141,7 @@ Any other name runs a program or a batch file: `NAME` looks for `NAME.EXE` and t
 
 ## Disks
 
-A disk is an image file of 512-byte sectors that `vm -b` attaches; a missing one is created without sectors. MiniDos formats disks of 8 KB to 32 MB. The disk in memory that stands in for a missing drive A can grow as far as the memory goes, with `FORMAT A: /F:`*size*, and `EXPORT` or `DISKCOPY` onto a drive with an image keep its files.
+A disk is an image file of 512-byte sectors that `vm -b` attaches; a missing one is created without sectors, and one that `vm` may not write is write-protected, which commands that write to it say. MiniDos formats disks of 8 KB to 32 MB. The disk in memory that stands in for a missing drive A can grow as far as the memory goes, with `FORMAT A: /F:`*size*, and `EXPORT` or `DISKCOPY` onto a drive with an image keep its files.
 
 `FORMAT` *drive*`:` asks for the size of a disk that has no sectors yet, 4 MB unless another is typed, as in `512K` or `16M`; `/F:`*size* gives it at once and also resizes a disk that has a size. It warns and asks before it formats a disk that holds a file system, asks for a label unless `/V:`*label* gives one, and with `/S` puts the system programs on the new disk. `/Q` and `/U` are accepted out of habit: every format only writes the file system's first sectors.
 
@@ -253,8 +253,8 @@ Directories are files of 32-byte entries, the root directory included. Every oth
 | `ore/minidos/disks.ore` | `FORMAT`, `LABEL`, `VOL`, `CHKDSK` and `DISKCOPY` |
 | `ore/minidos/system.ore` | The system programs, `SYS`, `DATE`, `TIME`, `MEM` and the host's files |
 | `ore/minidos/editor.ore` | `EDIT` |
-| `ore/minidos/console.ore` | Output and input, redirected or not, and the line editor |
-| `ore/minidos/program.ore` | Loading programs, serving their syscalls and ending them after faults |
+| `ore/minidos/console.ore` | Output and input, redirected or not, the line editor and what Ctrl-C stops |
+| `ore/minidos/program.ore` | Loading programs, serving their syscalls and ending them after faults and Ctrl-C |
 | `ore/minidos/fs.ore` | The file system |
 | `ore/minidos/disk.ore` | The disk ports |
 | `ore/minidos/time.ore` | The clock and how dates and times are written |
