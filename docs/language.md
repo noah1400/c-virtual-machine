@@ -412,6 +412,8 @@ A `Builder` collects text on the heap:
 | `random(limit: u32) u32`, `seed(value: u32)` | A number below limit, or any 32-bit value for 0. The sequence repeats unless seeded |
 | `memory_size() int` | The size of the VM's memory in bytes |
 | `free_heap() int`, `largest_free() int` | How many bytes the heap has free, and the largest block that `new` can get |
+| `clock() u32` | The local date and time as seconds since 1970, as syscall 36 gives it |
+| `date_time(clock: u32) DateTime`, `clock_of(t: DateTime) u32` | Turn a clock value into its `year`, `month`, `day`, `hour`, `minute`, `second` and `weekday` (0 for Sunday), and back |
 
 ### std/math
 

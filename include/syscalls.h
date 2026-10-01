@@ -31,11 +31,15 @@ enum {
     SYS_TICKS        = 33,
     SYS_ARGUMENT     = 34,
     SYS_ABORT        = 35,
+    SYS_CLOCK        = 36,
     SYS_RANDOM       = 40,
     SYS_SEED         = 41,
 };
 
 void syscalls_init(VM *vm);
+
+// The days from 1970-01-01 to a date of the Gregorian calendar
+int64_t days_from_civil(int64_t year, unsigned month, unsigned day);
 void syscalls_cleanup(VM *vm);
 
 // Services SYSCALL #number; returns a VM error code if the syscall faulted

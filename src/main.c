@@ -9,6 +9,7 @@
 #include "disassembler.h"
 #include "io.h"
 #include "monitor.h"
+#include "syscalls.h"
 #include "vm.h"
 
 #define DEFAULT_MEMORY_KB 1024
@@ -34,6 +35,7 @@ typedef struct {
     uint32_t memory_size;
     uint32_t stack_size;
     uint32_t instruction_limit;
+    int64_t clock;
     int jit_threshold;
     int debug;
     int disassemble;
@@ -62,14 +64,32 @@ static void print_usage(FILE *out, const char *name) {
     fprintf(out, "  -s        Print display frames as plain text instead of drawing them\n");
     fprintf(out, "  -S KB     Stack size in KB, at least 4 and less than the memory (default %d)\n", DEFAULT_STACK_KB);
     fprintf(out, "  -t        Trace every executed instruction on stderr\n");
+    fprintf(out, "  -T TIME   Make the clock show TIME, as YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS, without moving\n");
     fprintf(out, "  -v        Report loading and execution statistics on stderr\n");
     fprintf(out, "  -x FILE   Start the debugger and run its commands from FILE\n");
     fprintf(out, "  -h        Show this help\n");
 }
 
+// A time as -T takes it, YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS, as seconds since 1970, or -1
+static int64_t parse_clock(const char *text) {
+    int year, month, day, hour = 0, minute = 0, second = 0, used = 0, more = 0;
+    if (sscanf(text, "%4d-%2d-%2d%n", &year, &month, &day, &used) != 3) {
+        return -1;
+    }
+    if (text[used] == 'T' && sscanf(text + used + 1, "%2d:%2d:%2d%n", &hour, &minute, &second, &more) == 3) {
+        used += 1 + more;
+    }
+    if (text[used] != '\0' || year < 1970 || year > 2105 || month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+        return -1;
+    }
+    return days_from_civil(year, (unsigned)month, (unsigned)day) * 86400 + hour * 3600 + minute * 60 + second;
+}
+
 // Returns 1 to run, 0 to exit successfully, -1 on a usage error
 static int parse_options(int argc, char **argv, Options *opts) {
     memset(opts, 0, sizeof(*opts));
+    opts->clock = -1;
     opts->stack_size = DEFAULT_STACK_KB * 1024;
     opts->jit_threshold = VM_JIT_THRESHOLD;
 
@@ -106,6 +126,12 @@ static int parse_options(int argc, char **argv, Options *opts) {
             opts->text_display = 1;
         } else if (strcmp(arg, "-t") == 0) {
             opts->trace = 1;
+        } else if (strcmp(arg, "-T") == 0) {
+            opts->clock = i + 1 < argc ? parse_clock(argv[++i]) : -1;
+            if (opts->clock < 0) {
+                fprintf(stderr, "vm: the time must look like 2026-10-01 or 2026-10-01T09:30:00\n");
+                return -1;
+            }
         } else if (strcmp(arg, "-p") == 0) {
             opts->profile = 1;
         } else if (strcmp(arg, "-v") == 0) {
@@ -234,6 +260,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     vm.debug_mode = (uint8_t)opts.debug;
+    vm.fixed_clock = opts.clock;
     vm.instruction_limit = opts.instruction_limit;
     vm.jit_threshold = (uint32_t)opts.jit_threshold;
     vm.arg_count = opts.arg_count;

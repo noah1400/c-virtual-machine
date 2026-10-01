@@ -111,6 +111,7 @@ Everything after the program path is passed to the program, which reads it with 
 | `-s` | Print [display](#display) frames as plain text instead of drawing them |
 | `-S KB` | Stack size in KB, at least 4 and less than the memory (default 64) |
 | `-t` | Print each instruction on stderr before it executes |
+| `-T TIME` | Make the clock of [syscall 36](#process-and-random-numbers) show TIME, as `2026-10-01` or `2026-10-01T09:30:00`, without moving |
 | `-v` | Print loading and execution statistics on stderr |
 | `-x FILE` | Start the debugger and run its commands from FILE |
 | `-h` | Show help |
@@ -1065,6 +1066,7 @@ A program can read and write any file that the user running it can access.
 | 33 | Ticks | | R0 = instructions executed |
 | 34 | Argument | R0 = index, R5 = buffer, R6 = buffer size | Copies argument *index* into the buffer, truncating it to fit. R0 = the argument's full length, or 0xFFFFFFFF if there is no such argument. With a size of 0, only the length is returned |
 | 35 | Abort | R0 = NUL-terminated message, R5 = number of calls to leave out | Stops the program the way a fault does, with the message. The report starts where the call that many levels out was made, so a runtime's error routine can blame its caller |
+| 36 | Clock | | R0 = the local date and time, as seconds since 1970-01-01 00:00 counted as if the local time were UTC |
 | 40 | Random | R0 = limit | R0 = a number below the limit, or any 32-bit value if the limit is 0 |
 | 41 | Seed | R0 = seed | |
 

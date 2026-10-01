@@ -1,0 +1,17 @@
+// The clock shows the local date and time, which vm -T holds still, and std/sys breaks it into its parts
+// vm-args: -T 2026-10-01T09:30:05
+import "std/sys";
+
+fn show(t: sys.DateTime) {
+    print(t.year, "-", t.month, "-", t.day, " ", t.hour, ":", t.minute, ":", t.second, " weekday ", t.weekday, "\n");
+}
+
+fn main() int {
+    var now = sys.clock();
+    show(sys.date_time(now));
+    print(sys.clock_of(sys.date_time(now)) == now, "\n");
+    show(sys.date_time(0));
+    show(sys.date_time(sys.clock_of(sys.DateTime { year: 2000, month: 2, day: 29, hour: 23, minute: 59, second: 59 })));
+    show(sys.date_time(4294967295));
+    return 0;
+}

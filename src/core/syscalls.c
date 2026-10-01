@@ -129,6 +129,32 @@ static uint64_t monotonic_ms(void) {
 
 void syscalls_init(VM *vm) {
     vm->start_ms = monotonic_ms();
+    vm->fixed_clock = -1;
+}
+
+int64_t days_from_civil(int64_t year, unsigned month, unsigned day) {
+    year -= month <= 2;
+    int64_t era = (year >= 0 ? year : year - 399) / 400;
+    unsigned year_of_era = (unsigned)(year - era * 400);
+    unsigned day_of_year = (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 + day - 1;
+    unsigned day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    return era * 146097 + (int64_t)day_of_era - 719468;
+}
+
+// The local date and time as seconds since 1970, counted as if the local time were UTC
+static uint32_t local_clock(const VM *vm) {
+    if (vm->fixed_clock >= 0) {
+        return (uint32_t)vm->fixed_clock;
+    }
+    time_t now = time(NULL);
+    struct tm local;
+#ifdef _WIN32
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    int64_t days = days_from_civil(local.tm_year + 1900, (unsigned)local.tm_mon + 1, (unsigned)local.tm_mday);
+    return (uint32_t)(days * 86400 + local.tm_hour * 3600 + local.tm_min * 60 + local.tm_sec);
 }
 
 void syscalls_cleanup(VM *vm) {
@@ -385,6 +411,9 @@ int syscall_dispatch(VM *vm, uint32_t number) {
             break;
         case SYS_TICKS:
             r[R0_ACC] = vm->instruction_count;
+            break;
+        case SYS_CLOCK:
+            r[R0_ACC] = local_clock(vm);
             break;
         case SYS_ARGUMENT:
             program_argument(vm, arg0, arg1, arg2);
