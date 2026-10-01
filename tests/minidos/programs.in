@@ -1,4 +1,6 @@
-FORMAT
+N
+FORMAT A:
+
 IMPORT hello.bin HELLO.EXE
 IMPORT files.bin FILES.EXE
 IMPORT faults.bin FAULTS.EXE

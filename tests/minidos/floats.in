@@ -1,4 +1,6 @@
-FORMAT
+N
+FORMAT A:
+
 IMPORT floats.bin FLOATS.EXE
 IMPORT find.bin FIND.EXE
 FLOATS

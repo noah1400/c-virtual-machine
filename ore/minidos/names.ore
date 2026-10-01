@@ -1,0 +1,83 @@
+// Names of commands, files and paths: their case, joining them and their parts
+import "std/str";
+
+pub fn upper_byte(c: u8) u8 {
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a' + 'A';
+    }
+    return c;
+}
+
+// A copy in capitals, which free gives back
+pub fn upper(text: []u8) []u8 {
+    var result = str.clone(text);
+    for (var i = 0; i < result.len; i += 1) {
+        result[i] = upper_byte(result[i]);
+    }
+    return result;
+}
+
+// Whether text and name are the same, ignoring case
+pub fn same(text: []u8, name: []u8) bool {
+    if (text.len != name.len) {
+        return false;
+    }
+    for (var i = 0; i < text.len; i += 1) {
+        if (upper_byte(text[i]) != upper_byte(name[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Whether text starts with the word, ignoring case, followed by its end or a space
+pub fn starts_with_word(text: []u8, word: []u8) bool {
+    return text.len >= word.len && same(text[:word.len], word) &&
+        (text.len == word.len || text[word.len] == ' ' || text[word.len] == '\t');
+}
+
+// a, b and c in one new text
+pub fn join(a: []u8, b: []u8, c: []u8) []u8 {
+    var result = new(u8, a.len + b.len + c.len);
+    for (var i = 0; i < a.len; i += 1) {
+        result[i] = a[i];
+    }
+    for (var i = 0; i < b.len; i += 1) {
+        result[a.len + i] = b[i];
+    }
+    for (var i = 0; i < c.len; i += 1) {
+        result[a.len + b.len + i] = c[i];
+    }
+    return result;
+}
+
+// The path of name in the directory dir
+pub fn path_in(dir: []u8, name: []u8) []u8 {
+    if (dir.len == 0 || str.ends_with(dir, "\\") || str.ends_with(dir, "/") || str.ends_with(dir, ":")) {
+        return join(dir, "", name);
+    }
+    return join(dir, "\\", name);
+}
+
+// The directory of a path with its separator, or nothing
+pub fn directory_part(path: []u8) []u8 {
+    var end = path.len;
+    while (end > 0 && path[end - 1] != '\\' && path[end - 1] != '/' && path[end - 1] != ':') {
+        end -= 1;
+    }
+    return path[:end];
+}
+
+// The last part of a path, after its directory
+pub fn name_part(path: []u8) []u8 {
+    return path[directory_part(path).len:];
+}
+
+// Whether a word names a drive, as A: does, and which one
+pub fn drive_word(word: []u8, drive: *int) bool {
+    if (word.len != 2 || word[1] != ':') {
+        return false;
+    }
+    *drive = (upper_byte(word[0]) - 'A') as int;
+    return true;
+}

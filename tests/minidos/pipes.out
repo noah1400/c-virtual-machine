@@ -1,18 +1,32 @@
 
 Starting MiniDos...
 
-The disk is not formatted; FORMAT prepares it.
-A:\>FORMAT
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A:
+Formatting 1,024K
 Format complete.
+
+Volume label (11 characters, ENTER for none)? 
 
    1,039,872 bytes total disk space
    1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
 
 A:\>IMPORT sort.bin SORT.EXE
         1 file(s) imported
 A:\>IMPORT find.bin FIND.EXE
         1 file(s) imported
 A:\>COPY CON FRUIT.TXT
+pear
+Apple
+banana
+cherry
+
         1 file(s) copied
 A:\>SORT < FRUIT.TXT
 Apple

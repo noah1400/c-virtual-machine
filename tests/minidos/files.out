@@ -1,0 +1,203 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A: /V:FILES
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>ECHO alpha > A.TXT
+A:\>ECHO beta > B.TXT
+A:\>ECHO gamma gamma > C.LOG
+A:\>MD DOCS
+A:\>MD DOCS\OLD
+A:\>DIR /W
+
+ Volume in drive A is FILES
+ Directory of A:\
+
+A.TXT           B.TXT           C.LOG           [DOCS]
+        3 file(s)             23 bytes
+        1 dir(s)       1,036,800 bytes free
+A:\>DIR /B /O:-N
+DOCS
+C.LOG
+B.TXT
+A.TXT
+A:\>DIR /O:S
+
+ Volume in drive A is FILES
+ Directory of A:\
+
+DOCS            <DIR>
+B        TXT             5
+A        TXT             6
+C        LOG            12
+        3 file(s)             23 bytes
+        1 dir(s)       1,036,800 bytes free
+A:\>DIR *.TXT /B
+A.TXT
+B.TXT
+A:\>DIR /S
+
+ Volume in drive A is FILES
+
+ Directory of A:\
+
+A        TXT             6
+B        TXT             5
+C        LOG            12
+DOCS            <DIR>
+        3 file(s)             23 bytes
+
+ Directory of A:\DOCS
+
+.               <DIR>
+..              <DIR>
+OLD             <DIR>
+        0 file(s)              0 bytes
+
+ Directory of A:\DOCS\OLD
+
+.               <DIR>
+..              <DIR>
+        0 file(s)              0 bytes
+
+Total files listed:
+        3 file(s)             23 bytes
+        6 dir(s)       1,036,800 bytes free
+A:\>DIR /S /B
+A:\A.TXT
+A:\B.TXT
+A:\C.LOG
+A:\DOCS
+A:\DOCS\OLD
+A:\>ATTRIB
+           A:\A.TXT
+           A:\B.TXT
+           A:\C.LOG
+A:\>ATTRIB +R A.TXT
+A:\>ATTRIB +H C.LOG
+A:\>ATTRIB
+     R     A:\A.TXT
+           A:\B.TXT
+    H      A:\C.LOG
+A:\>DIR /B
+A.TXT
+B.TXT
+DOCS
+A:\>DIR /A /B
+A.TXT
+B.TXT
+C.LOG
+DOCS
+A:\>DIR /A:H /B
+C.LOG
+A:\>DEL A.TXT
+Access denied - A.TXT
+A:\>ECHO new > A.TXT
+Access denied
+A:\>ATTRIB -R A.TXT
+A:\>ATTRIB -H C.LOG
+A:\>REN *.TXT *.BAK
+A:\>DIR /B
+A.BAK
+B.BAK
+C.LOG
+DOCS
+A:\>REN *.BAK *.TXT
+A:\>COPY A.TXT+B.TXT AB.TXT
+        1 file(s) copied
+A:\>TYPE AB.TXT
+alpha
+beta
+A:\>COPY A.TXT+B.TXT
+        1 file(s) copied
+A:\>TYPE A.TXT
+alpha
+beta
+A:\>COPY B.TXT A.TXT
+Overwrite A.TXT (Yes/No/All)?N
+        0 file(s) copied
+A:\>COPY *.TXT DOCS
+        3 file(s) copied
+A:\>COPY *.TXT DOCS
+Overwrite DOCS\A.TXT (Yes/No/All)?A
+        3 file(s) copied
+A:\>COPY /Y B.TXT A.TXT
+        1 file(s) copied
+A:\>TYPE A.TXT B.TXT
+beta
+beta
+A:\>MOVE C.LOG DOCS
+A:\C.LOG => A:\DOCS\C.LOG [ok]
+A:\>MOVE DOCS\C.LOG .
+A:\DOCS\C.LOG => A:\C.LOG [ok]
+A:\>MOVE DOCS\OLD DOCS\ARCHIVE
+A:\DOCS\OLD => A:\DOCS\ARCHIVE [ok]
+A:\>MOVE *.TXT DOCS\ARCHIVE
+A:\A.TXT => A:\DOCS\ARCHIVE\A.TXT [ok]
+A:\B.TXT => A:\DOCS\ARCHIVE\B.TXT [ok]
+A:\AB.TXT => A:\DOCS\ARCHIVE\AB.TXT [ok]
+A:\>DIR DOCS\ARCHIVE /B
+A.TXT
+B.TXT
+AB.TXT
+A:\>TREE
+Directory PATH listing for Volume FILES
+A:\
+\---DOCS
+    \---ARCHIVE
+A:\>TREE /F
+Directory PATH listing for Volume FILES
+A:\
+|   C.LOG
+|
+\---DOCS
+    |   A.TXT
+    |   B.TXT
+    |   AB.TXT
+    |
+    \---ARCHIVE
+            A.TXT
+            B.TXT
+            AB.TXT
+
+A:\>XCOPY DOCS COPY /S /E
+DOCS\A.TXT
+DOCS\B.TXT
+DOCS\AB.TXT
+DOCS\ARCHIVE\A.TXT
+DOCS\ARCHIVE\B.TXT
+DOCS\ARCHIVE\AB.TXT
+        6 File(s) copied
+A:\>TREE COPY
+Directory PATH listing for Volume FILES
+A:\COPY
+\---ARCHIVE
+A:\>DELTREE COPY
+Delete directory "COPY" and all its subdirectories? [yn] N
+A:\>DELTREE /Y COPY
+Deleting COPY...
+A:\>DIR /B
+C.LOG
+DOCS
+A:\>DEL DOCS
+All files in directory will be deleted!
+Are you sure (Y/N)?N
+A:\>DEL DOCS\ARCHIVE /P
+DOCS\ARCHIVE\A.TXT,    Delete (Y/N)?Y
+DOCS\ARCHIVE\B.TXT,    Delete (Y/N)?N
+DOCS\ARCHIVE\AB.TXT,    Delete (Y/N)?Y
+A:\>DIR DOCS\ARCHIVE /B
+B.TXT
+A:\>EXIT

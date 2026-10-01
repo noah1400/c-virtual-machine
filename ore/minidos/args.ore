@@ -1,0 +1,204 @@
+// The arguments of a command: words, where double quotes keep spaces in a word, which split into parameters
+// and switches such as /W or /V:LABEL
+import "std/str";
+
+pub struct Args {
+    text: []u8;             // everything after the command's name, as typed
+    words: [][]u8;          // the parameters, without quotes
+    switches: [][]u8;       // the switches without their /, in capitals
+}
+
+// The words of text, where double quotes keep spaces in a word and do not count themselves. They point into
+// text; free gives back only the slice of them.
+pub fn words_of(text: []u8) [][]u8 {
+    var count = 0;
+    var words: [][]u8;
+    for (var pass = 0; pass < 2; pass += 1) {
+        if (pass == 1) {
+            words = new([]u8, count);
+            count = 0;
+        }
+        var i = 0;
+        for (;;) {
+            var word = next_word(text, &i);
+            if (word.ptr == null) {
+                break;
+            }
+            if (pass == 1) {
+                words[count] = word;
+            }
+            count += 1;
+        }
+    }
+    return words;
+}
+
+// The next word of text from *at on, or a slice whose ptr is null at the end
+pub fn next_word(text: []u8, at: *int) []u8 {
+    var none: []u8;
+    var i = *at;
+    while (i < text.len && (text[i] == ' ' || text[i] == '\t')) {
+        i += 1;
+    }
+    if (i == text.len) {
+        *at = i;
+        return none;
+    }
+    var start = i;
+    var end = i;
+    if (text[i] == '"') {
+        start = i + 1;
+        i = start;
+        while (i < text.len && text[i] != '"') {
+            i += 1;
+        }
+        end = i;
+        if (i < text.len) {
+            i += 1;
+        }
+    } else {
+        while (i < text.len && text[i] != ' ' && text[i] != '\t') {
+            i += 1;
+        }
+        end = i;
+    }
+    *at = i;
+    return text[start:end];
+}
+
+// The next word from *at on, as next_word finds it, and whether it was in quotes
+fn scan(text: []u8, at: *int, quoted: *bool) []u8 {
+    var i = *at;
+    while (i < text.len && (text[i] == ' ' || text[i] == '\t')) {
+        i += 1;
+    }
+    *quoted = i < text.len && text[i] == '"';
+    *at = i;
+    return next_word(text, at);
+}
+
+pub fn parse(text: []u8) Args {
+    var a = Args { text: text };
+    var word_count = 0;
+    var switch_count = 0;
+    for (var pass = 0; pass < 2; pass += 1) {
+        if (pass == 1) {
+            a.words = new([]u8, word_count);
+            a.switches = new([]u8, switch_count);
+            word_count = 0;
+            switch_count = 0;
+        }
+        var at = 0;
+        for (;;) {
+            var quoted = false;
+            var word = scan(text, &at, &quoted);
+            if (word.ptr == null) {
+                break;
+            }
+            var slash = str.find_byte(word, '/');
+            if (quoted || slash < 0) {
+                if (pass == 1) {
+                    a.words[word_count] = word;
+                }
+                word_count += 1;
+                continue;
+            }
+            if (slash > 0) {
+                if (pass == 1) {
+                    a.words[word_count] = word[:slash];
+                }
+                word_count += 1;
+            }
+            // Each / starts a switch, so /W/P holds two
+            var start = slash + 1;
+            for (var k = start; k <= word.len; k += 1) {
+                if (k == word.len || word[k] == '/') {
+                    if (pass == 1) {
+                        a.switches[switch_count] = capitals(word[start:k]);
+                    }
+                    switch_count += 1;
+                    start = k + 1;
+                }
+            }
+        }
+    }
+    return a;
+}
+
+fn capitals(text: []u8) []u8 {
+    var result = str.clone(text);
+    for (var i = 0; i < result.len; i += 1) {
+        if (result[i] >= 'a' && result[i] <= 'z') {
+            result[i] = result[i] - 'a' + 'A';
+        }
+    }
+    return result;
+}
+
+pub fn release(a: *Args) {
+    for (var i = 0; i < a.switches.len; i += 1) {
+        free(a.switches[i]);
+    }
+    free(a.words);
+    free(a.switches);
+}
+
+// The parameter at index, or nothing
+pub fn word(a: *Args, index: int) []u8 {
+    if (index < a.words.len) {
+        return a.words[index];
+    }
+    return "";
+}
+
+// The name of a switch: what comes before its : or its value
+fn switch_name(s: []u8) []u8 {
+    var colon = str.find_byte(s, ':');
+    if (colon >= 0) {
+        return s[:colon];
+    }
+    return s;
+}
+
+// Whether the switch was given, as /NAME or /NAME:value
+pub fn has(a: *Args, name: []u8) bool {
+    for (var i = 0; i < a.switches.len; i += 1) {
+        if (str.equal(switch_name(a.switches[i]), name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The value of /NAME:value, or nothing
+pub fn value(a: *Args, name: []u8) []u8 {
+    for (var i = 0; i < a.switches.len; i += 1) {
+        var s = a.switches[i];
+        if (str.equal(switch_name(s), name) && s.len > name.len) {
+            return s[name.len + 1:];
+        }
+    }
+    return "";
+}
+
+// The first switch whose name is not among the names in known, separated by spaces, or nothing
+pub fn unknown(a: *Args, known: []u8) []u8 {
+    for (var i = 0; i < a.switches.len; i += 1) {
+        var name = switch_name(a.switches[i]);
+        var found = false;
+        var at = 0;
+        for (;;) {
+            var k = next_word(known, &at);
+            if (k.ptr == null) {
+                break;
+            }
+            if (str.equal(k, name)) {
+                found = true;
+            }
+        }
+        if (!found) {
+            return a.switches[i];
+        }
+    }
+    return "";
+}

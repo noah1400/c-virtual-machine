@@ -296,9 +296,10 @@ for src in "$root"/ore/tests/errors/*.ore; do
     fi
 done
 
-# MiniDos runs each session of tests/minidos, NAME.in, on an empty disk and shows each command, and
-# what it shows has to match NAME.out; the test is called minidos_NAME. The programs of
-# ore/minidos/programs and tests/minidos are built in the directory it runs in, for sessions to IMPORT.
+# MiniDos runs each session of tests/minidos, NAME.in, with an unformatted disk of 1 MB in drive A and a
+# new one without sectors in drive B, and shows what is typed. What it shows has to match NAME.out; the
+# test is called minidos_NAME. The programs of ore/minidos/programs and tests/minidos are built in the
+# directory it runs in, for sessions to IMPORT.
 programs_built=0
 for src in "$root"/tests/minidos/*.in; do
     [ -e "$src" ] || continue
@@ -317,7 +318,8 @@ for src in "$root"/tests/minidos/*.in; do
         programs_built=1
     fi
     dd if=/dev/zero of="$dir/disk.img" bs=512 count=2048 2> /dev/null
-    (cd "$dir" && "$vm" $VM_FLAGS -n 100000000 -m 4096 -b disk.img "$root/minidos.bin" -e < "$src" > "$session.out" 2>&1)
+    rm -f "$dir/second.img"
+    (cd "$dir" && "$vm" $VM_FLAGS -n 100000000 -b disk.img -b second.img "$root/minidos.bin" -e < "$src" > "$session.out" 2>&1)
     status=$?
     expected="$root/tests/minidos/$session.out"
     if [ "$update" -eq 1 ] && [ "$status" -eq 0 ] && ! cmp -s "$expected" "$dir/$session.out"; then

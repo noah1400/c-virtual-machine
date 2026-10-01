@@ -1,8 +1,9 @@
-// MiniDos: a small DOS for the VM, written in Ore. It keeps its files on the VM's disk and runs programs
-// from there below itself, in user mode. -e shows each command after the prompt, for sessions that come
-// from a file.
+// MiniDos: a small DOS for the VM, written in Ore. It keeps its files on the VM's disks and runs programs from
+// there below itself, in user mode. -e shows what is read from the keyboard, for sessions that come from a file.
 import "std/str";
 import "console";
+import "disk";
+import "disks";
 import "fs";
 import "program";
 import "shell";
@@ -10,7 +11,7 @@ import "shell";
 fn main(args: [][]u8) int {
     for (var i = 1; i < args.len; i += 1) {
         if (str.equal(args[i], "-e")) {
-            shell.echo_input = true;
+            console.echo = true;
         }
     }
     if ((main as u32) < program.LIMIT as u32) {
@@ -20,20 +21,27 @@ fn main(args: [][]u8) int {
     program.install();
     console.write("\nStarting MiniDos...\n\n");
     for (var d = 1; d < fs.DRIVES; d += 1) {
-        fs.mount(d);
+        if (disk.present(d) && fs.mount(d) == fs.Error.NOT_FORMATTED) {
+            var letter = [1]u8 { fs.letter(d) };
+            console.write("The disk in drive ");
+            console.write(letter[:]);
+            console.write(" is not formatted; FORMAT ");
+            console.write(letter[:]);
+            console.line(": prepares it.");
+        }
     }
     var e = fs.mount(0);
     if (e == fs.Error.NO_DISK) {
-        console.line("There is no disk; start vm with -b and a disk image.");
+        console.line("There is no disk in drive A. Start vm with -b and the name of a disk image, which vm");
+        console.line("creates when it does not exist.");
     } else if (e == fs.Error.NOT_FORMATTED) {
-        console.line("The disk is not formatted; FORMAT prepares it.");
+        disks.offer_format(0);
     } else if (e != fs.Error.NONE) {
-        console.line(fs.message(e));
-    } else {
-        var place = fs.Place {};
-        if (fs.find("\\AUTOEXEC.BAT", &place) == fs.Error.NONE) {
-            shell.run_batch("\\AUTOEXEC.BAT", "");
-        }
+        console.fail(e);
+    }
+    var place = fs.Place {};
+    if (fs.mounted(0) && fs.find("A:\\AUTOEXEC.BAT", &place) == fs.Error.NONE) {
+        shell.run_batch("A:\\AUTOEXEC.BAT", "", false);
     }
     shell.interact();
     return 0;

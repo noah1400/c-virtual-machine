@@ -1,0 +1,153 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT
+Required parameter missing - FORMAT A: formats the disk in drive A
+A:\>FORMAT C:
+There is no disk in drive C
+A:\>FORMAT E:
+Invalid drive specification
+A:\>FORMAT A: /X
+Invalid switch - /X
+A:\>FORMAT A: /F:5
+A disk holds 8K to 32,768K
+A:\>FORMAT A: /V:BAD*NAME
+Invalid characters in volume label, or more than 11 of them
+A:\>FORMAT A: /V:FIRST
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>FORMAT A:
+WARNING: ALL DATA ON THE DISK IN DRIVE A: WILL BE LOST!
+Proceed with Format (Y/N)?N
+A:\>FORMAT A: /V:SECOND
+WARNING: ALL DATA ON THE DISK IN DRIVE A: WILL BE LOST!
+Proceed with Format (Y/N)?Y
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>VOL
+ Volume in drive A is SECOND
+A:\>B:
+The disk in drive B is not formatted
+A:\>FORMAT B:
+Size of the new disk in K, or in M with an M after it (ENTER for 4M)? big
+A disk holds 8K to 32,768K
+Size of the new disk in K, or in M with an M after it (ENTER for 4M)? 64K
+Formatting 64K
+Format complete.
+
+Volume label (11 characters, ENTER for none)? work disk
+
+      64,512 bytes total disk space
+      64,000 bytes available on disk
+
+         512 bytes in each allocation unit
+         125 allocation units available on disk
+
+A:\>B:
+B:\>VOL
+ Volume in drive B is WORK DISK
+B:\>DIR
+
+ Volume in drive B is WORK DISK
+ Directory of B:\
+
+File not found
+B:\>ECHO on drive b > NOTE.TXT
+B:\>A:
+A:\>COPY B:NOTE.TXT
+        1 file(s) copied
+A:\>TYPE NOTE.TXT
+on drive b
+A:\>MD B:\SUB
+A:\>CD B:\SUB
+A:\>CD B:
+B:\SUB
+A:\>COPY NOTE.TXT B:
+        1 file(s) copied
+A:\>DIR B:
+
+ Volume in drive B is WORK DISK
+ Directory of B:\SUB
+
+.               <DIR>
+..              <DIR>
+NOTE     TXT            11
+        1 file(s)             11 bytes
+        2 dir(s)          62,464 bytes free
+A:\>B:
+B:\SUB>DIR
+
+ Volume in drive B is WORK DISK
+ Directory of B:\SUB
+
+.               <DIR>
+..              <DIR>
+NOTE     TXT            11
+        1 file(s)             11 bytes
+        2 dir(s)          62,464 bytes free
+B:\SUB>CD \
+B:\>LABEL
+ Volume in drive B is WORK DISK
+
+Volume label (11 characters, ENTER for none)? 
+
+Delete current volume label (Y/N)?Y
+B:\>VOL
+ Volume in drive B has no label
+B:\>LABEL B:FRESH
+B:\>VOL B:
+ Volume in drive B is FRESH
+B:\>DISKCOPY A: B:
+Copying 2,048 sectors
+Copy complete.
+B:\>VOL B:
+ Volume in drive B is SECOND
+B:\>CHKDSK B:
+
+Volume SECOND
+
+   1,039,872 bytes total disk space
+         512 bytes in 1 directories
+         512 bytes in 1 user files
+   1,038,848 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,031 total allocation units on disk
+       2,029 available allocation units on disk
+B:\>SYS B:
+System transferred
+B:\>DIR B:\DOS /B
+SORT.EXE
+FIND.EXE
+B:\>FORMAT B: /F:16K /V:TINY /S
+WARNING: ALL DATA ON THE DISK IN DRIVE B: WILL BE LOST!
+Proceed with Format (Y/N)?Y
+Formatting 16K
+Format complete.
+System transferred
+
+      15,360 bytes total disk space
+       6,144 bytes available on disk
+
+         512 bytes in each allocation unit
+          12 allocation units available on disk
+
+B:\>EXIT

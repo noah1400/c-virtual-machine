@@ -1,0 +1,1500 @@
+// The commands for files and directories
+import "std/mem";
+import "std/str";
+import "args";
+import "console";
+import "fs";
+import "names";
+import "shell";
+
+const SCREEN_LINES = 23;        // lines that a screenful shows before it waits
+const CHUNK = 4096;
+
+// Says why a command cannot run: a switch it does not take, or too few parameters
+fn usable(a: *args.Args, switches: []u8, needed: int) bool {
+    var unknown = args.unknown(a, switches);
+    if (unknown.len > 0) {
+        console.screen("Invalid switch - /");
+        console.error(unknown);
+        return false;
+    }
+    if (a.words.len < needed) {
+        console.error("Required parameter missing");
+        return false;
+    }
+    return true;
+}
+
+fn is_directory(path: []u8) bool {
+    var place = fs.Place {};
+    return fs.find(path, &place) == fs.Error.NONE && fs.is_directory(&place);
+}
+
+fn is_file(path: []u8) bool {
+    var place = fs.Place {};
+    return fs.find(path, &place) == fs.Error.NONE && !fs.is_directory(&place);
+}
+
+// Whether a path names a directory or a drive, which files then go into
+fn names_directory(path: []u8) bool {
+    var d = 0;
+    return path.len == 0 || names.drive_word(path, &d) || str.ends_with(path, "\\") || is_directory(path);
+}
+
+// The entries that a path selects, hidden ones too if asked for; false after saying why there are none
+fn select(path: []u8, hidden: bool, selection: *fs.Selection, entries: *[]fs.Entry) bool {
+    var e = fs.select(path, false, selection);
+    if (e == fs.Error.NONE) {
+        e = fs.list(selection, hidden, entries);
+    }
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        return false;
+    }
+    return true;
+}
+
+// What the names of a path's entries need in front of them, which free gives back
+fn prefix_of(path: []u8) []u8 {
+    if (!fs.has_wildcards(path) && is_directory(path)) {
+        return names.path_in(path, "");
+    }
+    return str.clone(names.directory_part(path));
+}
+
+// The path of an entry that a path selected, which free gives back
+fn entry_path(prefix: []u8, entry: *fs.Entry) []u8 {
+    var buffer: [12]u8;
+    return names.join(prefix, "", fs.name_text(entry.name, buffer));
+}
+
+fn is_entry_directory(entry: *fs.Entry) bool {
+    return (entry.attributes & fs.DIRECTORY) != 0;
+}
+
+// Whether an entry is . or .., which stand for directories that are listed elsewhere
+fn is_dots(entry: *fs.Entry) bool {
+    return entry.name[0] == '.';
+}
+
+fn count_files(entries: []fs.Entry) int {
+    var count = 0;
+    for (var i = 0; i < entries.len; i += 1) {
+        if (!is_entry_directory(&entries[i])) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+// Copies a file into another one, after its end when appending
+fn copy_file(from: []u8, to: []u8, appending: bool) fs.Error {
+    var e = fs.Error.NONE;
+    var source = fs.open(from, fs.READ, &e);
+    if (source == null) {
+        return e;
+    }
+    var mode = fs.WRITE;
+    if (appending) {
+        mode = fs.APPEND;
+    }
+    var target = fs.open(to, mode, &e);
+    if (target == null) {
+        fs.close(source);
+        return e;
+    }
+    var buffer = new(u8, CHUNK);
+    for (;;) {
+        var count = fs.read(source, buffer);
+        if (count < 0) {
+            e = fs.Error.DISK_ERROR;
+            break;
+        }
+        if (count == 0) {
+            break;
+        }
+        if (fs.write(target, buffer[:count]) != count) {
+            e = fs.Error.DISK_FULL;
+            break;
+        }
+    }
+    free(buffer);
+    fs.close(source);
+    var closed = fs.close(target);
+    if (e == fs.Error.NONE) {
+        e = closed;
+    }
+    return e;
+}
+
+fn same_file(a: []u8, b: []u8) bool {
+    var full_a = fs.absolute(a);
+    var full_b = fs.absolute(b);
+    var same = str.equal(full_a, full_b);
+    free(full_a);
+    free(full_b);
+    return same;
+}
+
+// Whether to replace a file that exists: without asking, or after asking, where All answers for the rest
+fn may_replace(path: []u8, ask: bool, all: *bool) bool {
+    if (!ask || *all || !is_file(path)) {
+        return true;
+    }
+    var question = names.join("Overwrite ", path, " (Yes/No/All)?");
+    var buffer: [80]u8;
+    var answer: u8 = 0;
+    while (answer != 'Y' && answer != 'N' && answer != 'A') {
+        console.screen(question);
+        var line: []u8;
+        if (!console.read_line(buffer, &line)) {
+            console.screen("\n");
+            answer = 'N';
+        } else if (str.trim(line).len > 0) {
+            answer = names.upper_byte(str.trim(line)[0]);
+        }
+    }
+    free(question);
+    *all = answer == 'A';
+    return answer != 'N';
+}
+
+// Whether commands ask before replacing files: not in batch files and not with /Y, unless /-Y says to
+fn asks(a: *args.Args) bool {
+    return !args.has(a, "Y") && (args.has(a, "-Y") || !shell.in_batch());
+}
+
+// DIR
+
+struct Listing {
+    wide: bool;
+    bare: bool;
+    recurse: bool;
+    pause: bool;
+    hidden: bool;
+    want: u8;               // attributes that a listed entry has
+    without: u8;            // attributes that it lacks
+    order: []u8;
+    lines: int;             // lines since the last pause
+    column: int;            // names on the current line with /W
+    files: int;
+    directories: int;
+    bytes: int;
+    stopped: bool;          // the keyboard's input ended at a pause
+}
+
+fn attribute_bit(c: u8) u8 {
+    switch (names.upper_byte(c)) {
+        case 'D' {
+            return fs.DIRECTORY;
+        }
+        case 'H' {
+            return fs.HIDDEN;
+        }
+        case 'S' {
+            return fs.SYSTEM;
+        }
+        case 'R' {
+            return fs.READ_ONLY;
+        }
+        case 'A' {
+            return fs.ARCHIVE;
+        }
+    }
+    return 0;
+}
+
+fn next_line(l: *Listing) {
+    l.lines += 1;
+    if (l.pause && l.lines >= SCREEN_LINES && !l.stopped) {
+        l.lines = 0;
+        l.stopped = !console.keyboard("Press Enter to continue . . .");
+    }
+}
+
+fn show_line(l: *Listing, text: []u8) {
+    console.line(text);
+    next_line(l);
+}
+
+fn compare_entries(a: *fs.Entry, b: *fs.Entry, order: []u8) int {
+    var reverse = false;
+    for (var i = 0; i < order.len; i += 1) {
+        var c = names.upper_byte(order[i]);
+        var r = 0;
+        if (c == '-') {
+            reverse = true;
+            continue;
+        } else if (c == 'N') {
+            r = mem.compare(a.name[:], b.name[:]);
+        } else if (c == 'E') {
+            r = mem.compare(a.name[8:11], b.name[8:11]);
+            if (r == 0) {
+                r = mem.compare(a.name[0:8], b.name[0:8]);
+            }
+        } else if (c == 'S') {
+            if (a.size < b.size) {
+                r = -1;
+            } else if (a.size > b.size) {
+                r = 1;
+            }
+        } else if (c == 'G') {
+            r = (is_entry_directory(b) as int) - (is_entry_directory(a) as int);
+        }
+        if (reverse) {
+            r = -r;
+        }
+        reverse = false;
+        if (r != 0) {
+            return r;
+        }
+    }
+    return 0;
+}
+
+fn sort_entries(entries: []fs.Entry, order: []u8) {
+    for (var i = 1; i < entries.len; i += 1) {
+        var entry = entries[i];
+        var k = i;
+        while (k > 0 && compare_entries(&entries[k - 1], &entry, order) > 0) {
+            entries[k] = entries[k - 1];
+            k -= 1;
+        }
+        entries[k] = entry;
+    }
+}
+
+// The entries of a directory that a listing shows, which free gives back
+fn listed(l: *Listing, path: []u8, entries: *[]fs.Entry) bool {
+    var selection = fs.Selection {};
+    var all: []fs.Entry;
+    if (fs.select(path, true, &selection) != fs.Error.NONE || fs.list(&selection, l.hidden, &all) != fs.Error.NONE) {
+        return false;
+    }
+    var count = 0;
+    for (var i = 0; i < all.len; i += 1) {
+        var attributes = all[i].attributes;
+        if ((attributes & l.want) == l.want && (attributes & l.without) == 0) {
+            all[count] = all[i];
+            count += 1;
+        }
+    }
+    *entries = all[:count];
+    if (l.order.len > 0) {
+        sort_entries(*entries, l.order);
+    }
+    return true;
+}
+
+fn show_entry(l: *Listing, directory: []u8, entry: *fs.Entry, last: bool) {
+    var buffer: [12]u8;
+    var name = fs.name_text(entry.name, buffer);
+    var directory_entry = is_entry_directory(entry);
+    if (directory_entry) {
+        l.directories += 1;
+    } else {
+        l.files += 1;
+        l.bytes += entry.size;
+    }
+    if (l.bare) {
+        if (l.recurse) {
+            var full = names.path_in(directory, name);
+            show_line(l, full);
+            free(full);
+        } else {
+            show_line(l, name);
+        }
+    } else if (l.wide) {
+        var width = name.len;
+        if (directory_entry) {
+            console.write("[");
+            console.write(name);
+            console.write("]");
+            width += 2;
+        } else {
+            console.write(name);
+        }
+        l.column += 1;
+        if (l.column == 5 || last) {
+            console.write("\n");
+            next_line(l);
+            l.column = 0;
+        } else {
+            console.column("", 16 - width);
+        }
+    } else {
+        console.write(entry.name[0:8]);
+        console.write(" ");
+        console.write(entry.name[8:11]);
+        if (directory_entry) {
+            show_line(l, "    <DIR>");
+        } else {
+            console.number(entry.size, 14);
+            console.write("\n");
+            next_line(l);
+        }
+    }
+}
+
+fn show_totals(l: *Listing, files: int, bytes: int) {
+    console.number(files, 9);
+    console.write(" file(s)");
+    console.number(bytes, 15);
+    show_line(l, " bytes");
+}
+
+// Lists the entries of a directory that match a pattern and, with /S, those of its subdirectories
+fn list_directory(l: *Listing, directory: []u8, pattern: []u8, top: bool) {
+    var path = names.path_in(directory, pattern);
+    var entries: []fs.Entry;
+    var found = listed(l, path, &entries);
+    free(path);
+    if (found && entries.len > 0) {
+        var files = l.files;
+        var bytes = l.bytes;
+        if (!l.bare && (l.recurse || !top)) {
+            console.write(" Directory of ");
+            show_line(l, directory);
+            console.write("\n");
+            next_line(l);
+        }
+        for (var i = 0; i < entries.len && !l.stopped; i += 1) {
+            if (!l.bare || !is_dots(&entries[i])) {
+                show_entry(l, directory, &entries[i], i == entries.len - 1);
+            }
+        }
+        if (l.recurse && !l.bare) {
+            show_totals(l, l.files - files, l.bytes - bytes);
+            console.write("\n");
+            next_line(l);
+        }
+    }
+    if (found) {
+        free(entries);
+    }
+    if (!l.recurse || l.stopped) {
+        return;
+    }
+    var everything = names.path_in(directory, "*.*");
+    var selection = fs.Selection {};
+    var subdirectories: []fs.Entry;
+    if (fs.select(everything, false, &selection) == fs.Error.NONE &&
+        fs.list(&selection, l.hidden, &subdirectories) == fs.Error.NONE) {
+        for (var i = 0; i < subdirectories.len && !l.stopped; i += 1) {
+            var entry = &subdirectories[i];
+            if (is_entry_directory(entry) && !is_dots(entry)) {
+                var buffer: [12]u8;
+                var inner = names.path_in(directory, fs.name_text(entry.name, buffer));
+                list_directory(l, inner, pattern, false);
+                free(inner);
+            }
+        }
+        free(subdirectories);
+    }
+    free(everything);
+}
+
+pub fn dir(a: *args.Args) {
+    if (!usable(a, "P W A O S B", 0)) {
+        return;
+    }
+    var path = args.word(a, 0);
+    var l = Listing {
+        wide: args.has(a, "W"), bare: args.has(a, "B"), recurse: args.has(a, "S"),
+        pause: args.has(a, "P") && !console.output_redirected(), without: fs.HIDDEN | fs.SYSTEM,
+    };
+    if (args.has(a, "A")) {
+        l.hidden = true;
+        l.without = 0;
+        var negate = false;
+        var filter = args.value(a, "A");
+        for (var i = 0; i < filter.len; i += 1) {
+            var bit = attribute_bit(filter[i]);
+            if (filter[i] == '-') {
+                negate = true;
+            } else if (bit == 0) {
+                console.error("Parameter format not correct");
+                return;
+            } else if (negate) {
+                l.without |= bit;
+                negate = false;
+            } else {
+                l.want |= bit;
+            }
+        }
+    }
+    if (args.has(a, "O")) {
+        l.order = args.value(a, "O");
+        if (l.order.len == 0) {
+            l.order = "GN";
+        }
+        for (var i = 0; i < l.order.len; i += 1) {
+            if (str.find_byte("NESG-", names.upper_byte(l.order[i])) < 0) {
+                console.error("Parameter format not correct");
+                return;
+            }
+        }
+    }
+
+    var selection = fs.Selection {};
+    var e = fs.select(path, true, &selection);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        return;
+    }
+    var directory: []u8;
+    var pattern = "*.*";
+    if (!fs.has_wildcards(path) && is_directory(path)) {
+        directory = fs.absolute(path);
+    } else {
+        directory = fs.absolute(names.directory_part(path));
+        if (names.name_part(path).len > 0) {
+            pattern = names.name_part(path);
+        }
+    }
+    if (!l.bare) {
+        console.write("\n Volume in drive ");
+        console.write_byte(fs.letter(selection.drive));
+        if (fs.label(selection.drive).len > 0) {
+            console.write(" is ");
+            show_line(&l, fs.label(selection.drive));
+        } else {
+            show_line(&l, " has no label");
+        }
+        if (!l.recurse) {
+            console.write(" Directory of ");
+            show_line(&l, directory);
+        }
+        console.write("\n");
+        next_line(&l);
+    }
+    list_directory(&l, directory, pattern, true);
+    if (!l.bare && !l.stopped) {
+        if (l.files + l.directories == 0) {
+            show_line(&l, "File not found");
+        } else {
+            if (l.recurse) {
+                show_line(&l, "Total files listed:");
+            }
+            show_totals(&l, l.files, l.bytes);
+            console.number(l.directories, 9);
+            console.write(" dir(s) ");
+            console.number(fs.free_bytes(selection.drive), 15);
+            show_line(&l, " bytes free");
+        }
+    }
+    free(directory);
+}
+
+// TYPE and MORE
+
+fn type_file(path: []u8) {
+    var e = fs.Error.NONE;
+    var f = fs.open(path, fs.READ, &e);
+    if (f == null) {
+        console.fail(e);
+        return;
+    }
+    var buffer = new(u8, CHUNK);
+    for (;;) {
+        var count = fs.read(f, buffer);
+        if (count <= 0) {
+            break;
+        }
+        console.write(buffer[:count]);
+    }
+    free(buffer);
+    fs.close(f);
+}
+
+pub fn type(a: *args.Args) {
+    if (!usable(a, "", 1)) {
+        return;
+    }
+    for (var i = 0; i < a.words.len; i += 1) {
+        var path = a.words[i];
+        if (!fs.has_wildcards(path)) {
+            type_file(path);
+            continue;
+        }
+        var selection = fs.Selection {};
+        var entries: []fs.Entry;
+        if (!select(path, false, &selection, &entries)) {
+            continue;
+        }
+        if (count_files(entries) == 0) {
+            console.fail(fs.Error.NOT_FOUND);
+        }
+        var prefix = prefix_of(path);
+        for (var k = 0; k < entries.len; k += 1) {
+            if (!is_entry_directory(&entries[k])) {
+                var file = entry_path(prefix, &entries[k]);
+                type_file(file);
+                free(file);
+            }
+        }
+        free(prefix);
+        free(entries);
+    }
+}
+
+// Shows a file or the command's input a screenful at a time, waiting for Enter at the keyboard in between
+pub fn more(a: *args.Args) {
+    if (!usable(a, "", 0)) {
+        return;
+    }
+    var e = fs.Error.NONE;
+    var f: *fs.File = null;
+    if (a.words.len > 0) {
+        f = fs.open(a.words[0], fs.READ, &e);
+        if (f == null) {
+            console.fail(e);
+            return;
+        }
+    }
+    var pause = !console.output_redirected();
+    var lines = 0;
+    var column = 0;
+    var buffer: [512]u8;
+    for (;;) {
+        var count = 0;
+        if (f != null) {
+            count = fs.read(f, buffer);
+        } else {
+            count = console.read(buffer);
+        }
+        if (count <= 0) {
+            break;
+        }
+        var start = 0;
+        for (var i = 0; i < count; i += 1) {
+            if (buffer[i] == '\n') {
+                column = 0;
+                lines += 1;
+            } else {
+                column += 1;
+                if (column == 80) {
+                    column = 0;
+                    lines += 1;
+                }
+            }
+            if (lines == SCREEN_LINES && pause) {
+                console.write(buffer[start:i + 1]);
+                start = i + 1;
+                lines = 0;
+                if (!console.keyboard("-- More --")) {
+                    pause = false;
+                }
+            }
+        }
+        console.write(buffer[start:count]);
+    }
+    if (f != null) {
+        fs.close(f);
+    }
+}
+
+// COPY
+
+// Copies the lines typed next into a file, up to a line with Ctrl-Z or the end of the input
+fn copy_console(target: []u8) {
+    var text = str.builder(256);
+    var buffer: [256]u8;
+    var line: []u8;
+    while (console.read_line(buffer, &line)) {
+        var stop = str.find_byte(line, 0x1A);
+        if (stop >= 0) {
+            str.append(&text, line[:stop]);
+            break;
+        }
+        str.append(&text, line);
+        str.append(&text, "\n");
+    }
+    var e = fs.write_file(target, str.text(&text));
+    str.release(&text);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        return;
+    }
+    copied(1);
+}
+
+fn copied(count: int) {
+    console.number(count, 9);
+    console.line(" file(s) copied");
+}
+
+// Joins the files of each source into one target, the first source unless one is given
+fn concatenate(sources: [][]u8, destination: []u8, ask: bool) {
+    var target = destination;
+    var first = true;
+    var all = false;
+    var count = 0;
+    for (var s = 0; s < sources.len; s += 1) {
+        var selection = fs.Selection {};
+        var entries: []fs.Entry;
+        if (!select(sources[s], false, &selection, &entries)) {
+            continue;
+        }
+        var prefix = prefix_of(sources[s]);
+        for (var i = 0; i < entries.len; i += 1) {
+            if (is_entry_directory(&entries[i])) {
+                continue;
+            }
+            var from = entry_path(prefix, &entries[i]);
+            if (target.len == 0) {
+                target = str.clone(from);
+                first = false;
+            } else if (same_file(from, target)) {
+                if (!first || destination.len > 0) {
+                    console.error("Content of destination lost before copy");
+                }
+                first = false;
+            } else if (!first || may_replace(target, ask, &all)) {
+                var e = copy_file(from, target, !first);
+                if (e != fs.Error.NONE) {
+                    console.fail(e);
+                }
+                first = false;
+                count = 1;
+            }
+            free(from);
+        }
+        free(prefix);
+        free(entries);
+    }
+    if (destination.len == 0 && target.len > 0) {
+        free(target);
+        count = 1;
+    }
+    if (target.len == 0) {
+        console.fail(fs.Error.NOT_FOUND);
+    }
+    copied(count);
+}
+
+pub fn copy(a: *args.Args) {
+    if (!usable(a, "Y -Y A B V", 1)) {
+        return;
+    }
+    // The parameters join into sources between + signs and a destination after a space
+    var joined = str.builder(64);
+    for (var i = 0; i < a.words.len; i += 1) {
+        var word = a.words[i];
+        var after_plus = joined.len > 0 && str.text(&joined)[joined.len - 1] == '+';
+        if (i > 0 && !after_plus && (word.len == 0 || word[0] != '+')) {
+            str.append_byte(&joined, ' ');
+        }
+        str.append(&joined, word);
+    }
+    var line = str.text(&joined);
+    var space = str.find_byte(line, ' ');
+    var source_text = line;
+    var destination = "";
+    if (space >= 0) {
+        source_text = line[:space];
+        destination = line[space + 1:];
+        if (str.find_byte(destination, ' ') >= 0) {
+            console.error("Too many parameters");
+            str.release(&joined);
+            return;
+        }
+    }
+    var sources = split_sources(source_text);
+    var ask = asks(a);
+    if (sources.len == 0) {
+        console.error("Required parameter missing");
+    } else if (sources.len == 1 && names.same(sources[0], "CON")) {
+        if (destination.len == 0) {
+            console.error("Required parameter missing");
+        } else {
+            copy_console(destination);
+        }
+    } else if (sources.len > 1 || fs.has_wildcards(sources[0]) && destination.len > 0 && !names_directory(destination)) {
+        concatenate(sources, destination, ask);
+    } else if (sources.len == 1) {
+        copy_files(sources[0], destination, ask);
+    }
+    free(sources);
+    str.release(&joined);
+}
+
+fn split_sources(text: []u8) [][]u8 {
+    var count = 0;
+    var sources: [][]u8;
+    for (var pass = 0; pass < 2; pass += 1) {
+        if (pass == 1) {
+            sources = new([]u8, count);
+            count = 0;
+        }
+        var start = 0;
+        for (var i = 0; i <= text.len; i += 1) {
+            if (i == text.len || text[i] == '+') {
+                if (i > start) {
+                    if (pass == 1) {
+                        sources[count] = text[start:i];
+                    }
+                    count += 1;
+                }
+                start = i + 1;
+            }
+        }
+    }
+    return sources;
+}
+
+fn copy_files(source: []u8, destination: []u8, ask: bool) {
+    var selection = fs.Selection {};
+    var entries: []fs.Entry;
+    if (!select(source, false, &selection, &entries)) {
+        copied(0);
+        return;
+    }
+    var prefix = prefix_of(source);
+    var into = names_directory(destination);
+    var count = 0;
+    var all = false;
+    var e = fs.Error.NONE;
+    for (var i = 0; i < entries.len && e == fs.Error.NONE; i += 1) {
+        if (is_entry_directory(&entries[i])) {
+            continue;
+        }
+        var from = entry_path(prefix, &entries[i]);
+        var to = str.clone(destination);
+        if (into) {
+            var buffer: [12]u8;
+            free(to);
+            to = names.path_in(destination, fs.name_text(entries[i].name, buffer));
+        }
+        if (same_file(from, to)) {
+            console.error("File cannot be copied onto itself");
+            e = fs.Error.EXISTS;
+        } else if (may_replace(to, ask, &all)) {
+            e = copy_file(from, to, false);
+            if (e == fs.Error.NONE) {
+                count += 1;
+            } else {
+                console.fail(e);
+            }
+        }
+        free(from);
+        free(to);
+    }
+    if (count_files(entries) == 0) {
+        console.fail(fs.Error.NOT_FOUND);
+    }
+    free(prefix);
+    free(entries);
+    copied(count);
+}
+
+// XCOPY
+
+// Makes the directory at path and those it lies in, where they are missing
+fn make_directories(path: []u8) fs.Error {
+    if (path.len == 0 || names_directory(path)) {
+        return fs.Error.NONE;
+    }
+    var parent = names.directory_part(path);
+    if (parent.len > 1 && (parent[parent.len - 1] == '\\' || parent[parent.len - 1] == '/')) {
+        parent = parent[:parent.len - 1];
+    }
+    if (parent.len > 0 && !str.ends_with(parent, ":")) {
+        var e = make_directories(parent);
+        if (e != fs.Error.NONE) {
+            return e;
+        }
+    }
+    return fs.make_directory(path);
+}
+
+struct Copying {
+    recurse: bool;
+    empty: bool;
+    ask: bool;
+    all: bool;
+    count: int;
+    failed: bool;
+}
+
+fn copy_tree(c: *Copying, from: []u8, pattern: []u8, to: []u8) {
+    var path = names.path_in(from, pattern);
+    var selection = fs.Selection {};
+    var entries: []fs.Entry;
+    if (!select(path, false, &selection, &entries)) {
+        free(path);
+        c.failed = true;
+        return;
+    }
+    free(path);
+    if (count_files(entries) > 0 || c.empty) {
+        var e = make_directories(to);
+        if (e != fs.Error.NONE) {
+            console.fail(e);
+            free(entries);
+            c.failed = true;
+            return;
+        }
+    }
+    for (var i = 0; i < entries.len && !c.failed; i += 1) {
+        if (is_entry_directory(&entries[i])) {
+            continue;
+        }
+        var buffer: [12]u8;
+        var name = fs.name_text(entries[i].name, buffer);
+        var source = names.path_in(from, name);
+        var target = names.path_in(to, name);
+        if (same_file(source, target)) {
+            console.error("File cannot be copied onto itself");
+            c.failed = true;
+        } else if (may_replace(target, c.ask, &c.all)) {
+            console.line(source);
+            var e = copy_file(source, target, false);
+            if (e == fs.Error.NONE) {
+                c.count += 1;
+            } else {
+                console.fail(e);
+                c.failed = true;
+            }
+        }
+        free(source);
+        free(target);
+    }
+    free(entries);
+    if (!c.recurse || c.failed) {
+        return;
+    }
+    var everything = names.path_in(from, "*.*");
+    var subdirectories: []fs.Entry;
+    if (fs.select(everything, false, &selection) == fs.Error.NONE &&
+        fs.list(&selection, false, &subdirectories) == fs.Error.NONE) {
+        for (var i = 0; i < subdirectories.len && !c.failed; i += 1) {
+            if (is_entry_directory(&subdirectories[i]) && !is_dots(&subdirectories[i])) {
+                var buffer: [12]u8;
+                var name = fs.name_text(subdirectories[i].name, buffer);
+                var inner_from = names.path_in(from, name);
+                var inner_to = names.path_in(to, name);
+                copy_tree(c, inner_from, pattern, inner_to);
+                free(inner_from);
+                free(inner_to);
+            }
+        }
+        free(subdirectories);
+    }
+    free(everything);
+}
+
+pub fn xcopy(a: *args.Args) {
+    if (!usable(a, "S E Y -Y", 1)) {
+        return;
+    }
+    var source = a.words[0];
+    var destination = args.word(a, 1);
+    var c = Copying { recurse: args.has(a, "S"), empty: args.has(a, "S") && args.has(a, "E"), ask: asks(a) };
+    var from = names.directory_part(source);
+    var pattern = names.name_part(source);
+    if (!fs.has_wildcards(source) && is_directory(source)) {
+        from = source;
+        pattern = "*.*";
+    }
+    if (pattern.len == 0) {
+        pattern = "*.*";
+    }
+    if (destination.len == 0) {
+        destination = ".";
+    }
+    copy_tree(&c, from, pattern, destination);
+    console.number(c.count, 9);
+    console.line(" File(s) copied");
+}
+
+// MOVE
+
+fn report_move(from: []u8, to: []u8, e: fs.Error) {
+    var full_from = fs.absolute(from);
+    var full_to = fs.absolute(to);
+    console.write(full_from);
+    console.write(" => ");
+    console.write(full_to);
+    if (e == fs.Error.NONE) {
+        console.line(" [ok]");
+    } else {
+        console.write(" [");
+        console.write(fs.message(e));
+        console.line("]");
+    }
+    free(full_from);
+    free(full_to);
+}
+
+// Moves a file within its drive, or copies it to another drive and deletes it
+fn move_file(from: []u8, to: []u8) fs.Error {
+    var source_drive = 0;
+    var target_drive = 0;
+    fs.drive_of(from, &source_drive);
+    fs.drive_of(to, &target_drive);
+    if (source_drive == target_drive) {
+        return fs.move(from, to);
+    }
+    var result = copy_file(from, to, false);
+    if (result == fs.Error.NONE) {
+        result = fs.delete(from);
+    }
+    return result;
+}
+
+pub fn move(a: *args.Args) {
+    if (!usable(a, "Y -Y", 2)) {
+        return;
+    }
+    if (a.words.len > 2) {
+        console.error("Too many parameters");
+        return;
+    }
+    var source = a.words[0];
+    var destination = a.words[1];
+    var into = names_directory(destination);
+    if (!fs.has_wildcards(source) && is_directory(source)) {
+        var target = str.clone(destination);
+        if (into) {
+            free(target);
+            target = names.path_in(destination, names.name_part(source));
+        }
+        report_move(source, target, fs.move(source, target));
+        free(target);
+        return;
+    }
+    var selection = fs.Selection {};
+    var entries: []fs.Entry;
+    if (!select(source, false, &selection, &entries)) {
+        return;
+    }
+    var files = count_files(entries);
+    if (files == 0) {
+        console.fail(fs.Error.NOT_FOUND);
+    } else if (files > 1 && !into) {
+        console.error("Cannot move multiple files to a single file");
+    } else {
+        var prefix = prefix_of(source);
+        var ask = asks(a);
+        var all = false;
+        for (var i = 0; i < entries.len; i += 1) {
+            if (is_entry_directory(&entries[i])) {
+                continue;
+            }
+            var from = entry_path(prefix, &entries[i]);
+            var to = str.clone(destination);
+            if (into) {
+                var buffer: [12]u8;
+                free(to);
+                to = names.path_in(destination, fs.name_text(entries[i].name, buffer));
+            }
+            if (!same_file(from, to) && may_replace(to, ask, &all)) {
+                var e = fs.Error.NONE;
+                if (is_file(to)) {
+                    e = fs.delete(to);
+                }
+                if (e == fs.Error.NONE) {
+                    e = move_file(from, to);
+                }
+                report_move(from, to, e);
+            }
+            free(from);
+            free(to);
+        }
+        free(prefix);
+    }
+    free(entries);
+}
+
+// DEL
+
+fn deletes_everything(pattern: [11]u8) bool {
+    for (var i = 0; i < pattern.len; i += 1) {
+        if (pattern[i] != '?') {
+            return false;
+        }
+    }
+    return true;
+}
+
+pub fn delete(a: *args.Args) {
+    if (!usable(a, "P", 1)) {
+        return;
+    }
+    var each = args.has(a, "P");
+    for (var w = 0; w < a.words.len; w += 1) {
+        var spec = str.clone(a.words[w]);
+        if (!fs.has_wildcards(spec) && is_directory(spec)) {
+            var all = names.path_in(spec, "*.*");
+            free(spec);
+            spec = all;
+        }
+        var selection = fs.Selection {};
+        var entries: []fs.Entry;
+        if (!select(spec, false, &selection, &entries)) {
+            free(spec);
+            continue;
+        }
+        var go = true;
+        if (deletes_everything(selection.pattern) && !each) {
+            console.error("All files in directory will be deleted!");
+            go = console.confirm("Are you sure (Y/N)?");
+        }
+        if (go && count_files(entries) == 0) {
+            console.fail(fs.Error.NOT_FOUND);
+        }
+        var prefix = prefix_of(spec);
+        for (var i = 0; i < entries.len && go; i += 1) {
+            if (is_entry_directory(&entries[i])) {
+                continue;
+            }
+            var path = entry_path(prefix, &entries[i]);
+            var question = names.join(path, ",    Delete (Y/N)?", "");
+            if (!each || console.confirm(question)) {
+                var e = fs.delete(path);
+                if (e != fs.Error.NONE) {
+                    console.screen(fs.message(e));
+                    console.screen(" - ");
+                    console.error(path);
+                }
+            }
+            free(question);
+            free(path);
+        }
+        free(prefix);
+        free(entries);
+        free(spec);
+    }
+}
+
+// REN
+
+pub fn rename(a: *args.Args) {
+    if (!usable(a, "", 2)) {
+        return;
+    }
+    var from = a.words[0];
+    var to = a.words[1];
+    if (names.directory_part(to).len > 0) {
+        console.error("Invalid parameter");
+        return;
+    }
+    if (!fs.has_wildcards(from) && !fs.has_wildcards(to)) {
+        var e = fs.rename(from, to);
+        if (e == fs.Error.EXISTS || e == fs.Error.NOT_FOUND) {
+            console.error("Duplicate file name or file not found");
+        } else if (e != fs.Error.NONE) {
+            console.fail(e);
+        }
+        return;
+    }
+    var pattern = fs.short_name(to, true, false);
+    if (!pattern.ok) {
+        console.fail(fs.Error.BAD_NAME);
+        return;
+    }
+    var selection = fs.Selection {};
+    var entries: []fs.Entry;
+    if (!select(from, false, &selection, &entries)) {
+        return;
+    }
+    var prefix = prefix_of(from);
+    var renamed = 0;
+    var failed = false;
+    for (var i = 0; i < entries.len; i += 1) {
+        if (is_entry_directory(&entries[i])) {
+            continue;
+        }
+        var chars = pattern.chars;
+        for (var k = 0; k < chars.len; k += 1) {
+            if (chars[k] == '?') {
+                chars[k] = entries[i].name[k];
+            }
+        }
+        var buffer: [12]u8;
+        var path = entry_path(prefix, &entries[i]);
+        var e = fs.rename(path, fs.name_text(chars, buffer));
+        if (e == fs.Error.NONE) {
+            renamed += 1;
+        } else {
+            failed = true;
+        }
+        free(path);
+    }
+    if (renamed == 0 || failed) {
+        console.error("Duplicate file name or file not found");
+    }
+    free(prefix);
+    free(entries);
+}
+
+// ATTRIB
+
+struct Attributes {
+    set: u8;
+    clear: u8;
+    recurse: bool;
+    found: bool;
+}
+
+fn show_attributes(path: []u8, attributes: u8) {
+    var line = [11]u8 { ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ' };
+    if ((attributes & fs.ARCHIVE) != 0) {
+        line[0] = 'A';
+    }
+    if ((attributes & fs.SYSTEM) != 0) {
+        line[3] = 'S';
+    }
+    if ((attributes & fs.HIDDEN) != 0) {
+        line[4] = 'H';
+    }
+    if ((attributes & fs.READ_ONLY) != 0) {
+        line[5] = 'R';
+    }
+    console.write(line[:]);
+    var full = fs.absolute(path);
+    console.line(full);
+    free(full);
+}
+
+fn attribute_entry(t: *Attributes, path: []u8, attributes: u8) {
+    t.found = true;
+    if (t.set == 0 && t.clear == 0) {
+        show_attributes(path, attributes);
+        return;
+    }
+    var e = fs.set_attributes(path, (attributes | t.set) & ~t.clear);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+    }
+}
+
+fn attribute_files(t: *Attributes, spec: []u8) {
+    var place = fs.Place {};
+    if (!fs.has_wildcards(spec) && fs.find(spec, &place) == fs.Error.NONE && place.index >= 0 &&
+        (!fs.is_directory(&place) || !t.recurse)) {
+        attribute_entry(t, spec, place.entry.attributes);
+        return;
+    }
+    var selection = fs.Selection {};
+    var entries: []fs.Entry;
+    if (fs.select(spec, false, &selection) != fs.Error.NONE || fs.list(&selection, true, &entries) != fs.Error.NONE) {
+        return;
+    }
+    var prefix = prefix_of(spec);
+    for (var i = 0; i < entries.len; i += 1) {
+        if (!is_entry_directory(&entries[i])) {
+            var path = entry_path(prefix, &entries[i]);
+            attribute_entry(t, path, entries[i].attributes);
+            free(path);
+        }
+    }
+    free(entries);
+    if (t.recurse) {
+        var pattern = names.name_part(spec);
+        if (!fs.has_wildcards(spec) && is_directory(spec)) {
+            pattern = "*.*";
+        }
+        var everything = names.join(prefix, "*.*", "");
+        var subdirectories: []fs.Entry;
+        if (fs.select(everything, false, &selection) == fs.Error.NONE &&
+            fs.list(&selection, true, &subdirectories) == fs.Error.NONE) {
+            for (var i = 0; i < subdirectories.len; i += 1) {
+                if (is_entry_directory(&subdirectories[i]) && !is_dots(&subdirectories[i])) {
+                    var directory = entry_path(prefix, &subdirectories[i]);
+                    var inner = names.path_in(directory, pattern);
+                    attribute_files(t, inner);
+                    free(inner);
+                    free(directory);
+                }
+            }
+            free(subdirectories);
+        }
+        free(everything);
+    }
+    free(prefix);
+}
+
+pub fn attrib(a: *args.Args) {
+    if (!usable(a, "S", 0)) {
+        return;
+    }
+    var t = Attributes { recurse: args.has(a, "S") };
+    var specs = 0;
+    for (var i = 0; i < a.words.len; i += 1) {
+        var word = a.words[i];
+        if (word.len > 0 && (word[0] == '+' || word[0] == '-')) {
+            for (var k = 1; k < word.len; k += 1) {
+                var bit = attribute_bit(word[k]);
+                if (bit == 0 || bit == fs.DIRECTORY) {
+                    console.error("Parameter format not correct");
+                    return;
+                }
+                if (word[0] == '+') {
+                    t.set |= bit;
+                } else {
+                    t.clear |= bit;
+                }
+            }
+        } else {
+            specs += 1;
+        }
+    }
+    for (var i = 0; i < a.words.len; i += 1) {
+        var word = a.words[i];
+        if (word.len == 0 || word[0] != '+' && word[0] != '-') {
+            t.found = false;
+            attribute_files(&t, word);
+            if (!t.found) {
+                console.screen("File not found - ");
+                console.error(word);
+            }
+        }
+    }
+    if (specs == 0) {
+        attribute_files(&t, "*.*");
+    }
+}
+
+// Directories
+
+pub fn change_directory(a: *args.Args) {
+    var path = args.word(a, 0);
+    var d = 0;
+    if (path.len == 0 || names.drive_word(path, &d)) {
+        if (path.len == 0) {
+            d = fs.current_drive();
+        }
+        if (d < 0 || d >= fs.DRIVES) {
+            console.fail(fs.Error.BAD_DRIVE);
+            return;
+        }
+        console.write_byte(fs.letter(d));
+        console.write(":");
+        console.line(fs.directory(d));
+        return;
+    }
+    var e = fs.change_directory(path);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+    }
+}
+
+pub fn make_directory(a: *args.Args) {
+    if (!usable(a, "", 1)) {
+        return;
+    }
+    for (var i = 0; i < a.words.len; i += 1) {
+        var e = fs.make_directory(a.words[i]);
+        if (e == fs.Error.EXISTS) {
+            console.error("Unable to create directory");
+        } else if (e != fs.Error.NONE) {
+            console.fail(e);
+        }
+    }
+}
+
+pub fn remove_directory(a: *args.Args) {
+    if (!usable(a, "", 1)) {
+        return;
+    }
+    for (var i = 0; i < a.words.len; i += 1) {
+        var e = fs.remove_directory(a.words[i]);
+        if (e != fs.Error.NONE) {
+            console.fail(e);
+        }
+    }
+}
+
+// Draws the subdirectories of a directory, with their files when asked for, below a prefix of lines
+fn draw_tree(directory: []u8, prefix: []u8, with_files: bool) bool {
+    var everything = names.path_in(directory, "*.*");
+    var selection = fs.Selection {};
+    var entries: []fs.Entry;
+    var e = fs.select(everything, false, &selection);
+    if (e == fs.Error.NONE) {
+        e = fs.list(&selection, false, &entries);
+    }
+    free(everything);
+    if (e != fs.Error.NONE) {
+        return false;
+    }
+    var subdirectories = 0;
+    for (var i = 0; i < entries.len; i += 1) {
+        if (is_entry_directory(&entries[i]) && !is_dots(&entries[i])) {
+            subdirectories += 1;
+        }
+    }
+    var files = 0;
+    if (with_files) {
+        for (var i = 0; i < entries.len; i += 1) {
+            if (!is_entry_directory(&entries[i])) {
+                var buffer: [12]u8;
+                console.write(prefix);
+                if (subdirectories > 0) {
+                    console.write("|   ");
+                } else {
+                    console.write("    ");
+                }
+                console.line(fs.name_text(entries[i].name, buffer));
+                files += 1;
+            }
+        }
+        if (files > 0) {
+            // A line between the files and the subdirectories, without spaces at its end
+            var bar = names.join(prefix, "|", "");
+            var end = prefix.len;
+            if (subdirectories > 0) {
+                end += 1;
+            }
+            while (end > 0 && bar[end - 1] == ' ') {
+                end -= 1;
+            }
+            console.line(bar[:end]);
+            free(bar);
+        }
+    }
+    var shown = 0;
+    for (var i = 0; i < entries.len; i += 1) {
+        if (!is_entry_directory(&entries[i]) || is_dots(&entries[i])) {
+            continue;
+        }
+        shown += 1;
+        var last = shown == subdirectories;
+        var buffer: [12]u8;
+        var name = fs.name_text(entries[i].name, buffer);
+        console.write(prefix);
+        if (last) {
+            console.write("\\---");
+        } else {
+            console.write("+---");
+        }
+        console.line(name);
+        var inner_prefix = names.join(prefix, "|   ", "");
+        if (last) {
+            free(inner_prefix);
+            inner_prefix = names.join(prefix, "    ", "");
+        }
+        var inner = names.path_in(directory, name);
+        draw_tree(inner, inner_prefix, with_files);
+        free(inner);
+        free(inner_prefix);
+    }
+    free(entries);
+    return subdirectories > 0;
+}
+
+pub fn tree(a: *args.Args) {
+    if (!usable(a, "F A", 0)) {
+        return;
+    }
+    var path = args.word(a, 0);
+    var place = fs.Place {};
+    var e = fs.find(path, &place);
+    if (e == fs.Error.NONE && !fs.is_directory(&place)) {
+        e = fs.Error.NOT_DIRECTORY;
+    }
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        return;
+    }
+    var directory = fs.absolute(path);
+    console.write("Directory PATH listing");
+    if (fs.label(place.drive).len > 0) {
+        console.write(" for Volume ");
+        console.write(fs.label(place.drive));
+    }
+    console.write("\n");
+    console.line(directory);
+    if (!draw_tree(directory, "", args.has(a, "F"))) {
+        console.line("No subdirectories exist");
+    }
+    free(directory);
+}
+
+// Deletes a directory with everything in it, whatever the attributes of its files
+fn delete_everything(directory: []u8) fs.Error {
+    var everything = names.path_in(directory, "*.*");
+    var selection = fs.Selection {};
+    var entries: []fs.Entry;
+    var e = fs.select(everything, false, &selection);
+    if (e == fs.Error.NONE) {
+        e = fs.list(&selection, true, &entries);
+    }
+    free(everything);
+    if (e != fs.Error.NONE) {
+        return e;
+    }
+    for (var i = 0; i < entries.len && e == fs.Error.NONE; i += 1) {
+        if (is_dots(&entries[i])) {
+            continue;
+        }
+        var path = names.path_in(directory, "");
+        var inner = entry_path(path, &entries[i]);
+        free(path);
+        if (is_entry_directory(&entries[i])) {
+            e = delete_everything(inner);
+        } else {
+            e = fs.set_attributes(inner, 0);
+            if (e == fs.Error.NONE) {
+                e = fs.delete(inner);
+            }
+        }
+        free(inner);
+    }
+    free(entries);
+    if (e == fs.Error.NONE) {
+        e = fs.remove_directory(directory);
+    }
+    return e;
+}
+
+pub fn delete_tree(a: *args.Args) {
+    if (!usable(a, "Y", 1)) {
+        return;
+    }
+    for (var i = 0; i < a.words.len; i += 1) {
+        var path = a.words[i];
+        var place = fs.Place {};
+        var e = fs.find(path, &place);
+        if (e != fs.Error.NONE) {
+            continue;
+        }
+        if (!args.has(a, "Y")) {
+            var what = "directory";
+            if (!fs.is_directory(&place)) {
+                what = "file";
+            }
+            var question = str.builder(80);
+            str.append(&question, "Delete ");
+            str.append(&question, what);
+            str.append(&question, " \"");
+            str.append(&question, path);
+            str.append(&question, "\"");
+            if (fs.is_directory(&place)) {
+                str.append(&question, " and all its subdirectories");
+            }
+            str.append(&question, "? [yn] ");
+            var go = console.confirm(str.text(&question));
+            str.release(&question);
+            if (!go) {
+                continue;
+            }
+        }
+        console.write("Deleting ");
+        console.write(path);
+        console.line("...");
+        if (fs.is_directory(&place)) {
+            e = delete_everything(path);
+        } else {
+            e = fs.set_attributes(path, 0);
+            if (e == fs.Error.NONE) {
+                e = fs.delete(path);
+            }
+        }
+        if (e != fs.Error.NONE) {
+            console.fail(e);
+        }
+    }
+}

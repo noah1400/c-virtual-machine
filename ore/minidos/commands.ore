@@ -1,0 +1,262 @@
+// The commands that MiniDos knows, with what HELP and /? say about them
+import "args";
+import "console";
+import "disks";
+import "files";
+import "names";
+import "shell";
+import "system";
+
+pub struct Command {
+    name: []u8;
+    alias: []u8;
+    run: fn(*args.Args);
+    help: [][]u8;           // what it does in a line, then how to use it
+}
+
+var table = []Command {
+    Command { name: "ATTRIB", run: files.attrib, help: [][]u8 {
+        "Shows or changes the attributes of files",
+        "ATTRIB [+R | -R] [+H | -H] [+S | -S] [+A | -A] [files] [/S]",
+        "  +, -   Sets or clears an attribute: R read-only, H hidden, S system, A archive",
+        "  /S     Works on the files of the subdirectories as well",
+    } },
+    Command { name: "CALL", run: shell.call, help: [][]u8 {
+        "Runs a batch file from another one and comes back",
+        "CALL name [parameters]",
+    } },
+    Command { name: "CD", alias: "CHDIR", run: files.change_directory, help: [][]u8 {
+        "Shows or changes the current directory",
+        "CD [drive:][path]",
+        "  CD .. goes to the parent directory and CD \\ to the root; CD drive: shows its current directory",
+    } },
+    Command { name: "CHKDSK", run: disks.check, help: [][]u8 {
+        "Checks the file system of a disk and shows how it is used",
+        "CHKDSK [drive:] [/F]",
+        "  /F     Fixes what it finds: frees lost clusters and corrects file sizes",
+    } },
+    Command { name: "CHOICE", run: shell.choice, help: [][]u8 {
+        "Waits for one of a set of keys and sets ERRORLEVEL to its place",
+        "CHOICE [/C:keys] [/N] [/S] [text]",
+        "  /C:keys  The keys to choose from, YN unless given",
+        "  /N       Leaves the keys out of the question",
+        "  /S       Tells capitals from small letters",
+    } },
+    Command { name: "CLS", run: system.clear, help: [][]u8 {
+        "Clears the screen",
+        "CLS",
+    } },
+    Command { name: "COPY", run: files.copy, help: [][]u8 {
+        "Copies files, or joins them into one",
+        "COPY [/Y | /-Y] source [+ source ...] [destination]",
+        "  source       Files to copy, which wildcards may name; CON for the lines typed next, up to Ctrl-Z",
+        "  destination  A directory, a drive or a file name, the current directory unless given",
+        "  /Y           Replaces existing files without asking, as batch files always do",
+        "  /-Y          Asks before replacing a file",
+    } },
+    Command { name: "DEL", alias: "ERASE", run: files.delete, help: [][]u8 {
+        "Deletes files",
+        "DEL files [/P]",
+        "  files  Files to delete, which wildcards may name; a directory stands for all its files",
+        "  /P     Asks before deleting each file",
+    } },
+    Command { name: "DELTREE", run: files.delete_tree, help: [][]u8 {
+        "Deletes a directory with all its files and subdirectories",
+        "DELTREE [/Y] directory ...",
+        "  /Y     Deletes without asking",
+    } },
+    Command { name: "DIR", run: files.dir, help: [][]u8 {
+        "Lists files and subdirectories",
+        "DIR [drive:][path][files] [/P] [/W] [/A[:attributes]] [/O[:order]] [/S] [/B]",
+        "  /P     Waits after each screenful",
+        "  /W     Shows only names, five to a line",
+        "  /A     Shows hidden files too, or only those with the attributes D, H, R, S or A; - in front",
+        "         of one leaves those out",
+        "  /O     Sorts by N name, E extension, S size or G directories first; - in front reverses",
+        "  /S     Lists the files in the subdirectories as well",
+        "  /B     Shows only the names",
+    } },
+    Command { name: "DISKCOPY", run: disks.copy_disk, help: [][]u8 {
+        "Copies a whole disk onto another one, which takes its size",
+        "DISKCOPY drive: drive:",
+    } },
+    Command { name: "ECHO", run: shell.echo, help: [][]u8 {
+        "Shows text, or whether batch files show their commands",
+        "ECHO [ON | OFF | text]",
+        "  ECHO. shows an empty line",
+    } },
+    Command { name: "EXIT", run: shell.exit, help: [][]u8 {
+        "Stops MiniDos and the VM",
+        "EXIT",
+    } },
+    Command { name: "EXPORT", run: system.export_file, help: [][]u8 {
+        "Copies a file to the host, into the directory that vm runs in",
+        "EXPORT file host-file",
+    } },
+    Command { name: "FOR", run: shell.for_each, help: [][]u8 {
+        "Runs a command for each of a set of words and files",
+        "FOR %variable IN (set) DO command",
+        "  The command runs with %variable standing for each word of the set, and for each file that a",
+        "  word with wildcards names. Batch files write %%variable.",
+    } },
+    Command { name: "FORMAT", run: disks.format, help: [][]u8 {
+        "Makes an empty file system on a disk",
+        "FORMAT drive: [/V:label] [/F:size] [/S]",
+        "  /V:label  The label of the disk, which FORMAT asks for unless given",
+        "  /F:size   The size of the disk in K, or in M with an M after it: 8K to 32M. A new disk",
+        "            gets 4M unless given, any other keeps its size",
+        "  /S        Puts the system programs onto the disk, as SYS does",
+    } },
+    Command { name: "GOTO", run: shell.go_to, help: [][]u8 {
+        "Continues a batch file after the line :label",
+        "GOTO label",
+    } },
+    Command { name: "HELP", run: help_command, help: [][]u8 {
+        "Lists the commands, or tells about one",
+        "HELP [command]",
+    } },
+    Command { name: "IF", run: shell.condition, help: [][]u8 {
+        "Runs a command when a condition holds",
+        "IF [NOT] EXIST file command",
+        "IF [NOT] ERRORLEVEL number command",
+        "IF [NOT] text==text command",
+        "  ERRORLEVEL n holds when the last program ended with status n or more",
+    } },
+    Command { name: "IMPORT", run: system.import_file, help: [][]u8 {
+        "Copies a file from the host, from the directory that vm runs in",
+        "IMPORT host-file [file]",
+        "  The copy keeps the name of the host's file unless file gives another",
+    } },
+    Command { name: "LABEL", run: disks.label, help: [][]u8 {
+        "Shows, changes or removes the label of a disk",
+        "LABEL [drive:][label]",
+    } },
+    Command { name: "MD", alias: "MKDIR", run: files.make_directory, help: [][]u8 {
+        "Makes a directory",
+        "MD [drive:]path",
+    } },
+    Command { name: "MEM", run: system.memory, help: [][]u8 {
+        "Shows how memory is used",
+        "MEM",
+    } },
+    Command { name: "MORE", run: files.more, help: [][]u8 {
+        "Shows a file or its input a screenful at a time",
+        "MORE [file]",
+        "command | MORE",
+    } },
+    Command { name: "MOVE", run: files.move, help: [][]u8 {
+        "Moves files to another directory or drive, or renames a directory",
+        "MOVE [/Y | /-Y] files destination",
+        "  /Y     Replaces existing files without asking, as batch files always do",
+    } },
+    Command { name: "PATH", run: shell.path, help: [][]u8 {
+        "Shows or sets the directories where programs are looked for",
+        "PATH [[drive:]path[;...]]",
+        "  PATH ; clears the list",
+    } },
+    Command { name: "PAUSE", run: shell.pause, help: [][]u8 {
+        "Waits for Enter",
+        "PAUSE",
+    } },
+    Command { name: "PROMPT", run: shell.prompt_command, help: [][]u8 {
+        "Changes the prompt",
+        "PROMPT [text]",
+        "  $P drive and directory   $N drive   $G >   $L <   $B |   $Q =   $$ $   $_ new line",
+        "  $V version   $E escape   $H backspace. PROMPT alone brings back $P$G.",
+    } },
+    Command { name: "RD", alias: "RMDIR", run: files.remove_directory, help: [][]u8 {
+        "Removes an empty directory",
+        "RD [drive:]path",
+    } },
+    Command { name: "REM", run: shell.remark, help: [][]u8 {
+        "Does nothing, for remarks in batch files",
+        "REM [text]",
+    } },
+    Command { name: "REN", alias: "RENAME", run: files.rename, help: [][]u8 {
+        "Renames files or a directory",
+        "REN [drive:][path]files name",
+        "  Wildcards in the new name keep the letters of the old one, as in REN *.TXT *.BAK",
+    } },
+    Command { name: "SET", run: shell.set, help: [][]u8 {
+        "Shows, sets or removes environment variables",
+        "SET [name=[value]]",
+    } },
+    Command { name: "SHIFT", run: shell.shift, help: [][]u8 {
+        "Moves the parameters of a batch file down by one",
+        "SHIFT",
+    } },
+    Command { name: "SYS", run: system.transfer, help: [][]u8 {
+        "Puts the system programs onto a disk",
+        "SYS drive:",
+        "  The programs go into \\DOS, and an AUTOEXEC.BAT that adds \\DOS to PATH into the root",
+        "  directory unless it has one",
+    } },
+    Command { name: "TREE", run: files.tree, help: [][]u8 {
+        "Draws the directories of a disk as a tree",
+        "TREE [drive:][path] [/F]",
+        "  /F     Lists the files in each directory too",
+    } },
+    Command { name: "TYPE", run: files.type, help: [][]u8 {
+        "Shows the contents of files",
+        "TYPE file ...",
+    } },
+    Command { name: "VER", run: system.version, help: [][]u8 {
+        "Shows the MiniDos version",
+        "VER",
+    } },
+    Command { name: "VOL", run: disks.volume, help: [][]u8 {
+        "Shows the label of a disk",
+        "VOL [drive:]",
+    } },
+    Command { name: "XCOPY", run: files.xcopy, help: [][]u8 {
+        "Copies files and directory trees",
+        "XCOPY source [destination] [/S] [/E] [/Y | /-Y]",
+        "  /S     Copies the subdirectories that hold files as well",
+        "  /E     Copies empty subdirectories too, with /S",
+        "  /Y     Replaces existing files without asking, as batch files always do",
+    } },
+};
+
+// The command of that name or alias, in any case, or null
+pub fn find(name: []u8) *Command {
+    for (var i = 0; i < table.len; i += 1) {
+        if (names.same(name, table[i].name) || table[i].alias.len > 0 && names.same(name, table[i].alias)) {
+            return &table[i];
+        }
+    }
+    return null;
+}
+
+pub fn help(command: *Command) {
+    for (var i = 0; i < command.help.len; i += 1) {
+        console.line(command.help[i]);
+        if (i == 0) {
+            console.write("\n");
+        }
+    }
+}
+
+fn help_command(a: *args.Args) {
+    if (a.words.len > 0) {
+        var command = find(a.words[0]);
+        if (command == null) {
+            console.error("There is no such command; programs tell about themselves");
+            return;
+        }
+        help(command);
+        return;
+    }
+    for (var i = 0; i < table.len; i += 1) {
+        var width = table[i].name.len;
+        console.write(table[i].name);
+        if (table[i].alias.len > 0) {
+            console.write(", ");
+            console.write(table[i].alias);
+            width += 2 + table[i].alias.len;
+        }
+        console.column("", 14 - width);
+        console.line(table[i].help[0]);
+    }
+    console.line("Other names run NAME.EXE or NAME.BAT. Commands take > file, >> file, < file and |.");
+    console.line("HELP command or command /? tells more about a command.");
+}

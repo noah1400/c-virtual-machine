@@ -1,0 +1,382 @@
+// The commands for whole disks: formatting, labels, checking and copying them
+import "std/str";
+import "args";
+import "console";
+import "disk";
+import "fs";
+import "names";
+import "system";
+
+const LABEL_QUESTION = "Volume label (11 characters, ENTER for none)? ";
+
+fn usable(a: *args.Args, switches: []u8) bool {
+    var unknown = args.unknown(a, switches);
+    if (unknown.len > 0) {
+        console.screen("Invalid switch - /");
+        console.error(unknown);
+        return false;
+    }
+    return true;
+}
+
+// The drive that a parameter names, the current one when it is missing; -1 after saying why it is no drive
+fn drive_in(word: []u8) int {
+    var d = fs.current_drive();
+    if (word.len > 0 && !names.drive_word(word, &d)) {
+        console.screen("Invalid parameter - ");
+        console.error(word);
+        return -1;
+    }
+    if (d < 0 || d >= fs.DRIVES) {
+        console.fail(fs.Error.BAD_DRIVE);
+        return -1;
+    }
+    return d;
+}
+
+// A size in K, or in M with an M after it, as sectors; false for anything else
+fn parse_size(text: []u8, sectors: *int) bool {
+    var number = text;
+    var unit = 2;
+    if (text.len > 0 && names.upper_byte(text[text.len - 1]) == 'M') {
+        number = text[:text.len - 1];
+        unit = 2048;
+    } else if (text.len > 0 && names.upper_byte(text[text.len - 1]) == 'K') {
+        number = text[:text.len - 1];
+    }
+    var n = str.parse_int(number);
+    if (!n.ok || n.value <= 0 || n.value > fs.LARGEST / unit) {
+        return false;
+    }
+    *sectors = n.value * unit;
+    return *sectors >= fs.SMALLEST && *sectors <= fs.LARGEST;
+}
+
+// Asks for the size of a disk that has none yet, NEW_DISK unless an answer gives another
+fn ask_size() int {
+    var buffer: [80]u8;
+    for (;;) {
+        var answer = console.ask("Size of the new disk in K, or in M with an M after it (ENTER for 4M)? ", buffer);
+        var sectors = 0;
+        if (answer.len == 0) {
+            return fs.NEW_DISK;
+        }
+        if (parse_size(answer, &sectors)) {
+            return sectors;
+        }
+        console.fail(fs.Error.BAD_SIZE);
+    }
+    return fs.NEW_DISK;
+}
+
+fn label_char(c: u8) bool {
+    return c >= ' ' && c < 0x7F && str.find_byte("*?/\\|.,;:+=[]<>\"", c) < 0;
+}
+
+fn valid_label(label: []u8) bool {
+    for (var i = 0; i < label.len; i += 1) {
+        if (!label_char(label[i])) {
+            return false;
+        }
+    }
+    return label.len <= 11;
+}
+
+// Asks for a label until it is a valid one or nothing, and returns it in buffer
+fn ask_label(buffer: []u8) []u8 {
+    for (;;) {
+        var answer = console.ask(LABEL_QUESTION, buffer);
+        if (valid_label(answer)) {
+            return answer;
+        }
+        console.error("Invalid characters in volume label, or more than 11 of them");
+    }
+    return "";
+}
+
+fn show_space(d: int) {
+    console.write("\n");
+    console.number(fs.total_bytes(d), 12);
+    console.line(" bytes total disk space");
+    console.number(fs.free_bytes(d), 12);
+    console.line(" bytes available on disk");
+    console.write("\n");
+    console.number(disk.SECTOR, 12);
+    console.line(" bytes in each allocation unit");
+    console.number(fs.free_bytes(d) / disk.SECTOR, 12);
+    console.line(" allocation units available on disk");
+    console.write("\n");
+}
+
+// Formats a drive, asking first when that destroys a file system and for a size when the disk has none, and
+// for a label unless one is given. Returns whether the disk was formatted.
+pub fn format_drive(d: int, label: []u8, labelled: bool, size: int, with_system: bool, warn: bool) bool {
+    if (!disk.present(d)) {
+        console.fail(fs.mount(d));
+        return false;
+    }
+    if (warn && fs.formatted(d)) {
+        console.screen("WARNING: ALL DATA ON THE DISK IN DRIVE ");
+        var letter = [2]u8 { fs.letter(d), ':' };
+        console.screen(letter[:]);
+        console.error(" WILL BE LOST!");
+        if (!console.confirm("Proceed with Format (Y/N)?")) {
+            return false;
+        }
+    }
+    var sectors = size;
+    if (sectors == 0 && disk.sectors(d) == 0) {
+        sectors = ask_size();
+    }
+    var shown = sectors;
+    if (shown == 0) {
+        shown = disk.sectors(d);
+        if (shown > fs.LARGEST) {
+            shown = fs.LARGEST;
+        }
+    }
+    console.write("Formatting ");
+    console.number(shown / 2, 0);
+    console.line("K");
+    var e = fs.format(d, label, sectors);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        return false;
+    }
+    console.line("Format complete.");
+    if (with_system) {
+        system.install(d);
+    }
+    if (!labelled) {
+        console.write("\n");
+        var buffer: [80]u8;
+        var answer = ask_label(buffer);
+        if (answer.len > 0) {
+            fs.set_label(d, answer);
+        }
+    }
+    show_space(d);
+    return true;
+}
+
+// FORMAT drive: [/V:label] [/F:size] [/S]
+pub fn format(a: *args.Args) {
+    if (!usable(a, "V F S Q U")) {
+        return;
+    }
+    if (a.words.len == 0) {
+        console.error("Required parameter missing - FORMAT A: formats the disk in drive A");
+        return;
+    }
+    var d = drive_in(a.words[0]);
+    if (d < 0) {
+        return;
+    }
+    var sectors = 0;
+    if (args.has(a, "F") && !parse_size(args.value(a, "F"), &sectors)) {
+        console.fail(fs.Error.BAD_SIZE);
+        return;
+    }
+    var label = args.value(a, "V");
+    if (!valid_label(label)) {
+        console.error("Invalid characters in volume label, or more than 11 of them");
+        return;
+    }
+    format_drive(d, label, args.has(a, "V"), sectors, args.has(a, "S"), true);
+}
+
+// Offers to format a drive whose disk holds no file system, as MiniDos does for drive A when it starts
+pub fn offer_format(d: int) bool {
+    var letter = [1]u8 { fs.letter(d) };
+    console.write("The disk in drive ");
+    console.write(letter[:]);
+    if (disk.sectors(d) == 0) {
+        console.line(" is new and not formatted yet.");
+    } else {
+        console.line(" is not formatted.");
+    }
+    if (!console.confirm("Format it now (Y/N)?")) {
+        console.write("FORMAT ");
+        console.write(letter[:]);
+        console.line(": prepares it.");
+        return false;
+    }
+    return format_drive(d, "", false, 0, true, false);
+}
+
+fn show_label(d: int) {
+    console.write(" Volume in drive ");
+    console.write_byte(fs.letter(d));
+    if (fs.label(d).len > 0) {
+        console.write(" is ");
+        console.line(fs.label(d));
+    } else {
+        console.line(" has no label");
+    }
+}
+
+// VOL [drive:]
+pub fn volume(a: *args.Args) {
+    if (!usable(a, "")) {
+        return;
+    }
+    var d = drive_in(args.word(a, 0));
+    if (d < 0) {
+        return;
+    }
+    if (!fs.formatted(d)) {
+        console.fail(fs.mount(d));
+        return;
+    }
+    show_label(d);
+}
+
+// LABEL [drive:][label] gives a disk a label, or asks for one
+pub fn label(a: *args.Args) {
+    if (!usable(a, "")) {
+        return;
+    }
+    var text = str.trim(a.text);
+    var d = fs.current_drive();
+    if (text.len >= 2 && text[1] == ':') {
+        d = drive_in(text[:2]);
+        if (d < 0) {
+            return;
+        }
+        text = str.trim(text[2:]);
+    }
+    if (!fs.formatted(d)) {
+        console.fail(fs.mount(d));
+        return;
+    }
+    if (text.len > 0) {
+        if (!valid_label(text)) {
+            console.error("Invalid characters in volume label, or more than 11 of them");
+            return;
+        }
+        fs.set_label(d, text);
+        return;
+    }
+    show_label(d);
+    console.write("\n");
+    var buffer: [80]u8;
+    var answer = ask_label(buffer);
+    if (answer.len > 0) {
+        fs.set_label(d, answer);
+    } else if (fs.label(d).len > 0 && console.confirm("\nDelete current volume label (Y/N)?")) {
+        fs.set_label(d, "");
+    }
+}
+
+fn space_line(clusters: int, what: []u8, count: int) {
+    console.number(clusters * disk.SECTOR, 12);
+    console.write(" bytes in ");
+    console.number(count, 0);
+    console.line(what);
+}
+
+// CHKDSK [drive:] [/F]
+pub fn check(a: *args.Args) {
+    if (!usable(a, "F")) {
+        return;
+    }
+    var d = drive_in(args.word(a, 0));
+    if (d < 0) {
+        return;
+    }
+    var fix = args.has(a, "F");
+    var report = fs.Report {};
+    var e = fs.check(d, fix, console.line, &report);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        return;
+    }
+    if (report.lost_clusters > 0) {
+        console.number(report.lost_clusters, 0);
+        console.write(" lost allocation units found in ");
+        console.number(report.lost_chains, 0);
+        console.line(" chains.");
+    }
+    if (report.problems + report.lost_clusters > 0) {
+        if (fix) {
+            console.line("The errors have been corrected.");
+        } else {
+            console.line("Errors found, F parameter not specified. Corrections will not be written to disk.");
+        }
+    }
+    console.write("\nVolume ");
+    if (fs.label(d).len > 0) {
+        console.write(fs.label(d));
+    } else {
+        console.write("without a label");
+    }
+    console.write("\n\n");
+    console.number(fs.total_bytes(d), 12);
+    console.line(" bytes total disk space");
+    space_line(report.directory_clusters, " directories", report.directories);
+    space_line(report.file_clusters, " user files", report.files);
+    if (report.hidden > 0) {
+        space_line(report.hidden_clusters, " hidden files", report.hidden);
+    }
+    if (report.lost_clusters > 0 && !fix) {
+        space_line(report.lost_clusters, " lost chains", report.lost_chains);
+    }
+    console.number(fs.free_bytes(d), 12);
+    console.line(" bytes available on disk");
+    console.write("\n");
+    console.number(disk.SECTOR, 12);
+    console.line(" bytes in each allocation unit");
+    console.number(fs.total_bytes(d) / disk.SECTOR, 12);
+    console.line(" total allocation units on disk");
+    console.number(fs.free_bytes(d) / disk.SECTOR, 12);
+    console.line(" available allocation units on disk");
+}
+
+// DISKCOPY drive: drive: copies every sector, after giving the target the size of the source
+pub fn copy_disk(a: *args.Args) {
+    if (!usable(a, "")) {
+        return;
+    }
+    if (a.words.len < 2) {
+        console.error("Required parameter missing");
+        return;
+    }
+    var from = drive_in(a.words[0]);
+    var to = drive_in(a.words[1]);
+    if (from < 0 || to < 0) {
+        return;
+    }
+    if (from == to) {
+        console.error("A disk cannot be copied onto itself");
+        return;
+    }
+    if (!disk.present(from) || disk.sectors(from) == 0) {
+        console.fail(fs.mount(from));
+        return;
+    }
+    if (!disk.present(to)) {
+        console.fail(fs.mount(to));
+        return;
+    }
+    var sectors = disk.sectors(from);
+    console.write("Copying ");
+    console.number(sectors, 0);
+    console.line(" sectors");
+    var buffer = new(u8, 64 * disk.SECTOR);
+    var ok = disk.sectors(to) == sectors || disk.resize(to, sectors);
+    for (var sector = 0; sector < sectors && ok; sector += 64) {
+        var count = sectors - sector;
+        if (count > 64) {
+            count = 64;
+        }
+        var part = buffer[:count * disk.SECTOR];
+        ok = disk.read(from, sector, part) && disk.write(to, sector, part);
+    }
+    free(buffer);
+    fs.mount(to);
+    if (!ok) {
+        console.fail(fs.Error.DISK_ERROR);
+        return;
+    }
+    console.line("Copy complete.");
+}

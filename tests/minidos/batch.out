@@ -1,16 +1,39 @@
 
 Starting MiniDos...
 
-The disk is not formatted; FORMAT prepares it.
-A:\>FORMAT
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A:
+Formatting 1,024K
 Format complete.
+
+Volume label (11 characters, ENTER for none)? 
 
    1,039,872 bytes total disk space
    1,039,360 bytes available on disk
 
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
 A:\>IMPORT hello.bin HELLO.EXE
         1 file(s) imported
 A:\>COPY CON TEST.BAT
+@ECHO OFF
+REM a batch file with parameters
+ECHO Parameters: %1 and %2
+IF "%1"=="" GOTO NONE
+HELLO %1
+IF ERRORLEVEL 3 ECHO HELLO ended with 3 or more
+SHIFT
+ECHO After SHIFT the first is %1
+GOTO END
+:NONE
+ECHO No parameters
+:END
+ECHO Done
+
         1 file(s) copied
 A:\>TEST alpha beta
 Parameters: alpha and beta
@@ -24,6 +47,14 @@ Parameters:  and
 No parameters
 Done
 A:\>COPY CON SHOW.BAT
+ECHO Batch files show their commands unless ECHO is off
+SET GREETING=hi there
+ECHO %GREETING% from %0
+IF EXIST SHOW.BAT ECHO SHOW.BAT exists
+IF NOT EXIST NOPE.BAT ECHO NOPE.BAT does not
+GOTO MISSING
+ECHO not reached
+
         1 file(s) copied
 A:\>SHOW
 A:\>ECHO Batch files show their commands unless ECHO is off

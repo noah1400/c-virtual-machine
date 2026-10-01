@@ -1,0 +1,47 @@
+N
+FORMAT A: /V:BATCH
+COPY CON INNER.BAT
+@ECHO inner got %1
+@ECHO inner sets %TOP%
+
+COPY CON OUTER.BAT
+@ECHO OFF
+SET TOP=outer
+CALL INNER one
+ECHO back in outer
+INNER two
+ECHO not reached
+
+OUTER
+FOR %F IN (alpha beta) DO ECHO item %F
+FOR %F IN (*.BAT) DO TYPE %F
+FOR %F IN alpha DO ECHO x
+COPY CON ASK.BAT
+@ECHO OFF
+CHOICE /C:ABC Pick one
+IF ERRORLEVEL 3 GOTO C
+IF ERRORLEVEL 2 GOTO B
+ECHO chose A
+GOTO END
+:B
+ECHO chose B
+GOTO END
+:C
+ECHO chose C
+:END
+
+ASK
+z
+B
+ASK
+c
+CHOICE /N Continue
+Y
+IF EXIST *.BAT ECHO batch files exist
+IF NOT EXIST *.EXE ECHO no programs
+PROMPT $N$G
+DIR /B
+PROMPT [$P]$_$$
+PROMPT
+SET
+EXIT

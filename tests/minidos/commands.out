@@ -1,14 +1,21 @@
 
 Starting MiniDos...
 
-The disk is not formatted; FORMAT prepares it.
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
 A:\>DIR
 The disk in drive A is not formatted
-A:\>FORMAT TESTDISK
+A:\>FORMAT A: /V:TESTDISK
+Formatting 1,024K
 Format complete.
 
    1,039,872 bytes total disk space
    1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
 
 A:\>VOL
  Volume in drive A is TESTDISK
@@ -17,8 +24,7 @@ A:\>DIR
  Volume in drive A is TESTDISK
  Directory of A:\
 
-        0 file(s)              0 bytes
-        0 dir(s)       1,039,360 bytes free
+File not found
 A:\>ECHO first line > NOTES.TXT
 A:\>ECHO second line >> NOTES.TXT
 A:\>TYPE NOTES.TXT
@@ -68,6 +74,9 @@ Path not found
 A:\>MD TOOLONGNAME.TXT
 Invalid file name
 A:\>COPY CON POEM.TXT
+roses are red
+violets are blue
+
         1 file(s) copied
 A:\>TYPE POEM.TXT
 roses are red
@@ -78,14 +87,13 @@ A:\>DIR
  Volume in drive A is TESTDISK
  Directory of A:\
 
-        0 file(s)              0 bytes
-        0 dir(s)       1,039,360 bytes free
+File not found
 A:\>DEL
 Required parameter missing
 A:\>BOGUS
 Bad command or file name
 A:\>VER
 
-MiniDos Version 2.0
+MiniDos Version 3.0
 
 A:\>EXIT

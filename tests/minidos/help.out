@@ -1,0 +1,41 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>HELP FORMAT
+Makes an empty file system on a disk
+
+FORMAT drive: [/V:label] [/F:size] [/S]
+  /V:label  The label of the disk, which FORMAT asks for unless given
+  /F:size   The size of the disk in K, or in M with an M after it: 8K to 32M. A new disk
+            gets 4M unless given, any other keeps its size
+  /S        Puts the system programs onto the disk, as SYS does
+A:\>COPY /?
+Copies files, or joins them into one
+
+COPY [/Y | /-Y] source [+ source ...] [destination]
+  source       Files to copy, which wildcards may name; CON for the lines typed next, up to Ctrl-Z
+  destination  A directory, a drive or a file name, the current directory unless given
+  /Y           Replaces existing files without asking, as batch files always do
+  /-Y          Asks before replacing a file
+A:\>HELP NOPE
+There is no such command; programs tell about themselves
+A:\>DIR /Z
+Invalid switch - /Z
+A:\>CD /?
+Shows or changes the current directory
+
+CD [drive:][path]
+  CD .. goes to the parent directory and CD \ to the root; CD drive: shows its current directory
+A:\>CD..
+The disk in drive A is not formatted
+A:\>ECHO.
+
+A:\>VER /?
+Shows the MiniDos version
+
+VER
+A:\>EXIT

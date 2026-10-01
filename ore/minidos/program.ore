@@ -4,6 +4,7 @@
 import "std/cpu";
 import "std/mem";
 import "std/str";
+import "args";
 import "console";
 import "fs";
 
@@ -151,50 +152,14 @@ fn check(h: *Header, size: int) []u8 {
 
 // The program's path and the words of tail, where double quotes keep spaces in a word
 fn split(path: []u8, tail: []u8) [][]u8 {
-    var count = 1;
-    var i = 0;
-    while (next_word(tail, &i).ptr != null) {
-        count += 1;
+    var words = args.words_of(tail);
+    var result = new([]u8, words.len + 1);
+    result[0] = path;
+    for (var i = 0; i < words.len; i += 1) {
+        result[i + 1] = str.clone(words[i]);
     }
-    var words = new([]u8, count);
-    words[0] = path;
-    i = 0;
-    for (var k = 1; k < count; k += 1) {
-        words[k] = str.clone(next_word(tail, &i));
-    }
-    return words;
-}
-
-fn next_word(text: []u8, at: *int) []u8 {
-    var none: []u8;
-    var i = *at;
-    while (i < text.len && text[i] == ' ') {
-        i += 1;
-    }
-    if (i == text.len) {
-        *at = i;
-        return none;
-    }
-    var start = i;
-    var end = i;
-    if (text[i] == '"') {
-        start = i + 1;
-        i = start;
-        while (i < text.len && text[i] != '"') {
-            i += 1;
-        }
-        end = i;
-        if (i < text.len) {
-            i += 1;
-        }
-    } else {
-        while (i < text.len && text[i] != ' ') {
-            i += 1;
-        }
-        end = i;
-    }
-    *at = i;
-    return text[start:end];
+    free(words);
+    return result;
 }
 
 // The word at an address of the program's memory, which may be 0, where no pointer can go

@@ -42,21 +42,21 @@ vmc.bin: vmc1.bin vm vmasm
 	./vmasm -I ./ore/lib -I . $@.asm -o $@
 	rm -f $@.asm
 
-# MiniDos lives above the programs it runs, which start at 0, and asks for 4 MB of memory
-minidos.bin: vmc.bin vm vmasm $(MINIDOS_SRC) $(ORE_LIB)
-	./vmc -b 0x100000 -m 4096 ore/minidos/main.ore -o $@
+# MiniDos lives above the programs it runs, which start at 0, asks for 4 MB of memory and carries the
+# programs that FORMAT /S puts onto a disk
+minidos.bin: vmc.bin vm vmasm $(MINIDOS_SRC) $(ORE_LIB) $(MINIDOS_PROGRAMS)
+	./vmc -b 0x100000 -m 4096 -I $(BUILD)/minidos ore/minidos/main.ore -o $@
 
 # MiniDos only loads the code and data of a program, so its programs leave out debug information
 $(BUILD)/minidos/%.bin: ore/minidos/programs/%.ore vmc.bin vm vmasm $(ORE_LIB)
 	@mkdir -p $(dir $@)
 	./vmc -g0 $< -o $@
 
-# A 4 MB disk with the MiniDos programs on it, which MiniDos formats and fills itself
-minidos.img: minidos.bin $(MINIDOS_PROGRAMS)
-	dd if=/dev/zero of=$@ bs=512 count=8192 2> /dev/null
-	(echo FORMAT MINIDOS; for p in $(MINIDOS_PROGRAMS); do \
-	    echo "IMPORT $$p $$(basename $$p .bin | tr a-z A-Z).EXE"; done; echo EXIT) | \
-	    ./vm -b $@ minidos.bin > /dev/null
+# A 4 MB disk with the system programs on it, which MiniDos formats when it finds the disk new, answering
+# yes, 4M and the label MINIDOS
+minidos.img: minidos.bin
+	rm -f $@
+	printf 'Y\n4M\nMINIDOS\nEXIT\n' | ./vm -b $@ minidos.bin > /dev/null
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)

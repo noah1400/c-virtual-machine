@@ -1,0 +1,90 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A: /V:BATCH
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>COPY CON INNER.BAT
+@ECHO inner got %1
+@ECHO inner sets %TOP%
+
+        1 file(s) copied
+A:\>COPY CON OUTER.BAT
+@ECHO OFF
+SET TOP=outer
+CALL INNER one
+ECHO back in outer
+INNER two
+ECHO not reached
+
+        1 file(s) copied
+A:\>OUTER
+inner got one
+inner sets outer
+back in outer
+inner got two
+inner sets outer
+A:\>FOR %F IN (alpha beta) DO ECHO item %F
+item alpha
+item beta
+A:\>FOR %F IN (*.BAT) DO TYPE %F
+@ECHO inner got %1
+@ECHO inner sets %TOP%
+@ECHO OFF
+SET TOP=outer
+CALL INNER one
+ECHO back in outer
+INNER two
+ECHO not reached
+A:\>FOR %F IN alpha DO ECHO x
+Syntax error
+A:\>COPY CON ASK.BAT
+@ECHO OFF
+CHOICE /C:ABC Pick one
+IF ERRORLEVEL 3 GOTO C
+IF ERRORLEVEL 2 GOTO B
+ECHO chose A
+GOTO END
+:B
+ECHO chose B
+GOTO END
+:C
+ECHO chose C
+:END
+
+        1 file(s) copied
+A:\>ASK
+Pick one [A,B,C]?z
+Pick one [A,B,C]?B
+chose B
+A:\>ASK
+Pick one [A,B,C]?c
+chose C
+A:\>CHOICE /N Continue
+ContinueY
+A:\>IF EXIST *.BAT ECHO batch files exist
+batch files exist
+A:\>IF NOT EXIST *.EXE ECHO no programs
+no programs
+A:\>PROMPT $N$G
+A>DIR /B
+INNER.BAT
+OUTER.BAT
+ASK.BAT
+A>PROMPT [$P]$_$$
+[A:\]
+$PROMPT
+A:\>SET
+TOP=outer
+A:\>EXIT

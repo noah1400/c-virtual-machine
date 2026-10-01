@@ -1,0 +1,10 @@
+N
+HELP FORMAT
+COPY /?
+HELP NOPE
+DIR /Z
+CD /?
+CD..
+ECHO.
+VER /?
+EXIT

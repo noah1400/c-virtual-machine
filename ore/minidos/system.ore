@@ -1,0 +1,149 @@
+// Commands about the system: the screen, the version, memory, files from and to the host, and the system
+// programs that come with MiniDos, which FORMAT /S and SYS put onto a disk
+import "std/io";
+import "std/str";
+import "std/sys";
+import "args";
+import "console";
+import "fs";
+import "names";
+import "program";
+import "shell";
+
+struct SystemFile {
+    name: []u8;
+    bytes: []u8;
+}
+
+// make builds the programs of ore/minidos/programs into a directory that it gives vmc with -I
+var system_files = []SystemFile {
+    SystemFile { name: "SORT.EXE", bytes: embed("sort.bin") },
+    SystemFile { name: "FIND.EXE", bytes: embed("find.bin") },
+};
+
+const AUTOEXEC = "@ECHO OFF\nPATH A:\\DOS\n";
+
+// Puts the system programs into \DOS on a drive's disk, and an AUTOEXEC.BAT that adds \DOS to PATH into its
+// root directory unless one is there
+pub fn install(d: int) bool {
+    var root = [3]u8 { fs.letter(d), ':', '\\' };
+    var directory = names.join(root[:], "DOS", "");
+    var e = fs.make_directory(directory);
+    if (e == fs.Error.EXISTS) {
+        e = fs.Error.NONE;
+    }
+    for (var i = 0; i < system_files.len && e == fs.Error.NONE; i += 1) {
+        var path = names.path_in(directory, system_files[i].name);
+        e = fs.write_file(path, system_files[i].bytes);
+        free(path);
+    }
+    free(directory);
+    var autoexec = names.join(root[:], "AUTOEXEC.BAT", "");
+    var place = fs.Place {};
+    if (e == fs.Error.NONE && fs.find(autoexec, &place) == fs.Error.NOT_FOUND) {
+        e = fs.write_file(autoexec, AUTOEXEC);
+    }
+    free(autoexec);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        return false;
+    }
+    console.line("System transferred");
+    return true;
+}
+
+// SYS drive: puts the system programs onto a disk that is formatted already
+pub fn transfer(a: *args.Args) {
+    if (args.unknown(a, "").len > 0 || a.words.len != 1) {
+        console.error("Required parameter missing - SYS A: puts the system programs onto the disk in drive A");
+        return;
+    }
+    var d = 0;
+    if (!names.drive_word(a.words[0], &d) || d < 0 || d >= fs.DRIVES) {
+        console.fail(fs.Error.BAD_DRIVE);
+        return;
+    }
+    if (!fs.formatted(d)) {
+        console.fail(fs.mount(d));
+        return;
+    }
+    install(d);
+}
+
+pub fn clear(a: *args.Args) {
+    console.clear();
+}
+
+pub fn version(a: *args.Args) {
+    console.write("\n");
+    console.line(shell.VERSION);
+    console.write("\n");
+}
+
+pub fn memory(a: *args.Args) {
+    console.write("\n");
+    console.number(program.LIMIT, 12);
+    console.line(" bytes for programs");
+    console.number(sys.memory_size(), 12);
+    console.line(" bytes of memory");
+    console.number(sys.free_heap(), 12);
+    console.line(" bytes free for programs to allocate");
+    console.write("\n");
+}
+
+// IMPORT host [name] copies a file of the host into MiniDos. Host paths may hold /, which elsewhere starts a
+// switch, so this takes the words as typed.
+pub fn import_file(a: *args.Args) {
+    var words = args.words_of(a.text);
+    if (words.len == 0) {
+        console.error("Required parameter missing");
+        free(words);
+        return;
+    }
+    var host = words[0];
+    var name = host[str.find_last_byte(host, '/') + 1:];
+    if (words.len > 1) {
+        name = words[1];
+    }
+    var bytes = io.read_file(host);
+    if (bytes.ptr == null) {
+        console.error("Cannot read the host's file");
+        free(words);
+        return;
+    }
+    var e = fs.write_file(name, bytes);
+    free(bytes);
+    free(words);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        return;
+    }
+    console.number(1, 9);
+    console.line(" file(s) imported");
+}
+
+// EXPORT name host copies a file of MiniDos to the host
+pub fn export_file(a: *args.Args) {
+    var words = args.words_of(a.text);
+    if (words.len < 2) {
+        console.error("Required parameter missing");
+        free(words);
+        return;
+    }
+    var bytes: []u8;
+    var e = fs.read_file(words[0], &bytes);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+        free(words);
+        return;
+    }
+    var ok = io.write_file(words[1], bytes);
+    free(bytes);
+    free(words);
+    if (!ok) {
+        console.error("Cannot write the host's file");
+        return;
+    }
+    console.number(1, 9);
+    console.line(" file(s) exported");
+}
