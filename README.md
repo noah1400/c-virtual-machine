@@ -7,7 +7,7 @@ A 32-bit virtual machine written in C, with its own assembler, linker, disassemb
 - **`vmld`** links object files into one program.
 - **`vmc`** compiles [Ore](docs/language.md) programs into VM32 binaries. It is written in Ore and runs on the VM.
 - **`vmc0`** compiles Ore as well, without optimizing. It is written in C and compiles `vmc` in the first place.
-- **[MiniDos](docs/minidos.md)** is a small DOS written in Ore: a shell with batch files, redirection and pipes, a file system on the VM's disk, and programs that it loads from there and runs in user mode.
+- **[MiniDos](docs/minidos.md)** is a small DOS written in Ore: a shell with batch files, redirection and pipes, a file system on up to four of the VM's disks, a full-screen editor, and programs that it loads from there and runs in user mode.
 
 ## Contents
 
@@ -987,22 +987,24 @@ The error messages of both compilers name the file and line of the first problem
 
 ## MiniDos
 
-[MiniDos](docs/minidos.md) is a small DOS written in Ore, in `ore/minidos`. It lives above the first megabyte, built with `vmc -b 0x100000`, and runs programs below it in user mode, so any program `vmc` builds runs under it unchanged: their syscalls arrive at MiniDos as privilege violations, and it serves them from its own disk and console. `make` builds `minidos.bin` and `minidos.img`, a 4 MB disk with the programs `SORT` and `FIND` on it:
+[MiniDos](docs/minidos.md) is a small DOS written in Ore, in `ore/minidos`. It keeps its files on up to four disks and has 42 commands with `/?` help, batch files, pipes, a line editor with a history and completion of file names, a clock and a full-screen editor, `EDIT`. It lives above the first megabyte, built with `vmc -b 0x100000`, and runs programs below it in user mode, so any program `vmc` builds runs under it unchanged: their syscalls arrive at MiniDos as privilege violations, and it serves them from its own disks and console.
+
+`vm` creates a disk image that does not exist yet, and MiniDos offers to format it and to put its programs `SORT` and `FIND` on it:
 
 ```console
-$ ./vm -b minidos.img minidos.bin
+$ ./vm -b work.img minidos.bin
 
 Starting MiniDos...
 
-A:\>DIR /W
-
- Volume in drive A is MINIDOS
- Directory of A:\
-
-FIND.EXE        SORT.EXE
-        2 file(s)          7,831 bytes
-        0 dir(s)       4,152,320 bytes free
+The disk in drive A is new and not formatted yet.
+Format it now (Y/N)?Y
+Size of the new disk in K, or in M with an M after it (ENTER for 4M)?
+Formatting 4,096K
+Format complete.
+System transferred
 ```
+
+`make` builds `minidos.bin` and `minidos.img`, a 4 MB disk formatted that way.
 
 ## Syscalls
 
@@ -1201,7 +1203,7 @@ Code and data symbols hold offsets into their section. A relocation stores the a
 - Compiles and runs every Ore program in `ore/tests` the same way. Their comment lines start with `//` instead of `;`, and `// vmc-args:` gives `vmc0` more arguments.
 - Checks that every file in `ore/tests/errors` fails to compile with the expected message.
 - Builds every Ore test with `vmc` as well, and that build has to meet the same expectations. Since the two compilers write different code, runtime errors are compared by message and Ore lines, and debugger scripts only run against the `vmc` build. `vmc1.bin` has to write the same assembly as `vmc.bin`, all three compilers the same compile errors, the test named `vmc` checks that `vmc` compiles itself into `vmc.bin`, and `no_debug` that `-g0` leaves the debug information out of the binaries of `vmc` and `vmc0`.
-- Boots MiniDos on an empty disk for every session in `tests/minidos`, which types `NAME.in` and has to show `NAME.out`, with the programs of `ore/minidos/programs` and `tests/minidos` built for it to import. The test is named `minidos_NAME`.
+- Boots MiniDos on an empty disk for every session in `tests/minidos`, which types `NAME.in` and has to show `NAME.out`, with the display as plain text and the clock held still, and with the programs of `ore/minidos/programs` and `tests/minidos` built for it to import. The test is named `minidos_NAME`.
 
 Comment lines in a test adjust the checks:
 
@@ -1248,7 +1250,7 @@ Programs run inside a temporary directory, so any files they create are discarde
 | `vmc` | The script that runs `vmc.bin` on the VM and assembles what it writes |
 | `ore/lib/` | The runtime that compiled Ore programs start from, and the standard library in `std/` |
 | `ore/tests/` | Ore test programs, and the modules and assembly they use |
-| `ore/minidos/` | MiniDos, and in `programs/` the programs on its disk |
+| `ore/minidos/` | MiniDos, and in `programs/` the system programs it puts on disks |
 | `bench/` | The same programs in C, Java, Ore and Python, and the script that compares them |
 | `docs/language.md` | The Ore language |
 | `docs/minidos.md` | MiniDos |
