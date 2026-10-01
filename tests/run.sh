@@ -297,8 +297,9 @@ for src in "$root"/ore/tests/errors/*.ore; do
 done
 
 # MiniDos runs each session of tests/minidos, NAME.in, with an unformatted disk of 1 MB in drive A and a
-# new one without sectors in drive B. It shows what is typed, and the display comes out as plain text
-# frames whose headers leave out the instruction count. What it shows has to match NAME.out; the test is
+# new one without sectors in drive B, or with the disk options in NAME.disks when there is one. It shows
+# what is typed, and the display comes out as plain text frames whose headers leave out the instruction
+# count. What it shows has to match NAME.out; the test is
 # called minidos_NAME. The programs of ore/minidos/programs and tests/minidos are built in the directory it
 # runs in, for sessions to IMPORT.
 programs_built=0
@@ -320,7 +321,9 @@ for src in "$root"/tests/minidos/*.in; do
     fi
     dd if=/dev/zero of="$dir/disk.img" bs=512 count=2048 2> /dev/null
     rm -f "$dir/second.img"
-    (cd "$dir" && "$vm" $VM_FLAGS -n 100000000 -s -T 2026-10-01T09:30:00 -b disk.img -b second.img "$root/minidos.bin" < "$src" > "$session.raw" 2>&1)
+    disks="-b disk.img -b second.img"
+    [ -f "$root/tests/minidos/$session.disks" ] && disks=$(cat "$root/tests/minidos/$session.disks")
+    (cd "$dir" && "$vm" $VM_FLAGS -n 100000000 -s -T 2026-10-01T09:30:00 $disks "$root/minidos.bin" < "$src" > "$session.raw" 2>&1)
     status=$?
     sed 's/^\(--- refresh [0-9]*\), instruction [0-9]* ---$/\1 ---/' "$dir/$session.raw" > "$dir/$session.out"
     expected="$root/tests/minidos/$session.out"

@@ -6,6 +6,9 @@ import "disks";
 import "fs";
 import "program";
 import "shell";
+import "system";
+
+const MEMORY_DISK = 2048;       // the sectors of the disk in memory that stands in for a missing one in drive A
 
 fn main() int {
     if ((main as u32) < program.LIMIT as u32) {
@@ -25,9 +28,13 @@ fn main() int {
         }
     }
     var e = fs.mount(0);
-    if (e == fs.Error.NO_DISK) {
-        console.line("There is no disk in drive A. Start vm with -b and the name of a disk image, which vm");
-        console.line("creates when it does not exist.");
+    if (e == fs.Error.NO_DISK && disk.use_memory(0, MEMORY_DISK) && fs.format(0, "RAMDISK", 0) == fs.Error.NONE) {
+        console.line("There is no disk in drive A, so MiniDos keeps its files in memory until it stops. Start vm");
+        console.line("with -b and the name of a disk image to keep them; vm creates the image when it is missing.");
+        console.write("\n");
+        system.install(0);
+    } else if (e == fs.Error.NO_DISK) {
+        console.fail(e);
     } else if (e == fs.Error.NOT_FORMATTED) {
         disks.offer_format(0);
     } else if (e != fs.Error.NONE) {

@@ -1,0 +1,56 @@
+
+Starting MiniDos...
+
+There is no disk in drive A, so MiniDos keeps its files in memory until it stops. Start vm
+with -b and the name of a disk image to keep them; vm creates the image when it is missing.
+
+A:\>DIR /S
+
+ Volume in drive A is RAMDISK
+
+ Directory of A:\
+
+DOS             <DIR>      10-01-26   9:30a
+AUTOEXEC BAT            22 10-01-26   9:30a
+        1 file(s)             22 bytes
+
+ Directory of A:\DOS
+
+.               <DIR>      10-01-26   9:30a
+..              <DIR>      10-01-26   9:30a
+SORT     EXE         6,737 10-01-26   9:30a
+FIND     EXE         4,642 10-01-26   9:30a
+        2 file(s)         11,379 bytes
+
+Total files listed:
+        3 file(s)         11,401 bytes
+        3 dir(s)       1,026,048 bytes free
+A:\>ECHO kept in memory > NOTE.TXT
+A:\>SORT < NOTE.TXT
+kept in memory
+A:\>FORMAT A: /F:2M /V:BIGGER
+WARNING: ALL DATA ON THE DISK IN DRIVE A: WILL BE LOST!
+Proceed with Format (Y/N)?Y
+Formatting 2,048K
+Format complete.
+
+   2,080,256 bytes total disk space
+   2,079,744 bytes available on disk
+
+         512 bytes in each allocation unit
+       4,062 allocation units available on disk
+
+A:\>DIR
+
+ Volume in drive A is BIGGER
+ Directory of A:\
+
+File not found
+A:\>FORMAT A: /F:32M
+WARNING: ALL DATA ON THE DISK IN DRIVE A: WILL BE LOST!
+Proceed with Format (Y/N)?Y
+Formatting 32,768K
+Not enough memory for a disk of that size
+A:\>B:
+There is no disk in drive B
+A:\>EXIT

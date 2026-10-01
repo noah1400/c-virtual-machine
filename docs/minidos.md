@@ -38,7 +38,9 @@ AUTOEXEC BAT            22 10-01-26   9:30a
 
 `vm` creates `work.img` when it does not exist, as a disk without sectors, and MiniDos offers to format it. Formatting makes the disk as large as asked, puts the system programs `SORT` and `FIND` into `\DOS` and writes an `AUTOEXEC.BAT` that adds `\DOS` to `PATH`. The next start finds the formatted disk and goes straight to the prompt.
 
-`make` also builds `minidos.img`, a 4 MB disk formatted the same way, labelled `MINIDOS`. It builds that disk anew whenever MiniDos changes, so files of your own belong on a disk like `work.img`, where `SYS A:` brings the system programs up to date. MiniDos asks for 4 MB of memory in its binary's header, which `vm` gives it without `-m`.
+`make` also builds `minidos.img`, a 4 MB disk formatted the same way, labelled `MINIDOS`. It builds that disk anew whenever MiniDos changes, so files of your own belong on a disk like `work.img`, where `SYS A:` brings the system programs up to date. MiniDos asks for 8 MB of memory in its binary's header, which `vm` gives it without `-m`.
+
+Started without `-b`, MiniDos keeps drive A in memory: a 1 MB disk labelled `RAMDISK`, set up like a new one, whose files are gone when MiniDos stops.
 
 - **More drives:** each further `-b` attaches the next drive, up to `D:`, as in `./vm -b work.img -b data.img minidos.bin`. MiniDos says which disks are not formatted yet, and `FORMAT B:` prepares one.
 - **Host files:** `IMPORT` and `EXPORT` copy files between a MiniDos disk and the directory `vm` runs in.
@@ -137,7 +139,7 @@ Any other name runs a program or a batch file: `NAME` looks for `NAME.EXE` and t
 
 ## Disks
 
-A disk is an image file of 512-byte sectors that `vm -b` attaches; a missing one is created without sectors. MiniDos formats disks of 8 KB to 32 MB.
+A disk is an image file of 512-byte sectors that `vm -b` attaches; a missing one is created without sectors. MiniDos formats disks of 8 KB to 32 MB. The disk in memory that stands in for a missing drive A can grow as far as the memory goes, with `FORMAT A: /F:`*size*, and `EXPORT` or `DISKCOPY` onto a drive with an image keep its files.
 
 `FORMAT` *drive*`:` asks for the size of a disk that has no sectors yet, 4 MB unless another is typed, as in `512K` or `16M`; `/F:`*size* gives it at once and also resizes a disk that has a size. It warns and asks before it formats a disk that holds a file system, asks for a label unless `/V:`*label* gives one, and with `/S` puts the system programs on the new disk. `/Q` and `/U` are accepted out of habit: every format only writes the file system's first sectors.
 
@@ -256,7 +258,7 @@ Directories are files of 32-byte entries, the root directory included. Every oth
 | `ore/minidos/names.ore` | Comparing and joining names and paths |
 | `ore/minidos/programs/` | `SORT` and `FIND` |
 
-`tests/minidos` holds MiniDos sessions for the test suite: what is typed in `NAME.in` and what MiniDos shows in `NAME.out`, with the display as plain text frames, along with programs the sessions import. They run with the clock held at 2026-10-01 9:30.
+`tests/minidos` holds MiniDos sessions for the test suite: what is typed in `NAME.in` and what MiniDos shows in `NAME.out`, with the display as plain text frames, along with programs the sessions import. They run with the clock held at 2026-10-01 9:30, and with an empty disk in drive A and a new one in drive B unless `NAME.disks` gives other disk options.
 
 ## Limits
 

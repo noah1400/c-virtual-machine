@@ -145,7 +145,7 @@ pub fn format_drive(d: int, label: []u8, labelled: bool, size: int, with_system:
     }
     console.line("Format complete.");
     if (with_system) {
-        system.install(d);
+        system.transferred(system.install(d));
     }
     if (!labelled) {
         console.write("\n");

@@ -1004,7 +1004,7 @@ Format complete.
 System transferred
 ```
 
-`make` builds `minidos.bin` and `minidos.img`, a 4 MB disk formatted that way, which it builds anew whenever MiniDos changes.
+Without `-b`, MiniDos keeps its files on a disk in memory until it stops. `make` builds `minidos.bin` and `minidos.img`, a 4 MB disk formatted that way, which it builds anew whenever MiniDos changes.
 
 ## Syscalls
 

@@ -45,6 +45,7 @@ pub enum Error {
     NOT_FORMATTED,
     BAD_DRIVE,
     BAD_SIZE,
+    NO_MEMORY,
 }
 
 var problem_drive = 0;      // the drive that the last NO_DISK or NOT_FORMATTED was about
@@ -93,6 +94,9 @@ pub fn message(e: Error) []u8 {
         }
         case Error.BAD_SIZE {
             return "A disk holds 8K to 32,768K";
+        }
+        case Error.NO_MEMORY {
+            return "Not enough memory for a disk of that size";
         }
     }
     return "No error";
@@ -252,7 +256,10 @@ pub fn format(d: int, name: []u8, size: int) Error {
         if (size < SMALLEST || size > LARGEST) {
             return Error.BAD_SIZE;
         }
-        if (!disk.resize(d, size)) {
+        if (!disk.resize(d, size) && disk.in_memory(d)) {
+            return Error.NO_MEMORY;
+        }
+        if (disk.sectors(d) != size) {
             return Error.DISK_ERROR;
         }
     }

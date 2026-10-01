@@ -26,7 +26,7 @@ const AUTOEXEC = "@ECHO OFF\nPATH A:\\DOS\n";
 
 // Puts the system programs into \DOS on a drive's disk, and an AUTOEXEC.BAT that adds \DOS to PATH into its
 // root directory unless one is there
-pub fn install(d: int) bool {
+pub fn install(d: int) fs.Error {
     var root = [3]u8 { fs.letter(d), ':', '\\' };
     var directory = names.join(root[:], "DOS", "");
     var e = fs.make_directory(directory);
@@ -45,12 +45,15 @@ pub fn install(d: int) bool {
         e = fs.write_file(autoexec, AUTOEXEC);
     }
     free(autoexec);
+    return e;
+}
+
+pub fn transferred(e: fs.Error) {
     if (e != fs.Error.NONE) {
         console.fail(e);
-        return false;
+    } else {
+        console.line("System transferred");
     }
-    console.line("System transferred");
-    return true;
 }
 
 // SYS drive: puts the system programs onto a disk that is formatted already
@@ -68,7 +71,7 @@ pub fn transfer(a: *args.Args) {
         console.fail(fs.mount(d));
         return;
     }
-    install(d);
+    transferred(install(d));
 }
 
 pub fn clear(a: *args.Args) {

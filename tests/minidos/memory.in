@@ -1,0 +1,10 @@
+DIR /S
+ECHO kept in memory > NOTE.TXT
+SORT < NOTE.TXT
+FORMAT A: /F:2M /V:BIGGER
+Y
+DIR
+FORMAT A: /F:32M
+Y
+B:
+EXIT
