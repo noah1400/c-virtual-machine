@@ -8,8 +8,8 @@
 #include "vm.h"
 
 // The JIT turns the instructions from a word that jumps go to often into x86-64 code, up to an instruction
-// that always goes elsewhere. The code keeps the VM registers in memory and the flags as cpu_run keeps them,
-// and checks the budget once per block. It hands an instruction that would fault, or that it does not
+// that always goes elsewhere. The code keeps SP in ebx, the other VM registers in memory and the flags as
+// cpu_run keeps them, and checks the budget once per block. It hands an instruction that would fault, or that it does not
 // compile, back to cpu_run, which runs it as before.
 
 #if defined(__x86_64__) && defined(__GNUC__) && (defined(__linux__) || defined(__APPLE__))
@@ -68,7 +68,7 @@ enum { ADD = 0, OR = 1, AND = 4, SUB = 5, XOR = 6, CMP = 7 };
 #define FLAGS(field) ((int32_t)(offsetof(Context, flags) + offsetof(Flags, field)))
 #define CONTROL(index) ((int32_t)(offsetof(VM, control) + 4 * (index)))
 #define FIELD(field) ((int32_t)offsetof(VM, field))
-#define REG(number) (4 * (number))
+#define REG(number) ((int32_t)(offsetof(VM, registers) + 4 * (number)))
 
 // Compiled code keeps temporaries in the 8 bytes at [rsp]: slow paths at [rsp] and addresses it goes to after
 // them at [rsp + GO_SLOT]
@@ -312,14 +312,15 @@ static void write_entry(struct Jit *jit, Code *c) {
     put(c, 0xEC);
     put(c, 8);
     mov64(c, HBP, HDI);
-    op_mem(c, 1, 0x8B, HBX, HBP, (int32_t)offsetof(Context, registers));
     op_mem(c, 1, 0x8B, H12, HBP, (int32_t)offsetof(Context, memory));
     op_mem(c, 1, 0x8B, H13, HBP, (int32_t)offsetof(Context, vm));
+    load(c, HBX, H13, REG(R2_SP));
     op_mem(c, 1, 0x8B, H15, HBP, (int32_t)offsetof(Context, entries));
     load(c, H14, HBP, (int32_t)offsetof(Context, left));
     jmp_reg(c, HSI);
 
     jit->exit = c->p;
+    store(c, H13, REG(R2_SP), HBX);
     store(c, HBP, (int32_t)offsetof(Context, next), HAX);
     store(c, HBP, (int32_t)offsetof(Context, how), HDX);
     store(c, HBP, (int32_t)offsetof(Context, left), H14);
@@ -372,7 +373,7 @@ enum {
     STUB_GO,                // the instruction goes to the address it left at [rsp + GO_SLOT]
     STUB_REACH,             // checks the access of size bytes, extra the access, at edx in the heap or with cpu_reach
     STUB_WRITTEN,           // the store of size bytes at edx changed decoded instructions
-    STUB_PUSH,              // asks cpu_push_slot for a push at eax of the value in ecx
+    STUB_PUSH,              // asks cpu_push_slot for a push of the value in ecx
     STUB_POP,               // asks cpu_pop_slot for a pop at ecx
     STUB_FRAME,             // the shadow call stack is full
 };
@@ -459,11 +460,19 @@ static void refund(Code *c, uint32_t count) {
 }
 
 static void load_reg(Compiler *k, int host, uint32_t number) {
-    load(&k->c, host, HBX, REG(number));
+    if (number == R2_SP) {
+        mov(&k->c, host, HBX);
+    } else {
+        load(&k->c, host, H13, REG(number));
+    }
 }
 
 static void store_reg(Compiler *k, uint32_t number, int host) {
-    store(&k->c, HBX, REG(number), host);
+    if (number == R2_SP) {
+        mov(&k->c, HBX, host);
+    } else {
+        store(&k->c, H13, REG(number), host);
+    }
 }
 
 // (r[b] & mask) + imm into a host register
@@ -643,8 +652,7 @@ static Stub *go_stub(Compiler *k, uint8_t *at, uint32_t j) {
 // Pushes the value in ecx, or leaves before item j if the push would fault
 static void push(Compiler *k, uint32_t j) {
     Code *c = &k->c;
-    load(c, HAX, HBX, REG(R2_SP));
-    lea(c, 0, HDX, HAX, -4);
+    lea(c, 0, HDX, HBX, -4);
     mov(c, HSI, HDX);
     alu_load(c, SUB, HSI, H13, CONTROL(CR_SLO));
     alu_load(c, CMP, HSI, H13, FIELD(stack_span));
@@ -1105,8 +1113,9 @@ static void compile_item(Compiler *k, uint32_t j) {
             load_reg(k, HCX, R2_SP);
             pop_slot(k, j);
             load(c, HAX, HAX, 0);
-            alu_mem_imm(c, ADD, HBX, REG(R2_SP), 4 + d->imm);
+            alu_imm(c, ADD, HBX, 4 + d->imm);
             store(c, HSP, GO_SLOT, HAX);
+            store(c, H13, REG(R2_SP), HBX);
             mov64(c, HDI, H13);
             call(c, (void *)pop_frames_for);
             load(c, HAX, HSP, GO_SLOT);
@@ -1114,7 +1123,11 @@ static void compile_item(Compiler *k, uint32_t j) {
             break;
         case D_LOOP:
         case D_LOOP_OUT:
-            alu_mem_imm(c, SUB, HBX, REG(d->a), 1);
+            if (d->a == R2_SP) {
+                alu_imm(c, SUB, HBX, 1);
+            } else {
+                alu_mem_imm(c, SUB, H13, REG(d->a), 1);
+            }
             if (d->kind == D_LOOP) {
                 taken_stub(k, jcc(c, CC_NE), j);
             } else {
@@ -1130,7 +1143,7 @@ static void compile_item(Compiler *k, uint32_t j) {
             load_reg(k, HCX, R2_SP);
             pop_slot(k, j);
             load(c, HDX, HAX, 0);
-            alu_mem_imm(c, ADD, HBX, REG(R2_SP), 4);
+            alu_imm(c, ADD, HBX, 4);
             store_reg(k, d->a, HDX);
             break;
         case D_ENTER: {
@@ -1286,7 +1299,7 @@ static void compile_stub(Compiler *k, Stub *s) {
             // ENTER keeps SP - 4 in ecx, a push the value in ecx and SP - 4 in edx
             store(c, HSP, 0, HCX);
             mov64(c, HDI, H13);
-            mov(c, HSI, HAX);
+            load_reg(k, HSI, R2_SP);
             call(c, (void *)cpu_push_slot);
             load(c, HCX, HSP, 0);
             load_reg(k, HDX, R2_SP);
@@ -1315,6 +1328,7 @@ static void compile_stub(Compiler *k, Stub *s) {
         }
         case STUB_FRAME: {
             uint32_t site = it->index * 4;
+            store(c, H13, REG(R2_SP), HBX);
             mov64(c, HDI, H13);
             mov_imm(c, HSI, site);
             mov_imm(c, HDX, site + it->d.len * 4u);
