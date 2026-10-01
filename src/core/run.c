@@ -671,7 +671,7 @@ INLINE int jumps(const uint32_t *r, const Decoded *d, const Flags *p) {
 // An instruction that sets Z and N from its result and C and O as f says. The C and O flags that it leaves
 // alone come from the sum or difference before, which it keeps unless one before it already did.
 INLINE uint32_t partial(uint32_t result, const FlagUpdate *f, Flags *p) {
-    uint32_t changed = f->changed & (CARRY_FLAG | OVER_FLAG), bits = f->bits & (CARRY_FLAG | OVER_FLAG);
+    uint32_t changed = f->changed, bits = f->bits;
     if (p->kind == FLAGS_NZ) {
         p->b = ((p->b >> 16) | changed) << 16 | (p->b & 0xFFFF & ~changed) | bits;
     } else {
