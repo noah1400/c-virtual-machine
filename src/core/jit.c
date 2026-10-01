@@ -482,6 +482,15 @@ static void operand(Compiler *k, int host, const Decoded *d) {
 // would fault; keeps edx
 static void reach(Compiler *k, uint32_t j, uint32_t size, uint32_t access) {
     Code *c = &k->c;
+    const Decoded *d = &k->items[j].d;
+    uint8_t *stack = NULL;
+    if (d->mask && (d->b == R1_BP || d->b == R2_SP)) {
+        // What SP or BP points to usually lies on the stack, which needs no other check
+        mov(c, HCX, HDX);
+        alu_load(c, SUB, HCX, H13, CONTROL(CR_SLO));
+        alu_load(c, CMP, HCX, H13, FIELD(stack_span));
+        stack = jcc(c, CC_B);
+    }
     lea(c, 1, HCX, HDX, (int32_t)size);
     load(c, HSI, H13, FIELD(memory_size));
     op_reg(c, 1, 0x39, HSI, HCX);
@@ -494,6 +503,9 @@ static void reach(Compiler *k, uint32_t j, uint32_t size, uint32_t access) {
     alu_load(c, CMP, HDX, H13, CONTROL(CR_HEAPHI));
     s->also = jcc(c, CC_B);
     patch(c, below, c->p);
+    if (stack) {
+        patch(c, stack, c->p);
+    }
     op_index(c, 1, 0x8D, HAX, H12, HDX, 0);
     s->resume = c->p;
 }
