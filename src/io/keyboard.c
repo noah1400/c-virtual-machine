@@ -47,8 +47,8 @@ typedef struct {
     uint32_t event_count, next_event, event_offset;
 } KeyboardState;
 
-// Without a script, the first use of the keyboard stops the terminal from buffering lines and
-// echoing keys
+// Without a script, the first use of the keyboard stops the terminal from buffering lines, echoing
+// keys and keeping control keys other than Ctrl-C for itself
 static void keyboard_claim(KeyboardState *keyboard) {
     if (keyboard->claimed || keyboard->events) {
         return;
@@ -56,9 +56,12 @@ static void keyboard_claim(KeyboardState *keyboard) {
     keyboard->claimed = 1;
     if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &keyboard->saved) == 0) {
         struct termios settings = keyboard->saved;
-        settings.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+        settings.c_lflag &= ~(tcflag_t)(ICANON | ECHO | IEXTEN);
+        settings.c_iflag &= ~(tcflag_t)IXON;
         settings.c_cc[VMIN] = 1;
         settings.c_cc[VTIME] = 0;
+        settings.c_cc[VSUSP] = _POSIX_VDISABLE;
+        settings.c_cc[VQUIT] = _POSIX_VDISABLE;
         keyboard->raw = tcsetattr(STDIN_FILENO, TCSANOW, &settings) == 0;
     }
 }
