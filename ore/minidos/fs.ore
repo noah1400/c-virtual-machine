@@ -81,6 +81,10 @@ pub fn message(e: Error) []u8 {
             return "Attempt to remove current directory";
         }
         case Error.DISK_ERROR {
+            if (disk.write_protected() >= 0) {
+                problem_drive = disk.write_protected();
+                return about_drive("Write protect error writing drive ", "");
+            }
             return "Disk error";
         }
         case Error.NO_DISK {
@@ -305,12 +309,14 @@ pub fn set_label(d: int, name: []u8) Error {
     if (v == null) {
         return e;
     }
-    set_label_text(&v.boot, name);
+    var boot = v.boot;
+    set_label_text(&boot, name);
     var sector: [SECTOR]u8;
-    *(&sector[0] as *Boot) = v.boot;
+    *(&sector[0] as *Boot) = boot;
     if (!disk.write(d, 0, sector)) {
         return Error.DISK_ERROR;
     }
+    v.boot = boot;
     return Error.NONE;
 }
 

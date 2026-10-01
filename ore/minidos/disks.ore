@@ -152,7 +152,7 @@ pub fn format_drive(d: int, label: []u8, labelled: bool, size: int, with_system:
         var buffer: [80]u8;
         var answer = ask_label(buffer);
         if (answer.len > 0) {
-            fs.set_label(d, answer);
+            relabel(d, answer);
         }
     }
     show_space(d);
@@ -202,6 +202,13 @@ pub fn offer_format(d: int) bool {
         return false;
     }
     return format_drive(d, "", false, 0, true, false);
+}
+
+fn relabel(d: int, label: []u8) {
+    var e = fs.set_label(d, label);
+    if (e != fs.Error.NONE) {
+        console.fail(e);
+    }
 }
 
 fn show_label(d: int) {
@@ -254,7 +261,7 @@ pub fn label(a: *args.Args) {
             console.error("Invalid characters in volume label, or more than 11 of them");
             return;
         }
-        fs.set_label(d, text);
+        relabel(d, text);
         return;
     }
     show_label(d);
@@ -262,9 +269,9 @@ pub fn label(a: *args.Args) {
     var buffer: [80]u8;
     var answer = ask_label(buffer);
     if (answer.len > 0) {
-        fs.set_label(d, answer);
+        relabel(d, answer);
     } else if (fs.label(d).len > 0 && console.confirm("\nDelete current volume label (Y/N)?")) {
-        fs.set_label(d, "");
+        relabel(d, "");
     }
 }
 

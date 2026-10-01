@@ -18,10 +18,12 @@ const READ: u32 = 1;
 const WRITE: u32 = 2;
 const RESIZE: u32 = 3;
 const NO_DISK: u32 = 1;
+const READ_ONLY: u32 = 5;
 
 const KEPT_FREE = 0x80000;      // heap that a disk in memory leaves for MiniDos and its programs
 
 var memory: [DRIVES][]u8;
+var refused = -1;               // the drive whose read-only image refused the last write, until a write works
 
 fn command(drive: int, what: u32) u32 {
     cpu.write_port(DRIVE_PORT, drive as u32);
@@ -86,7 +88,22 @@ fn transfer(drive: int, what: u32, sector: int, buffer: []u8) bool {
     cpu.write_port(SECTOR_PORT, sector as u32);
     cpu.write_port(BUFFER_PORT, buffer.ptr as u32);
     cpu.write_port(COUNT_PORT, (buffer.len / SECTOR) as u32);
-    return command(drive, what) == 0;
+    return result(drive, command(drive, what), what == WRITE);
+}
+
+// Whether a command worked, noting whether one that writes found the image read-only
+fn result(drive: int, code: u32, writing: bool) bool {
+    if (writing && code == READ_ONLY) {
+        refused = drive;
+    } else if (writing && code == 0) {
+        refused = -1;
+    }
+    return code == 0;
+}
+
+// The drive whose image turned out to be read-only when the last write failed, or -1
+pub fn write_protected() int {
+    return refused;
 }
 
 pub fn read(drive: int, sector: int, buffer: []u8) bool {
@@ -103,5 +120,5 @@ pub fn resize(drive: int, count: int) bool {
         return use_memory(drive, count);
     }
     cpu.write_port(COUNT_PORT, count as u32);
-    return command(drive, RESIZE) == 0;
+    return result(drive, command(drive, RESIZE), true);
 }
