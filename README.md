@@ -283,7 +283,7 @@ Setting SLO to 0 and SHI to 0xFFFFFFFF turns the stack checks off.
 
 ### Heap
 
-The heap is a first-fit allocator. Its bookkeeping lives outside VM memory, where programs cannot damage it, and keeps the blocks in search trees, so allocating, freeing and checking an access take time that grows with the logarithm of the number of blocks.
+The heap is a first-fit allocator. Its bookkeeping lives outside VM memory, where programs cannot damage it. It keeps the blocks in a search tree, so allocating and freeing take time that grows with the logarithm of the number of blocks, and the rights of every 8 bytes in a table, so that most accesses are checked without a search.
 
 - Sizes are rounded up to a multiple of 8, with a minimum of 8 bytes.
 - Every block is preceded by an 8-byte guard gap. Touching it faults, which catches small overruns.
