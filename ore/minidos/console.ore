@@ -6,6 +6,9 @@ import "fs";
 var output: *fs.File = null;
 var input: *fs.File = null;
 
+// Whether what is read from the keyboard is shown, for sessions that come from a file
+pub var echo = false;
+
 // Sends what follows to a file, or back to the screen for null, and returns where it went before
 pub fn redirect_output(file: *fs.File) *fs.File {
     var before = output;
@@ -19,6 +22,26 @@ pub fn redirect_input(file: *fs.File) *fs.File {
     return before;
 }
 
+pub fn output_redirected() bool {
+    return output != null;
+}
+
+// Shows a question and waits for a line typed at the keyboard, even while input comes from a file; false when
+// the keyboard's input has ended
+pub fn keyboard(question: []u8) bool {
+    var saved = input;
+    input = null;
+    var buffer: [80]u8;
+    screen(question);
+    var line: []u8;
+    var typed = read_line(buffer, &line);
+    if (!typed) {
+        screen("\n");
+    }
+    input = saved;
+    return typed;
+}
+
 pub fn write(text: []u8) {
     if (output != null) {
         fs.write(output, text);
@@ -30,6 +53,16 @@ pub fn write(text: []u8) {
 // Writes to the screen even while output goes to a file, as error messages do
 pub fn screen(text: []u8) {
     io.write(io.STDOUT, text);
+}
+
+// Shows a message on a line of its own on the screen
+pub fn error(text: []u8) {
+    screen(text);
+    screen("\n");
+}
+
+pub fn fail(e: fs.Error) {
+    error(fs.message(e));
 }
 
 pub fn write_byte(c: u8) {
@@ -83,7 +116,14 @@ pub fn clear() {
 // input
 pub fn read_line(buffer: []u8, text: *[]u8) bool {
     if (input == null) {
-        return io.read_line(buffer, text);
+        if (!io.read_line(buffer, text)) {
+            return false;
+        }
+        if (echo) {
+            screen(*text);
+            screen("\n");
+        }
+        return true;
     }
     var length = 0;
     var c: [1]u8;
@@ -109,7 +149,12 @@ pub fn read_line(buffer: []u8, text: *[]u8) bool {
 // The next byte of input, or -1 at its end
 pub fn read_char() int {
     if (input == null) {
-        return io.read_char();
+        var c = io.read_char();
+        if (echo && c >= 0) {
+            var bytes = [1]u8 { c as u8 };
+            screen(bytes);
+        }
+        return c;
     }
     var c: [1]u8;
     if (fs.read(input, c) != 1) {
@@ -121,7 +166,43 @@ pub fn read_char() int {
 // Reads up to buffer.len bytes of input and returns how many, 0 at its end or -1
 pub fn read(buffer: []u8) int {
     if (input == null) {
-        return io.read(io.STDIN, buffer);
+        var count = io.read(io.STDIN, buffer);
+        if (echo && count > 0) {
+            screen(buffer[:count]);
+        }
+        return count;
     }
     return fs.read(input, buffer);
+}
+
+// Shows a question and reads a line of answer into buffer, trimmed, or nothing when the input ends
+pub fn ask(question: []u8, buffer: []u8) []u8 {
+    screen(question);
+    var line: []u8;
+    if (!read_line(buffer, &line)) {
+        screen("\n");
+        return "";
+    }
+    return str.trim(line);
+}
+
+// Asks a question until the answer is Y or N, and tells whether it was Y; the end of the input says N
+pub fn confirm(question: []u8) bool {
+    var buffer: [80]u8;
+    for (;;) {
+        screen(question);
+        var line: []u8;
+        if (!read_line(buffer, &line)) {
+            screen("\n");
+            return false;
+        }
+        var answer = str.trim(line);
+        if (answer.len == 1 && (answer[0] == 'Y' || answer[0] == 'y')) {
+            return true;
+        }
+        if (answer.len == 1 && (answer[0] == 'N' || answer[0] == 'n')) {
+            return false;
+        }
+    }
+    return false;
 }

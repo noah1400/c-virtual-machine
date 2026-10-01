@@ -832,8 +832,12 @@ pub fn rename(path: []u8, new_name: []u8) Error {
     if (place.index < 0 || !n.ok || n.chars[0] == '.') {
         return Error.BAD_NAME;
     }
+    var v = &volumes[place.drive];
+    if (is_directory(&place) && inside(v, v.current, place.entry.cluster)) {
+        return Error.ACCESS_DENIED;
+    }
     var d = Directory {};
-    e = load(&volumes[place.drive], place.dir, &d);
+    e = load(v, place.dir, &d);
     if (e != Error.NONE) {
         return e;
     }
@@ -843,6 +847,94 @@ pub fn rename(path: []u8, new_name: []u8) Error {
         d.entries[place.index].name = n.chars;
         e = store(&d, place.index);
     }
+    unload(&d);
+    return e;
+}
+
+// The parent of a directory other than the root, which its entry .. names, or 0
+fn parent(v: *Volume, dir: int) int {
+    var entries: [PER_CLUSTER]Entry;
+    if (!valid(v, dir) || !disk.read(v.drive, sector_of(v, dir), mem.bytes(&entries[0] as *u8, SECTOR)) ||
+        entries[1].name[0] != '.' || entries[1].name[1] != '.') {
+        return 0;
+    }
+    return entries[1].cluster;
+}
+
+// Whether the directory dir is ancestor or lies inside it
+fn inside(v: *Volume, dir: int, ancestor: int) bool {
+    var at = dir;
+    for (var n = 0; n < v.boot.clusters && at != 0; n += 1) {
+        if (at == ancestor) {
+            return true;
+        }
+        if (at == v.boot.root) {
+            return false;
+        }
+        at = parent(v, at);
+    }
+    return false;
+}
+
+// Moves the entry at path to target, a new name in any directory of the same drive. A directory cannot move
+// into itself, and neither can one that holds the current directory.
+pub fn move(path: []u8, target: []u8) Error {
+    var from = Place {};
+    var e = find(path, &from);
+    if (e != Error.NONE) {
+        return e;
+    }
+    var to = Place {};
+    var last: []u8;
+    e = walk(target, &last, &to);
+    if (e != Error.NONE) {
+        return e;
+    }
+    var n = short_name(last, false, false);
+    if (from.index < 0 || to.drive != from.drive) {
+        return Error.ACCESS_DENIED;
+    }
+    if (!n.ok || n.chars[0] == '.') {
+        return Error.BAD_NAME;
+    }
+    var v = &volumes[from.drive];
+    var directory = is_directory(&from);
+    if (directory && (inside(v, to.dir, from.entry.cluster) || inside(v, v.current, from.entry.cluster))) {
+        return Error.ACCESS_DENIED;
+    }
+    var d = Directory {};
+    e = load(v, to.dir, &d);
+    if (e != Error.NONE) {
+        return e;
+    }
+    if (find_in(&d, n.chars) >= 0) {
+        unload(&d);
+        return Error.EXISTS;
+    }
+    var entry = from.entry;
+    entry.name = n.chars;
+    var index = 0;
+    e = add(&d, entry, &index);
+    unload(&d);
+    if (e != Error.NONE) {
+        return e;
+    }
+    e = load(v, from.dir, &d);
+    if (e != Error.NONE) {
+        return e;
+    }
+    d.entries[from.index].name[0] = 0;
+    e = store(&d, from.index);
+    unload(&d);
+    if (e != Error.NONE || !directory || to.dir == from.dir) {
+        return e;
+    }
+    e = load(v, entry.cluster, &d);
+    if (e != Error.NONE) {
+        return e;
+    }
+    d.entries[1].cluster = to.dir;
+    e = store(&d, 1);
     unload(&d);
     return e;
 }
@@ -1268,5 +1360,177 @@ pub fn write_file(path: []u8, bytes: []u8) Error {
     if (e == Error.NONE) {
         e = closed;
     }
+    return e;
+}
+
+// What check found on a disk
+pub struct Report {
+    directories: int;
+    files: int;
+    hidden: int;                // hidden files, which files leaves out
+    directory_clusters: int;
+    file_clusters: int;
+    hidden_clusters: int;
+    lost_clusters: int;
+    lost_chains: int;
+    problems: int;              // cross links, broken chains and sizes that do not fit
+}
+
+struct Checker {
+    v: *Volume;
+    owned: []bool;
+    fix: bool;
+    tell: fn([]u8);
+    report: *Report;
+}
+
+// Checks that every cluster in use belongs to one file or directory and that sizes fit their chains, and says
+// what is wrong through tell. With fix it frees lost clusters, cuts broken chains short and corrects sizes.
+pub fn check(d: int, fix: bool, tell: fn([]u8), report: *Report) Error {
+    var e = Error.NONE;
+    var v = volume(d, &e);
+    if (v == null) {
+        return e;
+    }
+    *report = Report {};
+    var c = Checker { v: v, owned: new(bool, v.boot.clusters + 1), fix: fix, tell: tell, report: report };
+    var root = [3]u8 { letter(d), ':', '\\' };
+    e = check_directory(&c, v.boot.root, root[:]);
+    var pointed = new(bool, v.boot.clusters + 1);
+    for (var cluster = 1; cluster <= v.boot.clusters; cluster += 1) {
+        if (v.table[cluster] != 0 && !c.owned[cluster] && valid(v, v.table[cluster])) {
+            pointed[v.table[cluster]] = true;
+        }
+    }
+    for (var cluster = 1; cluster <= v.boot.clusters; cluster += 1) {
+        if (v.table[cluster] != 0 && !c.owned[cluster]) {
+            report.lost_clusters += 1;
+            if (!pointed[cluster]) {
+                report.lost_chains += 1;
+            }
+            if (fix) {
+                set(v, cluster, 0);
+            }
+        }
+    }
+    free(pointed);
+    free(c.owned);
+    if (fix && !flush(v)) {
+        e = Error.DISK_ERROR;
+    }
+    return e;
+}
+
+fn complaint(c: *Checker, path: []u8, what: []u8) {
+    var b = str.builder(path.len + what.len);
+    str.append(&b, path);
+    str.append(&b, what);
+    c.tell(str.text(&b));
+    str.release(&b);
+    c.report.problems += 1;
+}
+
+// Takes the chain from first on for the file or directory at path, up to needed clusters when that is not
+// negative, and returns how many clusters it holds
+fn claim(c: *Checker, first: int, path: []u8, needed: int) int {
+    var v = c.v;
+    var count = 0;
+    var cluster = first;
+    var previous = 0;
+    while (cluster != 0 && cluster != END) {
+        if (!valid(v, cluster)) {
+            complaint(c, path, " has an invalid allocation unit");
+            if (c.fix && previous != 0) {
+                set(v, previous, END);
+            }
+            return count;
+        }
+        if (c.owned[cluster]) {
+            var digits: [11]u8;
+            var b = str.builder(40);
+            str.append(&b, " is cross-linked on allocation unit ");
+            str.append(&b, str.format_int(cluster, digits));
+            complaint(c, path, str.text(&b));
+            str.release(&b);
+            if (c.fix && previous != 0) {
+                set(v, previous, END);
+            }
+            return count;
+        }
+        if (needed >= 0 && count == needed) {
+            complaint(c, path, " holds more allocation units than its size needs");
+            if (c.fix) {
+                set(v, previous, END);
+            }
+            return count;
+        }
+        c.owned[cluster] = true;
+        count += 1;
+        previous = cluster;
+        cluster = v.table[cluster];
+    }
+    return count;
+}
+
+fn check_directory(c: *Checker, first: int, path: []u8) Error {
+    var count = claim(c, first, path, -1);
+    c.report.directories += 1;
+    c.report.directory_clusters += count;
+    var d = Directory {};
+    var e = load(c.v, first, &d);
+    if (e != Error.NONE) {
+        return e;
+    }
+    for (var i = 0; i < d.entries.len && e == Error.NONE; i += 1) {
+        var entry = d.entries[i];
+        if (entry.name[0] == 0 || entry.name[0] == '.') {
+            continue;
+        }
+        var buffer: [12]u8;
+        var b = str.builder(path.len + 13);
+        str.append(&b, path);
+        if (!str.ends_with(path, "\\")) {
+            str.append_byte(&b, '\\');
+        }
+        str.append(&b, name_text(entry.name, buffer));
+        var child = str.clone(str.text(&b));
+        str.release(&b);
+        if ((entry.attributes & DIRECTORY) != 0) {
+            if (!valid(c.v, entry.cluster) || c.owned[entry.cluster]) {
+                complaint(c, child, " is a damaged directory");
+            } else {
+                e = check_directory(c, entry.cluster, child);
+            }
+        } else {
+            // What fixing cuts off a chain is lost, and freed with the other lost clusters
+            var needed = (entry.size + SECTOR - 1) / SECTOR;
+            var clusters = 0;
+            if (needed == 0 && entry.cluster != 0) {
+                complaint(c, child, " is empty but holds allocation units");
+                if (c.fix) {
+                    d.entries[i].cluster = 0;
+                    e = store(&d, i);
+                }
+            } else {
+                clusters = claim(c, entry.cluster, child, needed);
+            }
+            if (clusters < needed) {
+                complaint(c, child, " is shorter than its size; size adjusted");
+                if (c.fix) {
+                    d.entries[i].size = clusters * SECTOR;
+                    e = store(&d, i);
+                }
+            }
+            if ((entry.attributes & HIDDEN) != 0) {
+                c.report.hidden += 1;
+                c.report.hidden_clusters += clusters;
+            } else {
+                c.report.files += 1;
+                c.report.file_clusters += clusters;
+            }
+        }
+        free(child);
+    }
+    unload(&d);
     return e;
 }
