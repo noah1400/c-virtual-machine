@@ -7,14 +7,15 @@
 #include "memory.h"
 #include "vm.h"
 
-// Heap blocks are tracked outside VM memory, in two treaps ordered by address. One holds the allocated
+// Heap blocks are tracked outside VM memory, in a treap ordered by address that holds the allocated
 // blocks, each with the room that first fit sees after it and the most room anywhere below it, so the
-// lowest gap that fits is found without visiting every block. The other keeps freed blocks until their
-// space is reused, so that a second free can be told apart from a bad pointer. A guard gap that no
-// access may touch precedes every block. Blocks and gaps come in units of HEAP_UNIT bytes, whose rights
-// are also kept in a byte each, so that accesses can be checked without searching.
+// lowest gap that fits is found without visiting every block. A guard gap that no access may touch
+// precedes every block. Blocks and gaps come in units of HEAP_UNIT bytes, whose rights are also kept in a
+// byte each, so that accesses can be checked without searching. The byte of the first unit of a freed
+// block marks it until its space is reused, so that a second free can be told apart from a bad pointer.
 #define HEAP_GUARD      HEAP_UNIT
 #define HEAP_ALIGNMENT  HEAP_UNIT
+#define HEAP_UNIT_FREED 0x40u
 
 struct HeapNode {
     uint32_t start;
@@ -90,7 +91,6 @@ void memory_heap_reset(VM *vm) {
     vm->heap_spare = NULL;
     vm->heap_blocks = NULL;
     vm->heap_first = NULL;
-    vm->heap_freed = NULL;
     vm->heap_last = NULL;
     free(vm->heap_rights);
     vm->heap_rights = NULL;
@@ -98,26 +98,29 @@ void memory_heap_reset(VM *vm) {
     vm->heap_rights_count = 0;
 }
 
-// Records the rights of a block for its units, 0 once it is freed. The record grows to reach them; units that
-// it cannot reach for lack of host memory are checked by searching the blocks instead.
+// Grows the rights to reach the units up to end, which fails only for lack of host memory
+static int reach_rights(VM *vm, uint32_t end) {
+    uint32_t units = (end - vm->heap_rights_base) / HEAP_UNIT;
+    if (units <= vm->heap_rights_count) {
+        return 1;
+    }
+    uint32_t count = vm->heap_rights_count ? vm->heap_rights_count : 4096;
+    while (count < units) {
+        count *= 2;
+    }
+    uint8_t *grown = realloc(vm->heap_rights, count);
+    if (!grown) {
+        return 0;
+    }
+    memset(grown + vm->heap_rights_count, 0, count - vm->heap_rights_count);
+    vm->heap_rights = grown;
+    vm->heap_rights_count = count;
+    return 1;
+}
+
+// Records the rights of a block for its units, 0 once it is freed
 static void set_rights(VM *vm, uint32_t start, uint32_t size, uint8_t rights) {
-    uint32_t first = (start - vm->heap_rights_base) / HEAP_UNIT, units = size / HEAP_UNIT;
-    if (first + units > vm->heap_rights_count) {
-        uint32_t count = vm->heap_rights_count ? vm->heap_rights_count : 4096;
-        while (count < first + units) {
-            count *= 2;
-        }
-        uint8_t *grown = realloc(vm->heap_rights, count);
-        if (grown) {
-            memset(grown + vm->heap_rights_count, 0, count - vm->heap_rights_count);
-            vm->heap_rights = grown;
-            vm->heap_rights_count = count;
-        }
-    }
-    if (first < vm->heap_rights_count) {
-        uint32_t reached = vm->heap_rights_count - first;
-        memset(vm->heap_rights + first, rights, units < reached ? units : reached);
-    }
+    memset(vm->heap_rights + (start - vm->heap_rights_base) / HEAP_UNIT, rights, size / HEAP_UNIT);
 }
 
 static inline int in_heap(const VM *vm, uint32_t address, uint32_t size) {
@@ -222,20 +225,6 @@ static struct HeapNode *take_block(struct HeapNode *root, uint32_t key, struct H
         root->left = take_block(root->left, key, before);
     } else {
         root->right = take_block(root->right, key, root);
-    }
-    update(root);
-    return root;
-}
-
-// Takes the node that starts at key out of a treap that holds it
-static struct HeapNode *remove_node(struct HeapNode *root, uint32_t key) {
-    if (root->start == key) {
-        return merge(root->left, root->right);
-    }
-    if (key < root->start) {
-        root->left = remove_node(root->left, key);
-    } else {
-        root->right = remove_node(root->right, key);
     }
     update(root);
     return root;
@@ -615,29 +604,14 @@ int memory_set(VM *vm, uint32_t address, uint8_t value, uint32_t size) {
     return vm->last_error;
 }
 
-// Forgets the freed blocks that overlap the addresses from low up to high. Freed blocks do not overlap each
-// other, so only the last one that starts before high can, until it is gone.
-static void forget_freed(VM *vm, uint32_t low, uint32_t high) {
-    for (;;) {
-        struct HeapNode *freed = node_before(vm->heap_freed, high - 1);
-        if (!freed || (uint64_t)freed->start + freed->size <= low) {
-            return;
-        }
-        vm->heap_freed = remove_node(vm->heap_freed, freed->start);
-        release_node(vm, freed);
-    }
-}
-
 // Adds an allocated block in the room after the block before it, or before the first block, forgetting
 // freed blocks whose space it reuses. The block before lies on the way the new one takes into the treap,
 // which updates it there.
 static int insert_block(VM *vm, uint32_t start, uint32_t size, struct HeapNode *before) {
-    struct HeapNode *block = new_node(vm);
+    struct HeapNode *block = reach_rights(vm, start + size) ? new_node(vm) : NULL;
     if (!block) {
         return 0;
     }
-    forget_freed(vm, start - HEAP_GUARD, start + size);
-
     *block = (struct HeapNode){ .start = start, .size = size, .priority = next_priority(vm), .protection = PROT_ALL };
     if (before) {
         int64_t limit = (int64_t)before->start + before->size + HEAP_GUARD + before->room;
@@ -649,6 +623,8 @@ static int insert_block(VM *vm, uint32_t start, uint32_t size, struct HeapNode *
     }
     vm->heap_blocks = insert_node(vm->heap_blocks, block);
     vm->heap_last = block;
+    // A freed block cannot overlap the block before, so the ones this space reuses start in the guard or here
+    vm->heap_rights[(start - vm->heap_rights_base) / HEAP_UNIT - 1] = 0;
     set_rights(vm, start, size, HEAP_UNIT_USED | PROT_ALL);
     return 1;
 }
@@ -744,8 +720,8 @@ int memory_free(VM *vm, uint32_t address) {
     }
     struct HeapNode *block = node_before(vm->heap_blocks, address);
     if (!block || block->start != address) {
-        struct HeapNode *freed = node_before(vm->heap_freed, address);
-        if (freed && freed->start == address) {
+        uint32_t unit = (address - vm->heap_rights_base) / HEAP_UNIT;
+        if (address % HEAP_UNIT == 0 && unit < vm->heap_rights_count && (vm->heap_rights[unit] & HEAP_UNIT_FREED)) {
             return vm_raise(vm, VM_ERROR_INVALID_ADDRESS, "Double free detected at 0x%04X", address);
         }
         return vm_raise(vm, VM_ERROR_INVALID_ADDRESS,
@@ -761,7 +737,8 @@ int memory_free(VM *vm, uint32_t address) {
     }
 
     set_rights(vm, block->start, block->size, 0);
-    vm->heap_freed = insert_node(vm->heap_freed, block);
+    vm->heap_rights[(block->start - vm->heap_rights_base) / HEAP_UNIT] = HEAP_UNIT_FREED;
+    release_node(vm, block);
     return VM_ERROR_NONE;
 }
 
