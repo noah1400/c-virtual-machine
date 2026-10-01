@@ -211,7 +211,7 @@ On x86-64 Linux and macOS, `vm` compiles the code that jumps go to often into ho
 
 Whatever has to happen between two instructions makes `vm` step through them without compiled code: the debugger, `-t`, `-p`, `-c`, `-H` and logpoints, paging, the trap flag, and the timer or a keyboard interrupt while they are on. `-j 0` turns compiling off, and on other hosts `vm` interprets every instruction.
 
-With compiled code, the Ore programs of the [benchmarks](#benchmarks) run 3.1 to 4.7 times as fast, and `vmc` compiles itself in 0.29 instead of 0.50 seconds.
+With compiled code, the Ore programs of the [benchmarks](#benchmarks) run 3.2 to 4.7 times as fast, and `vmc` compiles itself in 0.28 instead of 0.50 seconds.
 
 ## The machine
 
