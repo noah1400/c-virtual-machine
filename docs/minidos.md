@@ -67,6 +67,7 @@ Any other name runs a program or a batch file: `NAME` looks for `NAME.EXE` and t
 - **Redirection:** `> file` sends a command's output into a file, `>> file` adds it to the end, and `< file` gives the command the file as its input. Error messages and questions always go to the screen.
 - **Pipes:** `a | b` runs `a` with its output going to a temporary file in the root directory, then `b` with that file as its input.
 - **Wildcards:** `*` stands for the rest of the name or extension and `?` for one character, as in `DEL *.TXT` or `DIR A?C.*`. `DIR NAME` lists `NAME.*`.
+- **NUL:** every directory has the device `NUL`, with any extension, which reads as empty and takes whatever is written to it: `> NUL` throws output away, `COPY NUL FILE` makes an empty file, and `IF EXIST DIR\NUL` tells whether a directory exists.
 
 ## Commands
 

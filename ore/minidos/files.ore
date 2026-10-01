@@ -31,11 +31,6 @@ fn is_directory(path: []u8) bool {
     return fs.find(path, &place) == fs.Error.NONE && fs.is_directory(&place);
 }
 
-fn is_file(path: []u8) bool {
-    var place = fs.Place {};
-    return fs.find(path, &place) == fs.Error.NONE && !fs.is_directory(&place);
-}
-
 // Whether a path names a directory or a drive, which files then go into
 fn names_directory(path: []u8) bool {
     var d = 0;
@@ -126,7 +121,7 @@ fn copy_file(from: []u8, to: []u8, appending: bool) fs.Error {
     if (e == fs.Error.NONE) {
         e = closed;
     }
-    if (e == fs.Error.NONE && !appending) {
+    if (e == fs.Error.NONE && !appending && written != 0) {
         e = fs.set_time(to, written);
     }
     return e;
@@ -143,7 +138,7 @@ fn same_file(a: []u8, b: []u8) bool {
 
 // Whether to replace a file that exists: without asking, or after asking, where All answers for the rest
 fn may_replace(path: []u8, ask: bool, all: *bool) bool {
-    if (!ask || *all || !is_file(path)) {
+    if (!ask || *all || !fs.is_file(path)) {
         return true;
     }
     var question = names.join("Overwrite ", path, " (Yes/No/All)?");
@@ -732,6 +727,8 @@ pub fn copy(a: *args.Args) {
         } else {
             copy_console(destination);
         }
+    } else if (sources.len == 1 && fs.names_device(sources[0])) {
+        copy_device(sources[0], destination, ask);
     } else if (sources.len > 1 || fs.has_wildcards(sources[0]) && destination.len > 0 && !names_directory(destination)) {
         concatenate(sources, destination, ask);
     } else if (sources.len == 1) {
@@ -739,6 +736,25 @@ pub fn copy(a: *args.Args) {
     }
     free(sources);
     str.release(&joined);
+}
+
+// Copies NUL, which makes an empty file
+fn copy_device(source: []u8, destination: []u8, ask: bool) {
+    if (destination.len == 0) {
+        console.error("Required parameter missing");
+        return;
+    }
+    var count = 0;
+    var all = false;
+    if (may_replace(destination, ask, &all)) {
+        var e = copy_file(source, destination, false);
+        if (e == fs.Error.NONE) {
+            count = 1;
+        } else {
+            console.fail(e);
+        }
+    }
+    copied(count);
 }
 
 fn split_sources(text: []u8) [][]u8 {
@@ -1013,7 +1029,7 @@ pub fn move(a: *args.Args) {
             }
             if (!same_file(from, to) && may_replace(to, ask, &all)) {
                 var e = fs.Error.NONE;
-                if (is_file(to)) {
+                if (fs.is_file(to)) {
                     e = fs.delete(to);
                 }
                 if (e == fs.Error.NONE) {

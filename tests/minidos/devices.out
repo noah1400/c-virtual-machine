@@ -1,0 +1,73 @@
+
+Starting MiniDos...
+
+The disk in drive B is not formatted; FORMAT B: prepares it.
+The disk in drive A is not formatted.
+Format it now (Y/N)?N
+FORMAT A: prepares it.
+A:\>FORMAT A: /V:DEVICES
+Formatting 1,024K
+Format complete.
+
+   1,039,872 bytes total disk space
+   1,039,360 bytes available on disk
+
+         512 bytes in each allocation unit
+       2,030 allocation units available on disk
+
+A:\>IMPORT sort.bin SORT.EXE
+        1 file(s) imported
+A:\>ECHO hidden > NUL
+A:\>DIR > NUL
+A:\>TYPE NUL
+A:\>COPY NUL EMPTY.TXT
+        1 file(s) copied
+A:\>COPY NUL EMPTY.TXT
+Overwrite EMPTY.TXT (Yes/No/All)?N
+        0 file(s) copied
+A:\>ECHO text > NOTES.TXT
+A:\>COPY NOTES.TXT NUL
+        1 file(s) copied
+A:\>COPY NOTES.TXT NUL.DAT
+        1 file(s) copied
+A:\>SORT < NUL
+A:\>MD DOCS
+A:\>IF EXIST NUL ECHO NUL is everywhere
+NUL is everywhere
+A:\>IF EXIST DOCS\NUL ECHO DOCS is a directory
+DOCS is a directory
+A:\>IF EXIST NOTES.TXT\NUL ECHO NOTES.TXT is a directory
+A:\>IF NOT EXIST NOWHERE\NUL ECHO NOWHERE is no directory
+NOWHERE is no directory
+A:\>COPY CON CHECK.BAT
+@ECHO OFF
+IF NOT EXIST %1\NUL GOTO missing
+ECHO %1 is there
+DIR %1 > NUL
+GOTO end
+:missing
+ECHO %1 is missing
+:end
+^Z
+        1 file(s) copied
+A:\>CHECK DOCS
+DOCS is there
+A:\>CHECK NOWHERE
+NOWHERE is missing
+A:\>MD NUL
+Unable to create directory
+A:\>REN NOTES.TXT NUL.TXT
+Invalid file name
+A:\>DIR
+
+ Volume in drive A is DEVICES
+ Directory of A:\
+
+SORT     EXE       146,643 10-01-26   9:30a
+EMPTY    TXT             0 10-01-26   9:30a
+NOTES    TXT             5 10-01-26   9:30a
+DOCS            <DIR>      10-01-26   9:30a
+CHECK    BAT           115 10-01-26   9:30a
+        4 file(s)        146,763 bytes
+        1 dir(s)         890,880 bytes free
+A:\>EXIT
