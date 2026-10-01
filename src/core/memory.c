@@ -211,6 +211,28 @@ static struct HeapNode *insert_node(struct HeapNode *root, struct HeapNode *node
     return root;
 }
 
+// Takes the node that starts at key out of a treap that holds it
+static struct HeapNode *remove_node(struct HeapNode *root, uint32_t key) {
+    if (root->start == key) {
+        return merge(root->left, root->right);
+    }
+    if (key < root->start) {
+        root->left = remove_node(root->left, key);
+    } else {
+        root->right = remove_node(root->right, key);
+    }
+    update(root);
+    return root;
+}
+
+// Brings the most room up to date on the way down to the node that starts at key
+static void refresh(struct HeapNode *node, uint32_t key) {
+    if (node->start != key) {
+        refresh(key < node->start ? node->left : node->right, key);
+    }
+    update(node);
+}
+
 static struct HeapNode *first_node(struct HeapNode *node) {
     while (node && node->left) {
         node = node->left;
@@ -243,16 +265,6 @@ static struct HeapNode *node_before(struct HeapNode *node, uint32_t address) {
 static int64_t room_after(const VM *vm, uint64_t end, const struct HeapNode *next) {
     int64_t candidate = (int64_t)end + HEAP_GUARD;
     return next ? (int64_t)next->start - HEAP_GUARD - candidate : (int64_t)vm->control[CR_HEAPHI] - candidate;
-}
-
-// Gives the last node of a treap its room before next, which follows the treap
-static void set_last_room(const VM *vm, struct HeapNode *node, const struct HeapNode *next) {
-    if (node->right) {
-        set_last_room(vm, node->right, next);
-    } else {
-        node->room = room_after(vm, (uint64_t)node->start + node->size, next);
-    }
-    update(node);
 }
 
 static uint32_t next_priority(VM *vm) {
@@ -712,25 +724,21 @@ int memory_free(VM *vm, uint32_t address) {
                         "Address 0x%04X is not the start of an allocated block", address);
     }
 
-    struct HeapNode *before, *others, *after;
-    split(vm->heap_blocks, address, &before, &others);
-    split(others, address + 1, &others, &after);
+    // The block before takes over the room of the freed one
+    struct HeapNode *before = node_before(vm->heap_blocks, address - 1);
+    vm->heap_blocks = remove_node(vm->heap_blocks, address);
     if (before) {
-        set_last_room(vm, before, first_node(after));
-    }
-    vm->heap_blocks = merge(before, after);
-    if (vm->heap_first == block) {
-        vm->heap_first = first_node(after);
+        before->room = block->room + ((int64_t)block->start + block->size) - ((int64_t)before->start + before->size);
+        refresh(vm->heap_blocks, before->start);
+    } else {
+        vm->heap_first = first_node(vm->heap_blocks);
     }
     if (vm->heap_last == block) {
         vm->heap_last = NULL;
     }
 
     set_rights(vm, block->start, block->size, 0);
-    block->left = block->right = NULL;
-    update(block);
-    split(vm->heap_freed, address, &before, &after);
-    vm->heap_freed = merge(merge(before, block), after);
+    vm->heap_freed = insert_node(vm->heap_freed, block);
     return VM_ERROR_NONE;
 }
 
