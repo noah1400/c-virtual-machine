@@ -1,0 +1,25 @@
+// Makes the memory syscalls under MiniDos, which makes them for the program once its ranges lie in the
+// program's memory
+fn main() int {
+    var text = new(u8, 64);
+    var filled = syscall(24, text.ptr, 'x', 40);
+    print("fill ", filled.value, " ", filled.status, "\n");
+    print("count ", syscall(27, text.ptr, 'x', 64).value, "\n");
+    print("find ", syscall(26, text.ptr, 0, 64).value, "\n");
+    var other = new(u8, 64);
+    syscall(24, other.ptr, 'x', 40);
+    print("compare ", syscall(25, text.ptr, other.ptr, 64).value, "\n");
+    var numbers = new(int, 5);
+    numbers[0] = 3;
+    numbers[1] = -1;
+    numbers[2] = 7;
+    numbers[3] = 0;
+    numbers[4] = -9;
+    syscall(28, numbers.ptr, 0, 5);
+    print("sort ", numbers[0], " ", numbers[1], " ", numbers[2], " ", numbers[3], " ", numbers[4], "\n");
+    var seed: u32 = 2166136261;
+    print("hash ", syscall(29, text.ptr, seed, 40).value as u32, "\n");
+    var refused = syscall(27, 0x200000, 0, 16);
+    print("outside ", refused.value, " ", refused.status, "\n");
+    return 0;
+}

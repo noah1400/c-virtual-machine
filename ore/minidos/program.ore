@@ -276,6 +276,18 @@ fn end(status: int) {
     cpu.leave_user(status as u32);
 }
 
+// Gives the program what a syscall that MiniDos made for it returned
+fn pass(frame: *cpu.Frame, result: SyscallResult) {
+    frame.r0 = result.value as u32;
+    frame.r5 = result.status as u32;
+}
+
+// Fails a syscall whose memory lies outside the program's
+fn refuse(frame: *cpu.Frame) {
+    frame.r0 = 0;
+    frame.r5 = SEGMENTATION_FAULT;
+}
+
 // Does what the VM's syscall number would, with the registers of the program's frame
 fn serve(frame: *cpu.Frame, number: u32) {
     var a = frame.r0;
@@ -358,13 +370,52 @@ fn serve(frame: *cpu.Frame, number: u32) {
             release(frame, a);
         }
         case 22 {
-            frame.r0 = 0;
-            if (!usable(a, c as int) || !usable(b, c as int)) {
-                frame.r5 = SEGMENTATION_FAULT;
+            if (usable(a, c as int) && usable(b, c as int)) {
+                pass(frame, syscall(22, a, b, c));
             } else {
-                var result = syscall(22, a, b, c);
-                frame.r0 = result.value as u32;
-                frame.r5 = result.status as u32;
+                refuse(frame);
+            }
+        }
+        case 24 {
+            if (usable(a, c as int)) {
+                pass(frame, syscall(24, a, b, c));
+            } else {
+                refuse(frame);
+            }
+        }
+        case 25 {
+            if (usable(a, c as int) && usable(b, c as int)) {
+                pass(frame, syscall(25, a, b, c));
+            } else {
+                refuse(frame);
+            }
+        }
+        case 26 {
+            if (usable(a, c as int)) {
+                pass(frame, syscall(26, a, b, c));
+            } else {
+                refuse(frame);
+            }
+        }
+        case 27 {
+            if (usable(a, c as int)) {
+                pass(frame, syscall(27, a, b, c));
+            } else {
+                refuse(frame);
+            }
+        }
+        case 28 {
+            if (c < 0x20000000 && usable(a, (c * 4) as int)) {
+                pass(frame, syscall(28, a, b, c));
+            } else {
+                refuse(frame);
+            }
+        }
+        case 29 {
+            if (usable(a, c as int)) {
+                pass(frame, syscall(29, a, b, c));
+            } else {
+                refuse(frame);
             }
         }
         case 23 {

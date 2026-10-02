@@ -188,7 +188,7 @@ A program's syscalls cannot reach the VM from user mode; they arrive at MiniDos 
 |---|---|
 | Console, 0 to 9 | Go to the screen or where the command's output is redirected, and read the keyboard through the line editor or the redirected input |
 | Files, 10 to 14 | Work with files on the MiniDos disks. Handles 0, 1 and 2 are the input, the output and the screen, and up to 16 files may be open |
-| Memory, 20 to 23 | Allocate from the VM's heap. What a program does not free, MiniDos frees when it ends, along with the files it leaves open |
+| Memory, 20 to 29 | Allocate from the VM's heap, and copy, fill, compare, search, count, sort and hash in native code once MiniDos has checked that the memory is the program's. What a program does not free, MiniDos frees when it ends, along with the files it leaves open |
 | 30, Exit | Ends the program with a status, which becomes `ERRORLEVEL` |
 | 34, Argument | Gives the program's path, as `A:\NAME.EXE`, and its arguments |
 | 35, Abort | Shows the message of a runtime error, such as a `null` pointer in Ore, and ends the program with status 1 |

@@ -1,0 +1,6 @@
+N
+FORMAT A:
+
+IMPORT bulk.bin BULK.EXE
+BULK
+EXIT
