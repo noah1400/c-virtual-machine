@@ -83,6 +83,10 @@ static int is_absolute(const char *path) {
 }
 
 static char *join_path(const char *dir, size_t dir_length, const char *name) {
+    // ./ adds nothing after a directory, and leaving it out names a file the same whichever directory finds it
+    while (dir_length > 0 && name[0] == '.' && (name[1] == '/' || name[1] == '\\')) {
+        name += 2;
+    }
     char *path = malloc(dir_length + strlen(name) + 2);
     if (path) {
         memcpy(path, dir, dir_length);
