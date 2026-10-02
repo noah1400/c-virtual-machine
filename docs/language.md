@@ -410,6 +410,7 @@ A `Builder` collects text on the heap:
 | `ticks() u32` | Instructions executed so far |
 | `sleep(milliseconds: int)` | |
 | `random(limit: u32) u32`, `seed(value: u32)` | A number below limit, or any 32-bit value for 0. The sequence repeats unless seeded |
+| `supervisor() bool` | Whether the program runs in supervisor mode. Under a kernel such as MiniDos it runs in user mode |
 | `memory_size() int` | The size of the VM's memory in bytes |
 | `free_heap() int`, `largest_free() int` | How many bytes the heap has free, and the largest block that `new` can get |
 | `clock() u32` | The local date and time as seconds since 1970, as syscall 36 gives it |

@@ -28,6 +28,10 @@ pub fn seed(value: u32) {
     syscall(41, value);
 }
 
+// Whether the program runs in supervisor mode. Under a kernel such as MiniDos it runs in user mode, where
+// the kernel checks each syscall first.
+pub extern fn supervisor() bool;
+
 // The size of the VM's memory in bytes
 pub fn memory_size() int {
     return syscall(23).value;
