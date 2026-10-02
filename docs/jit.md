@@ -97,7 +97,7 @@ Loads and stores make the checks of `cpu_run` inline. An address based on SP or 
 
 ### Code that changes
 
-A store, `MEMCPY` or `MEMSET` below the end of the decoded code calls `cpu_forget` and leaves the block after the instruction. When the bytes lie where compiled code came from, `jit_written` drops all compiled code, which gets compiled again once jumps go there often enough.
+A store, `MEMCPY` or `MEMSET` below the end of the decoded code calls `cpu_forget`. When the bytes lie in a word that compiled code came from, or in the word after one, which an instruction there can take as its extension, `jit_written` drops all compiled code, which gets compiled again once jumps go there often enough, and the block leaves after the instruction. Otherwise the block goes on. A table of the words that blocks came from keeps writes next to compiled code, such as to the stack of a program that runs below its kernel under MiniDos, from dropping it.
 
 ## Leaving and linking
 
@@ -127,8 +127,8 @@ Compiled code calls C for what is rare or long:
 | `partial_for` | The flags after `SHL`, `MUL`, `INC` and the like, when it is not known what set the flags before |
 | `binary_for` | `ADDC`, `SUBC`, `MULH`, `UMULH`, `ROL`, `ROR`, and arithmetic and logic with an operand in memory |
 | `cpu_reach`, `cpu_push_slot`, `cpu_pop_slot` | Accesses that the inline checks of memory and stack leave open |
-| `cpu_forget` | Stores to decoded code |
-| `cpu_fill` | `MEMCPY` and `MEMSET`, with the code that `cpu_run` runs them with |
+| `written_for` | Stores below the end of the decoded code, through `cpu_forget` |
+| `fill_for` | `MEMCPY` and `MEMSET`, through `cpu_fill`, the code that `cpu_run` runs them with |
 | `syscall_for` | The memory syscalls 20 to 29 in supervisor mode, which `cpu_run` runs itself |
 | `push_frame_for`, `pop_frames_for` | A shadow call stack that is full, and `RET` |
 

@@ -55,6 +55,7 @@ struct Jit {
     uint32_t start_count;
     uint32_t start_room;
     uint32_t words;
+    uint8_t *covered;       // for every word, whether compiled code came from it
     uint32_t low;           // the bytes that compiled code came from
     uint32_t high;
     uint32_t flushes;       // how often all compiled code was dropped
@@ -386,6 +387,20 @@ static uint32_t syscall_for(VM *vm, Flags *flags, uint32_t number, uint32_t addr
     settle(vm->registers, flags);
     syscall_dispatch(vm, number);
     return vm->jit->flushes != flushes;
+}
+
+// A store below the decoded words, after which compiled code goes on unless the store dropped it
+static uint32_t written_for(VM *vm, uint32_t address, uint32_t size) {
+    uint32_t flushes = vm->jit->flushes;
+    cpu_forget(vm, address, size);
+    return vm->jit->flushes != flushes;
+}
+
+// MEMCPY or MEMSET as cpu_fill does it, but 2 only when it dropped compiled code
+static uint32_t fill_for(VM *vm, uint32_t to, uint32_t from, uint32_t size, uint32_t copy) {
+    uint32_t flushes = vm->jit->flushes;
+    uint32_t result = cpu_fill(vm, to, from, size, copy);
+    return result == 2 && vm->jit->flushes == flushes ? 1 : result;
 }
 
 static void push_frame_for(VM *vm, uint32_t site, uint32_t back) {
@@ -922,6 +937,7 @@ static void compile_item(Compiler *k, uint32_t j) {
             alu_load(c, CMP, HDX, H13, FIELD(decoded_high));
             Stub *s = stub(k, jcc(c, CC_B), STUB_WRITTEN, j);
             s->size = size;
+            s->resume = c->p;
             break;
         }
         case D_ADD_V:
@@ -1287,7 +1303,7 @@ static void compile_item(Compiler *k, uint32_t j) {
             load_reg(k, HSI, d->a);
             mov_imm(c, H8, d->kind == D_MEMCPY);
             mov64(c, HDI, H13);
-            call(c, (void *)cpu_fill);
+            call(c, (void *)fill_for);
             alu_imm(c, CMP, HAX, 1);
             stub(k, jcc(c, CC_B), STUB_HERE, j);
             stub(k, jcc(c, CC_A), STUB_AFTER, j);
@@ -1387,11 +1403,16 @@ static void compile_stub(Compiler *k, Stub *s) {
             leave_with(c, k->jit, JIT_HERE);
             break;
         }
-        case STUB_WRITTEN:
+        case STUB_WRITTEN: {
             mov64(c, HDI, H13);
             mov(c, HSI, HDX);
             mov_imm(c, HDX, s->size);
-            call(c, (void *)cpu_forget);
+            call(c, (void *)written_for);
+            op_reg(c, 0, 0x85, HAX, HAX);
+            uint8_t *dropped = jcc(c, CC_NE);
+            jmp_to(c, s->resume);
+            patch(c, dropped, c->p);
+        }
             // fall through
         case STUB_AFTER:
             refund(c, after);
@@ -1444,6 +1465,10 @@ static void compile_stub(Compiler *k, Stub *s) {
 
 static void forget_code(struct Jit *jit, VM *vm) {
     jit->flushes++;
+    if (jit->low < jit->high) {
+        uint32_t end = jit->high / 4 < jit->words ? jit->high / 4 : jit->words;
+        memset(jit->covered + jit->low / 4, 0, end - jit->low / 4);
+    }
     for (uint32_t i = 0; i < jit->start_count; i++) {
         uint32_t word = jit->starts[i];
         jit->entries[word] = NULL;
@@ -1480,13 +1505,15 @@ static struct Jit *jit_for(VM *vm) {
     jit->entries = calloc(vm->decoded_words ? vm->decoded_words : 1, sizeof(void *));
     jit->kinds = calloc(vm->decoded_words ? vm->decoded_words : 1, 1);
     jit->waiting = calloc(vm->decoded_words ? vm->decoded_words : 1, sizeof(uint32_t));
-    if (code == MAP_FAILED || !jit->entries || !jit->kinds || !jit->waiting) {
+    jit->covered = calloc(vm->decoded_words ? vm->decoded_words : 1, 1);
+    if (code == MAP_FAILED || !jit->entries || !jit->kinds || !jit->waiting || !jit->covered) {
         if (code != MAP_FAILED) {
             munmap(code, CODE_SIZE);
         }
         free(jit->entries);
         free(jit->kinds);
         free(jit->waiting);
+        free(jit->covered);
         free(jit);
         return NULL;
     }
@@ -1589,6 +1616,7 @@ static uint8_t *compile_block(struct Jit *jit, VM *vm, uint32_t word, uint32_t *
         jit->waiting[link->word] = jit->link_count;
     }
     jit->used = ((size_t)(k.c.p - jit->code) + 15) & ~(size_t)15;
+    memset(jit->covered + word, 1, index - word);
     uint32_t first = word * 4, last = index * 4 + 4;
     jit->low = first < jit->low ? first : jit->low;
     jit->high = last > jit->high ? last : jit->high;
@@ -1641,10 +1669,22 @@ uint8_t jit_kind(const VM *vm, uint32_t index) {
     return vm->jit->kinds[index];
 }
 
+// Drops all compiled code when a write reaches a word that some came from, or the word before, whose
+// instruction can take the first word written as its extension
 void jit_written(VM *vm, uint32_t address, uint32_t size) {
     struct Jit *jit = vm->jit;
-    if (jit->start_count && address < jit->high && (uint64_t)address + size > jit->low) {
-        forget_code(jit, vm);
+    if (!jit->start_count || address >= jit->high || (uint64_t)address + size <= jit->low) {
+        return;
+    }
+    uint32_t first = address / 4, last = (uint32_t)(((uint64_t)address + size - 1) / 4);
+    if (first > 0) {
+        first--;
+    }
+    for (uint32_t k = first; k <= last && k < jit->words; k++) {
+        if (jit->covered[k]) {
+            forget_code(jit, vm);
+            return;
+        }
     }
 }
 
@@ -1661,6 +1701,7 @@ void jit_free(VM *vm) {
     free(jit->kinds);
     free(jit->starts);
     free(jit->waiting);
+    free(jit->covered);
     free(jit->links);
     free(jit);
     vm->jit = NULL;
