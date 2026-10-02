@@ -27,4 +27,11 @@ compare 0
 sort -9 -1 0 3 7
 hash 2226015845
 outside 0 2
+A:\>IMPORT library.bin LIBRARY.EXE
+        1 file(s) imported
+A:\>LIBRARY
+supervisor false
+mem below and above 1024 bytes true
+sort 20: -9 -8 10
+sort 40: -19 -18 20
 A:\>EXIT

@@ -20,12 +20,7 @@ pub fn ends_with(text: []u8, suffix: []u8) bool {
 
 // The index of the first c in text, or -1
 pub fn find_byte(text: []u8, c: u8) int {
-    for (var i = 0; i < text.len; i += 1) {
-        if (text[i] == c) {
-            return i;
-        }
-    }
-    return -1;
+    return mem.find(text, c);
 }
 
 // The index of the last c in text, or -1
@@ -40,10 +35,20 @@ pub fn find_last_byte(text: []u8, c: u8) int {
 
 // The index where part first occurs in text, or -1; an empty part occurs at 0
 pub fn find(text: []u8, part: []u8) int {
-    for (var i = 0; i + part.len <= text.len; i += 1) {
+    if (part.len == 0) {
+        return 0;
+    }
+    var i = 0;
+    while (i + part.len <= text.len) {
+        var skipped = mem.find(text[i:text.len - part.len + 1], part[0]);
+        if (skipped < 0) {
+            return -1;
+        }
+        i += skipped;
         if (mem.equal(text[i:i + part.len], part)) {
             return i;
         }
+        i += 1;
     }
     return -1;
 }
@@ -616,9 +621,7 @@ pub fn append(b: *Builder, text: []u8) {
     if (b.len + text.len > b.bytes.len) {
         reserve(b, text.len);
     }
-    if (text.len > 0) {
-        syscall(22, b.bytes.ptr + b.len, text.ptr, text.len);
-    }
+    mem.copy(b.bytes[b.len:], text);
     b.len += text.len;
 }
 

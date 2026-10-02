@@ -1,0 +1,5 @@
+fill, copy, compare, find, count and hash agree for 12 lengths: true
+sort agrees for 11 sizes: true
+sorted: -2147483648 -1 0 5 5 2147483647
+hash of hello: 4f9f2cab
+find: 23 -1 0 60 1 38

@@ -399,7 +399,12 @@ A `Builder` collects text on the heap:
 | `copy(to: []u8, from: []u8) int` | Copies as many bytes as both hold, even when they overlap, and returns how many |
 | `fill(to: []u8, value: u8)` | |
 | `equal(a, b) bool`, `compare(a, b) int` | As in `std/str` |
+| `find(data: []u8, value: u8) int`, `count(data: []u8, value: u8) int` | The index of the first value, or −1, and how many bytes are value |
+| `sort(numbers: []int)` | From the lowest up |
+| `hash(data: []u8) u32`, `hash_more(start: u32, data: []u8) u32` | The 32-bit FNV-1a hash, and the hash of more data after a hash, so that pieces hash as they would together |
 | `bytes(address: *u8, size: int) []u8` | The bytes of any memory, such as `mem.bytes(&p as *u8, sizeof(Point))` |
+
+From 4 bytes on, these run as native code of the VM, the memory syscalls 22 and 24 to 29, and shorter slices stay in loops, which cost less than the syscall. In user mode the cut-off is 1024 bytes, since a kernel such as MiniDos checks each syscall first. `sort` counts an insertion sort of *n* numbers as *n*² bytes. `std/str` finds bytes and texts with `find`, and builders copy with `copy`.
 
 ### std/sys
 

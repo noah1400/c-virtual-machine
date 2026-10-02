@@ -1,0 +1,153 @@
+// std/mem answers the same from its loops, for short slices, as from the native code of the VM, for long ones
+import "std/mem";
+import "std/str";
+import "std/sys";
+
+var lengths = [12]int { 0, 1, 2, 7, 8, 9, 15, 16, 17, 64, 100, 1025 };
+
+fn reference_compare(a: []u8, b: []u8) int {
+    for (var i = 0; i < a.len && i < b.len; i += 1) {
+        if (a[i] != b[i]) {
+            return a[i] as int - b[i] as int;
+        }
+    }
+    return a.len - b.len;
+}
+
+fn reference_hash(data: []u8) u32 {
+    var h: u32 = 2166136261;
+    for (var i = 0; i < data.len; i += 1) {
+        h = (h ^ data[i] as u32) * 16777619;
+    }
+    return h;
+}
+
+fn reference_sort(numbers: []int) {
+    for (var i = 1; i < numbers.len; i += 1) {
+        for (var j = i; j > 0 && numbers[j - 1] > numbers[j]; j -= 1) {
+            var t = numbers[j];
+            numbers[j] = numbers[j - 1];
+            numbers[j - 1] = t;
+        }
+    }
+}
+
+fn random_bytes(data: []u8, limit: u32) {
+    for (var i = 0; i < data.len; i += 1) {
+        data[i] = sys.random(limit) as u8;
+    }
+}
+
+// Copies length bytes inside data from one place to another that overlaps it, and checks the result
+// against a copy made through a separate buffer
+fn copies_overlapping(data: []u8, spare: []u8, length: int, from: int, to: int) bool {
+    random_bytes(data, 0);
+    for (var i = 0; i < length; i += 1) {
+        spare[i] = data[from + i];
+    }
+    var expected = new(u8, data.len);
+    for (var i = 0; i < data.len; i += 1) {
+        expected[i] = data[i];
+    }
+    for (var i = 0; i < length; i += 1) {
+        expected[to + i] = spare[i];
+    }
+    mem.copy(data[to:to + length], data[from:from + length]);
+    var same = reference_compare(data, expected) == 0;
+    free(expected);
+    return same;
+}
+
+fn main() {
+    var a = new(u8, 1040);
+    var b = new(u8, 1040);
+    var failures = 0;
+    for (var k = 0; k < lengths.len; k += 1) {
+        var n = lengths[k];
+        a[n] = '!';
+        mem.fill(a[:n], 'a');
+        if (n > 0 && (a[0] != 'a' || a[n - 1] != 'a') || a[n] != '!' || mem.count(a[:n], 'a') != n) {
+            print("fill or count fails for ", n, "\n");
+            failures += 1;
+        }
+        random_bytes(a[:n], 4);
+        mem.copy(b, a[:n]);
+        if (reference_compare(a[:n], b[:n]) != 0 || mem.compare(a[:n], b[:n]) != 0 || !mem.equal(a[:n], b[:n])) {
+            print("copy, compare or equal fails for ", n, "\n");
+            failures += 1;
+        }
+        if (n > 0) {
+            b[n - 1] += 1;
+            if (mem.compare(a[:n], b[:n]) != reference_compare(a[:n], b[:n]) || mem.equal(a[:n], b[:n]) ||
+                mem.compare(b[:n], a[:n]) != reference_compare(b[:n], a[:n]) ||
+                mem.compare(a[:n], b[:n - 1]) != reference_compare(a[:n], b[:n - 1])) {
+                print("compare fails for ", n, "\n");
+                failures += 1;
+            }
+        }
+        var expected = -1;
+        var threes = 0;
+        for (var i = 0; i < n; i += 1) {
+            if (a[i] == 3) {
+                threes += 1;
+                if (expected < 0) {
+                    expected = i;
+                }
+            }
+        }
+        if (mem.find(a[:n], 3) != expected || mem.count(a[:n], 3) != threes || mem.find(a[:n], 9) != -1) {
+            print("find or count fails for ", n, "\n");
+            failures += 1;
+        }
+        random_bytes(a[:n], 0);
+        var half = n / 2;
+        if (mem.hash(a[:n]) != reference_hash(a[:n]) || mem.hash_more(mem.hash(a[:half]), a[half:n]) != mem.hash(a[:n])) {
+            print("hash fails for ", n, "\n");
+            failures += 1;
+        }
+        var around = a[:n + 9];
+        if (!copies_overlapping(around, b, n, 0, 1) || !copies_overlapping(around, b, n, 1, 0) ||
+            !copies_overlapping(around, b, n, 0, 9) || !copies_overlapping(around, b, n, 9, 0)) {
+            print("overlapping copy fails for ", n, "\n");
+            failures += 1;
+        }
+    }
+    print("fill, copy, compare, find, count and hash agree for ", lengths.len, " lengths: ", failures == 0, "\n");
+
+    var numbers = new(int, 300);
+    var expected = new(int, 300);
+    var sizes = [11]int { 0, 1, 2, 3, 20, 47, 48, 49, 100, 200, 300 };
+    failures = 0;
+    for (var k = 0; k < sizes.len; k += 1) {
+        var n = sizes[k];
+        for (var i = 0; i < n; i += 1) {
+            numbers[i] = sys.random(0) as int;
+            if (i % 5 == 0) {
+                numbers[i] = sys.random(7) as int - 3;
+            }
+            if (n == 200) {
+                numbers[i] = sys.random(100) as int;
+            }
+            expected[i] = numbers[i];
+        }
+        mem.sort(numbers[:n]);
+        reference_sort(expected[:n]);
+        for (var i = 0; i < n; i += 1) {
+            if (numbers[i] != expected[i]) {
+                print("sort fails for ", n, " at ", i, "\n");
+                failures += 1;
+                break;
+            }
+        }
+    }
+    print("sort agrees for ", sizes.len, " sizes: ", failures == 0, "\n");
+    var few = [6]int { 5, -2147483648, 2147483647, 0, -1, 5 };
+    mem.sort(few);
+    print("sorted: ", few[0], " ", few[1], " ", few[2], " ", few[3], " ", few[4], " ", few[5], "\n");
+
+    var buffer: [11]u8;
+    print("hash of hello: ", str.format_hex(mem.hash("hello"), buffer), "\n");
+    var text = "the native code of the virtual machine, which searches long texts";
+    print("find: ", str.find(text, "virtual"), " ", str.find(text, "machinery"), " ", str.find(text, ""), " ",
+          str.find(text, "texts"), " ", str.find("aab", "ab"), " ", str.find_byte(text, ','), "\n");
+}
