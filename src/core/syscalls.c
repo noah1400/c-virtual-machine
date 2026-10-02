@@ -405,6 +405,18 @@ static uint32_t hash_bytes(VM *vm, uint32_t address, uint32_t hash, uint32_t cou
     return hash;
 }
 
+// Sorts a few numbers in place, where a radix sort would spend most of its time on its tables
+static void insertion_sort(uint32_t *values, uint32_t count) {
+    for (uint32_t i = 1; i < count; i++) {
+        uint32_t value = values[i];
+        uint32_t j = i;
+        for (; j > 0 && values[j - 1] > value; j--) {
+            values[j] = values[j - 1];
+        }
+        values[j] = value;
+    }
+}
+
 // Sorts numbers by their bytes in four passes, skipping a pass where all of them share the byte, with spare
 // as room for as many; returns the array that holds them sorted, which is values or spare
 static uint32_t *radix_sort(uint32_t *values, uint32_t *spare, uint32_t count) {
@@ -452,7 +464,12 @@ static uint32_t sort_numbers(VM *vm, uint32_t address, uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
         values[i] = read_le32((const uint8_t *)&values[i]) ^ 0x80000000u;
     }
-    uint32_t *sorted = radix_sort(values, values + count + 1, count);
+    uint32_t *sorted = values;
+    if (count < 48) {
+        insertion_sort(values, count);
+    } else {
+        sorted = radix_sort(values, values + count + 1, count);
+    }
     for (uint32_t i = 0; i < count; i++) {
         write_le32((uint8_t *)&sorted[i], sorted[i] ^ 0x80000000u);
     }
