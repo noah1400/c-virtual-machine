@@ -12,13 +12,13 @@ fn native(length: int) bool {
     return length >= native_from;
 }
 
-// In user mode a kernel such as MiniDos checks each syscall first, which costs as much as a loop over about
-// a thousand bytes
+// In user mode a kernel such as MiniDos checks each syscall first, which costs as much as a loop over a few
+// hundred bytes
 fn cut_off() int {
     if (sys.supervisor()) {
         return 4;
     }
-    return 1024;
+    return 256;
 }
 
 // Copies as many bytes as both slices hold, even when they overlap, and returns how many

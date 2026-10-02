@@ -31,7 +31,7 @@ A:\>IMPORT library.bin LIBRARY.EXE
         1 file(s) imported
 A:\>LIBRARY
 supervisor false
-mem below and above 1024 bytes true
-sort 20: -9 -8 10
-sort 40: -19 -18 20
+mem below and above 256 bytes true
+sort 15: -7 -6 7
+sort 16: -7 -6 8
 A:\>EXIT

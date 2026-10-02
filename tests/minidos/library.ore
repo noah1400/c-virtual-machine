@@ -1,5 +1,5 @@
-// std/mem in user mode, where its loops take slices of up to about a thousand bytes and MiniDos makes the
-// syscalls for longer ones
+// std/mem in user mode, where its loops take slices of up to 255 bytes and MiniDos makes the syscalls for
+// longer ones
 import "std/mem";
 import "std/sys";
 
@@ -7,7 +7,7 @@ fn main() int {
     print("supervisor ", sys.supervisor(), "\n");
     var a = new(u8, 1100);
     var b = new(u8, 1100);
-    var lengths = [4]int { 16, 1023, 1024, 1100 };
+    var lengths = [4]int { 16, 255, 256, 1100 };
     var good = true;
     for (var k = 0; k < lengths.len; k += 1) {
         var n = lengths[k];
@@ -18,9 +18,9 @@ fn main() int {
                mem.compare(a[:n], b[:n - 1]) > 0 && mem.compare(b[:n - 2], a[:n]) < 0 &&
                mem.hash_more(mem.hash(a[:10]), a[10:n]) == mem.hash(a[:n]);
     }
-    print("mem below and above 1024 bytes ", good, "\n");
+    print("mem below and above 256 bytes ", good, "\n");
     var numbers = new(int, 40);
-    for (var n = 20; n <= 40; n += 20) {
+    for (var n = 15; n <= 16; n += 1) {
         for (var i = 0; i < n; i += 1) {
             numbers[i] = n / 2 - i;
         }

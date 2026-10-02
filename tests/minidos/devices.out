@@ -63,11 +63,11 @@ A:\>DIR
  Volume in drive A is DEVICES
  Directory of A:\
 
-SORT     EXE       154,459 10-01-26   9:30a
+SORT     EXE       154,457 10-01-26   9:30a
 EMPTY    TXT             0 10-01-26   9:30a
 NOTES    TXT             5 10-01-26   9:30a
 DOCS            <DIR>      10-01-26   9:30a
 CHECK    BAT           115 10-01-26   9:30a
-        4 file(s)        154,579 bytes
+        4 file(s)        154,577 bytes
         1 dir(s)         883,200 bytes free
 A:\>EXIT
