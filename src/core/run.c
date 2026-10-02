@@ -1184,8 +1184,8 @@ dispatch:
             }
             NEXT();
         TARGET(D_SYSCALL):
-            // The heap and copy syscalls of supervisor mode, which report errors in R5 instead of faulting
-            if (!(r[R4_SR] & SYS_FLAG) || d->imm < SYS_ALLOC || d->imm > SYS_MEMCPY) {
+            // The memory syscalls of supervisor mode, which report errors in R5 instead of faulting
+            if (!(r[R4_SR] & SYS_FLAG) || !syscall_runs_inline(d->imm)) {
                 goto stop;
             }
             vm->error_pc = (uint32_t)(d - code) * 4;

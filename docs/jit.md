@@ -129,7 +129,7 @@ Compiled code calls C for what is rare or long:
 | `cpu_reach`, `cpu_push_slot`, `cpu_pop_slot` | Accesses that the inline checks of memory and stack leave open |
 | `cpu_forget` | Stores to decoded code |
 | `cpu_fill` | `MEMCPY` and `MEMSET`, with the code that `cpu_run` runs them with |
-| `syscall_for` | The heap syscalls 20 to 22 in supervisor mode, which `cpu_run` runs itself |
+| `syscall_for` | The memory syscalls 20 to 29 in supervisor mode, which `cpu_run` runs itself |
 | `push_frame_for`, `pop_frames_for` | A shadow call stack that is full, and `RET` |
 
 ## Testing

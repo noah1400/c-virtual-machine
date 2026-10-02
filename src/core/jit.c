@@ -786,8 +786,8 @@ static int compiles(const Decoded *d) {
         case D_PUSHM: case D_POPM: case D_MEMCPY: case D_MEMSET:
             return 1;
         case D_SYSCALL:
-            // The heap and copy syscalls, which cpu_run runs itself in supervisor mode
-            return d->imm >= SYS_ALLOC && d->imm <= SYS_MEMCPY;
+            // The memory syscalls, which cpu_run runs itself in supervisor mode
+            return syscall_runs_inline(d->imm);
         default:
             return 0;
     }

@@ -1,9 +1,11 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#include "binfmt.h"
 #include "cpu.h"
 #include "memory.h"
 #include "syscalls.h"
@@ -317,6 +319,148 @@ static uint32_t next_random(VM *vm, uint32_t max) {
     return max ? (uint32_t)(((uint64_t)x * max) >> 32) : x;
 }
 
+// The bytes of a range the program may read: memory itself where nothing has to be translated, otherwise a
+// copy in *copy for the caller to free; NULL after a fault
+static const uint8_t *readable(VM *vm, uint32_t address, uint32_t size, uint8_t **copy) {
+    static const uint8_t none[1];
+    *copy = NULL;
+    if (size == 0) {
+        return none;
+    }
+    const uint8_t *bytes = memory_direct(vm, address, size, PROT_READ);
+    if (bytes) {
+        return bytes;
+    }
+    if (memory_check_range(vm, address, size, PROT_READ) != VM_ERROR_NONE) {
+        return NULL;
+    }
+    *copy = malloc(size);
+    if (!*copy) {
+        vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Out of host memory reading %u bytes", size);
+        return NULL;
+    }
+    memory_read(vm, address, *copy, size);
+    return *copy;
+}
+
+// The difference of the first bytes that differ, so negative, zero or positive as the count bytes at a sort
+// before, with or after those at b
+static uint32_t compare_bytes(VM *vm, uint32_t a, uint32_t b, uint32_t count) {
+    uint8_t *copy_a, *copy_b = NULL;
+    const uint8_t *x = readable(vm, a, count, &copy_a);
+    const uint8_t *y = x ? readable(vm, b, count, &copy_b) : NULL;
+    int32_t result = 0;
+    if (y) {
+        uint32_t i = 0;
+        while (count - i >= 64 && memcmp(x + i, y + i, 64) == 0) {
+            i += 64;
+        }
+        while (i < count && x[i] == y[i]) {
+            i++;
+        }
+        result = i < count ? x[i] - y[i] : 0;
+    }
+    free(copy_a);
+    free(copy_b);
+    return (uint32_t)result;
+}
+
+// The index of the first byte equal to value, or 0xFFFFFFFF
+static uint32_t find_byte(VM *vm, uint32_t address, uint8_t value, uint32_t count) {
+    uint8_t *copy;
+    const uint8_t *bytes = readable(vm, address, count, &copy);
+    if (!bytes) {
+        return 0;
+    }
+    const uint8_t *at = count ? memchr(bytes, value, count) : NULL;
+    uint32_t index = at ? (uint32_t)(at - bytes) : UINT32_MAX;
+    free(copy);
+    return index;
+}
+
+static uint32_t count_byte(VM *vm, uint32_t address, uint8_t value, uint32_t count) {
+    uint8_t *copy;
+    const uint8_t *bytes = readable(vm, address, count, &copy);
+    uint32_t found = 0;
+    if (bytes) {
+        for (uint32_t i = 0; i < count; i++) {
+            found += bytes[i] == value;
+        }
+    }
+    free(copy);
+    return found;
+}
+
+// FNV-1a over the bytes, starting from hash, so that a long text can be hashed in pieces
+static uint32_t hash_bytes(VM *vm, uint32_t address, uint32_t hash, uint32_t count) {
+    uint8_t *copy;
+    const uint8_t *bytes = readable(vm, address, count, &copy);
+    if (!bytes) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        hash = (hash ^ bytes[i]) * 16777619u;
+    }
+    free(copy);
+    return hash;
+}
+
+// Sorts numbers by their bytes in four passes, skipping a pass where all of them share the byte, with spare
+// as room for as many; returns the array that holds them sorted, which is values or spare
+static uint32_t *radix_sort(uint32_t *values, uint32_t *spare, uint32_t count) {
+    for (int shift = 0; shift < 32 && count > 0; shift += 8) {
+        uint32_t starts[256] = { 0 };
+        for (uint32_t i = 0; i < count; i++) {
+            starts[values[i] >> shift & 0xFF]++;
+        }
+        if (starts[values[0] >> shift & 0xFF] == count) {
+            continue;
+        }
+        for (uint32_t b = 0, at = 0; b < 256; b++) {
+            uint32_t n = starts[b];
+            starts[b] = at;
+            at += n;
+        }
+        for (uint32_t i = 0; i < count; i++) {
+            spare[starts[values[i] >> shift & 0xFF]++] = values[i];
+        }
+        uint32_t *sorted = spare;
+        spare = values;
+        values = sorted;
+    }
+    return values;
+}
+
+// Sorts count signed 32-bit numbers at address, smallest first
+static uint32_t sort_numbers(VM *vm, uint32_t address, uint32_t count) {
+    if (count > UINT32_MAX / 4) {
+        vm_raise(vm, VM_ERROR_SEGMENTATION_FAULT, "Sorting %u numbers reaches past the end of memory", count);
+        return 0;
+    }
+    uint32_t size = count * 4;
+    if (memory_check_range(vm, address, size, PROT_WRITE) != VM_ERROR_NONE ||
+        memory_check_range(vm, address, size, PROT_READ) != VM_ERROR_NONE) {
+        return 0;
+    }
+    uint32_t *values = malloc(((size_t)count + 1) * 2 * sizeof(uint32_t));
+    if (!values) {
+        vm_raise(vm, VM_ERROR_MEMORY_ALLOCATION, "Out of host memory sorting %u numbers", count);
+        return 0;
+    }
+    memory_read(vm, address, values, size);
+    // Flipping the sign bit orders signed numbers as unsigned ones
+    for (uint32_t i = 0; i < count; i++) {
+        values[i] = read_le32((const uint8_t *)&values[i]) ^ 0x80000000u;
+    }
+    uint32_t *sorted = radix_sort(values, values + count + 1, count);
+    for (uint32_t i = 0; i < count; i++) {
+        write_le32((uint8_t *)&sorted[i], sorted[i] ^ 0x80000000u);
+    }
+    memory_write(vm, address, sorted, size);
+    free(values);
+    return count;
+}
+
 int syscall_dispatch(VM *vm, uint32_t number) {
     uint32_t *r = vm->registers;
     uint32_t arg0 = r[R0_ACC];
@@ -396,6 +540,30 @@ int syscall_dispatch(VM *vm, uint32_t number) {
         case SYS_MEMINFO:
             r[R0_ACC] = vm->memory_size;
             memory_heap_stats(vm, &r[R6], &r[R7]);
+            break;
+        case SYS_FILL:
+            r[R0_ACC] = memory_set(vm, arg0, (uint8_t)arg1, arg2) == VM_ERROR_NONE ? arg2 : 0;
+            syscall_status(vm);
+            break;
+        case SYS_COMPARE:
+            r[R0_ACC] = compare_bytes(vm, arg0, arg1, arg2);
+            syscall_status(vm);
+            break;
+        case SYS_FIND:
+            r[R0_ACC] = find_byte(vm, arg0, (uint8_t)arg1, arg2);
+            syscall_status(vm);
+            break;
+        case SYS_COUNT:
+            r[R0_ACC] = count_byte(vm, arg0, (uint8_t)arg1, arg2);
+            syscall_status(vm);
+            break;
+        case SYS_SORT:
+            r[R0_ACC] = sort_numbers(vm, arg0, arg2);
+            syscall_status(vm);
+            break;
+        case SYS_HASH:
+            r[R0_ACC] = hash_bytes(vm, arg0, arg1, arg2);
+            syscall_status(vm);
             break;
 
         case SYS_EXIT:

@@ -665,7 +665,7 @@ After `CALL` and `ENTER`, `[BP+4]` is the return address and `[BP+8]` is the las
 | `MEMSET Rd, Rv, size` | 0xC3 | Fills *size* bytes at Rd with the low byte of Rv |
 | `PROTECT Ra, val` | 0xC4 | Sets the permissions of the block at Ra |
 
-*size* is an immediate or a register. Syscalls 20 to 22 do the same jobs, but they report failures in R5 instead of faulting.
+*size* is an immediate or a register. Syscalls 20 to 22 and 24 do the same jobs, but they report failures in R5 instead of faulting.
 
 ## Assembly language
 
@@ -1058,6 +1058,14 @@ A program can read and write any file that the user running it can access.
 | 21 | Free | R0 = address | R0 = the status, also in R5 |
 | 22 | Copy | R0 = destination, R5 = source, R6 = count | R0 = count, or 0 on failure |
 | 23 | Memory info | | R0 = memory size, R6 = free heap bytes, R7 = largest free block |
+| 24 | Fill | R0 = address, R5 = byte, R6 = count | Sets every byte to R5. R0 = count, or 0 on failure |
+| 25 | Compare | R0 = first address, R5 = second address, R6 = count | R0 = the difference of the first bytes that differ, as a signed number, or 0 when the ranges hold the same bytes |
+| 26 | Find | R0 = address, R5 = byte, R6 = count | R0 = the index of the first byte equal to R5, or 0xFFFFFFFF |
+| 27 | Count | R0 = address, R5 = byte, R6 = count | R0 = how many bytes equal R5 |
+| 28 | Sort | R0 = address, R6 = count | Sorts count signed 32-bit numbers, smallest first. R0 = count |
+| 29 | Hash | R0 = address, R5 = starting value, R6 = count | R0 = the FNV-1a hash of the bytes, going on from R5: 2166136261 starts a new hash, and the hash of one piece goes on with the next |
+
+Syscalls 20 to 29 run as native code of the VM, which compiled code calls without stopping. On a failure, such as a range outside memory, they leave 0 in R0.
 
 ### Process and random numbers
 

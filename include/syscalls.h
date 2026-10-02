@@ -25,6 +25,12 @@ enum {
     SYS_FREE         = 21,
     SYS_MEMCPY       = 22,
     SYS_MEMINFO      = 23,
+    SYS_FILL         = 24,
+    SYS_COMPARE      = 25,
+    SYS_FIND         = 26,
+    SYS_COUNT        = 27,
+    SYS_SORT         = 28,
+    SYS_HASH         = 29,
     SYS_EXIT         = 30,
     SYS_SLEEP        = 31,
     SYS_TIME         = 32,
@@ -35,6 +41,12 @@ enum {
     SYS_RANDOM       = 40,
     SYS_SEED         = 41,
 };
+
+// The memory syscalls, which report problems in R5 instead of faulting, so that the fast loop and
+// compiled code run them themselves in supervisor mode
+static inline int syscall_runs_inline(uint32_t number) {
+    return number >= SYS_ALLOC && number <= SYS_HASH;
+}
 
 void syscalls_init(VM *vm);
 
