@@ -352,8 +352,11 @@ static uint32_t compare_bytes(VM *vm, uint32_t a, uint32_t b, uint32_t count) {
     int32_t result = 0;
     if (y) {
         uint32_t i = 0;
-        while (count - i >= 64 && memcmp(x + i, y + i, 64) == 0) {
-            i += 64;
+        // Equal stretches go by in steps of 4096 bytes, and then of 64 in the step that differs
+        for (uint32_t step = 4096; step > 1; step /= 64) {
+            while (count - i >= step && memcmp(x + i, y + i, step) == 0) {
+                i += step;
+            }
         }
         while (i < count && x[i] == y[i]) {
             i++;

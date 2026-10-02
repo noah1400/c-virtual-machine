@@ -114,6 +114,20 @@ fn main() {
     }
     print("fill, copy, compare, find, count and hash agree for ", lengths.len, " lengths: ", failures == 0, "\n");
 
+    // The native compare passes over equal bytes in steps of 4096 and of 64
+    var long_a = new(u8, 5000);
+    var long_b = new(u8, 5000);
+    mem.fill(long_a, 'x');
+    mem.fill(long_b, 'x');
+    var places = [7]int { 0, 63, 64, 4095, 4096, 4160, 4999 };
+    var found = true;
+    for (var k = 0; k < places.len; k += 1) {
+        long_b[places[k]] = 'y';
+        found = found && mem.compare(long_a, long_b) == -1 && mem.compare(long_b[places[k]:], long_a[places[k]:]) == 1;
+        long_b[places[k]] = 'x';
+    }
+    print("long compares find the first difference: ", found && mem.equal(long_a, long_b), "\n");
+
     var numbers = new(int, 300);
     var expected = new(int, 300);
     var sizes = [11]int { 0, 1, 2, 3, 20, 47, 48, 49, 100, 200, 300 };
